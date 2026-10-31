@@ -1,0 +1,2943 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ORchestraAI Flow</title>
+<link href="https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<!--
+  Interactive walkthrough of the ORchestraAI multi-agent flow.
+  Visual design adapted from the original ORchestraAIFlow.html mock-up;
+  every state, time and log line comes from the real engine and is stored
+  in the "flow-data" block at the end of this file.
+  Refresh the data with:  python -m orchestra_engine.flow
+-->
+<style>
+  :root {
+    --bg-dark: #060b19;
+    --panel-bg: rgba(15, 23, 42, 0.85);
+    --cyan: #06b6d4;
+    --gold: #f59e0b;
+    --green: #10b981;
+    --purple: #8b5cf6;
+    --orange: #f97316;
+    --red: #ef4444;
+    --slate: #475569;
+    --text-main: #f8fafc;
+    --text-muted: #94a3b8;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Prompt', sans-serif; }
+  body {
+    background-color: var(--bg-dark);
+    background-image:
+      radial-gradient(circle at 50% 10%, rgba(6, 182, 212, 0.15), transparent 40%),
+      linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+    background-size: 100% 100%, 40px 40px, 40px 40px;
+    color: var(--text-main);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow-x: hidden;
+  }
+
+  /* Header & controls */
+  header {
+    display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding: 14px 28px; background: rgba(15, 23, 42, 0.9);
+    border-bottom: 1px solid rgba(6, 182, 212, 0.3); backdrop-filter: blur(10px); z-index: 100;
+  }
+  .brand { display: flex; align-items: center; gap: 12px; }
+  .brand-orb {
+    width: 18px; height: 18px; border-radius: 50%; background: var(--cyan);
+    box-shadow: 0 0 15px var(--cyan); animation: pulseOrb 2s infinite;
+  }
+  @keyframes pulseOrb { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.25); opacity: 0.7; } }
+  .brand h1 {
+    font-size: 1.2rem; font-weight: 600; letter-spacing: 0.5px;
+    background: linear-gradient(90deg, #fff, var(--cyan)); -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  }
+  .brand small { display: block; font-size: 0.7rem; color: var(--text-muted); -webkit-text-fill-color: var(--text-muted); }
+  .controls { display: flex; gap: 8px; flex-wrap: wrap; }
+  .btn {
+    padding: 8px 14px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.15);
+    background: rgba(30, 41, 59, 0.8); color: var(--text-main); cursor: pointer;
+    font-size: 0.85rem; font-weight: 500; transition: all 0.25s ease;
+  }
+  .btn:hover { border-color: var(--cyan); box-shadow: 0 0 12px rgba(6, 182, 212, 0.35); transform: translateY(-1px); }
+  .btn.active { background: var(--cyan); color: #000; font-weight: 600; border-color: var(--cyan); box-shadow: 0 0 18px rgba(6, 182, 212, 0.6); }
+  .btn-emergency { border-color: rgba(239, 68, 68, 0.5); color: #fca5a5; }
+  .btn-emergency:hover, .btn-emergency.active { background: var(--red); color: #fff; border-color: var(--red); box-shadow: 0 0 20px rgba(239, 68, 68, 0.7); }
+
+  /* Layout */
+  .workspace { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 20px; padding: 20px 28px; flex: 1; }
+  .stage-container {
+    position: relative; background: radial-gradient(circle at 50% 45%, rgba(30, 41, 59, 0.5), rgba(6, 11, 25, 0.9));
+    border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 16px; overflow: hidden;
+    display: flex; flex-direction: column; gap: 14px; padding: 44px 20px 20px;
+  }
+  #beam-canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 15; }
+  .beam-line { fill: none; stroke-width: 3; stroke-linecap: round; stroke-dasharray: 8 8; opacity: 0.95; animation: flowDash 0.6s linear infinite; }
+  @keyframes flowDash { to { stroke-dashoffset: -16; } }
+  .layer-badge {
+    align-self: flex-start; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 1.5px; color: var(--cyan);
+    background: rgba(6, 182, 212, 0.1); border-left: 3px solid var(--cyan); padding: 4px 10px; border-radius: 0 6px 6px 0; z-index: 25;
+  }
+  .layer-badge.top { position: absolute; top: 14px; left: 18px; }
+
+  /* Layer 1: agents */
+  .ai-layer { position: relative; z-index: 20; display: flex; flex-direction: column; align-items: center; gap: 22px; }
+  .top-row-agents { display: flex; justify-content: center; align-items: center; gap: 50px; width: 100%; flex-wrap: wrap; }
+  .sub-agents-row { display: grid; grid-template-columns: repeat(3, minmax(0, 220px)); gap: 28px; justify-content: center; width: 100%; }
+  .agent-node {
+    background: rgba(15, 23, 42, 0.92); border: 1.5px solid rgba(255,255,255,0.18); border-radius: 14px;
+    padding: 12px 16px; width: 230px; max-width: 100%; text-align: center; position: relative;
+    transition: all 0.35s cubic-bezier(0.4, 0, 0.2, 1); box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+  }
+  .sub-agents-row .agent-node { width: auto; }
+  .agent-node.master { width: 270px; border-color: rgba(245, 158, 11, 0.5); background: linear-gradient(145deg, rgba(30, 41, 59, 0.95), rgba(15, 23, 42, 0.95)); }
+  .agent-node .icon-ring {
+    width: 42px; height: 42px; border-radius: 50%; margin: 0 auto 8px; display: flex; align-items: center; justify-content: center;
+    font-size: 1.3rem; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.2);
+  }
+  .agent-node h3 { font-size: 0.9rem; font-weight: 600; margin-bottom: 3px; }
+  .agent-node p { font-size: 0.72rem; color: var(--text-muted); line-height: 1.3; }
+  .agent-status-pill { display: inline-block; margin-top: 6px; padding: 2px 10px; font-size: 0.68rem; border-radius: 99px; background: rgba(255,255,255,0.08); color: #cbd5e1; }
+  .agent-node.glow-cyan { border-color: var(--cyan); box-shadow: 0 0 25px rgba(6, 182, 212, 0.55); transform: translateY(-4px) scale(1.03); }
+  .agent-node.glow-gold { border-color: var(--gold); box-shadow: 0 0 30px rgba(245, 158, 11, 0.65); transform: translateY(-4px) scale(1.04); }
+  .agent-node.glow-green { border-color: var(--green); box-shadow: 0 0 25px rgba(16, 185, 129, 0.55); transform: translateY(-4px) scale(1.03); }
+  .agent-node.glow-purple { border-color: var(--purple); box-shadow: 0 0 25px rgba(139, 92, 246, 0.55); transform: translateY(-4px) scale(1.03); }
+  .agent-node.glow-orange { border-color: var(--orange); box-shadow: 0 0 25px rgba(249, 115, 22, 0.55); transform: translateY(-4px) scale(1.03); }
+  .agent-node.glow-red { border-color: var(--red); box-shadow: 0 0 30px rgba(239, 68, 68, 0.75); transform: translateY(-4px) scale(1.05); }
+
+  /* Layer 2: isometric hospital floor */
+  .iso-scene { perspective: 1100px; display: flex; flex-direction: column; align-items: center; z-index: 10; }
+  .iso-floor {
+    width: 100%; max-width: 900px; background: rgba(15, 23, 42, 0.75); border: 2px solid rgba(6, 182, 212, 0.35);
+    border-radius: 18px; padding: 18px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px;
+    transform: rotateX(22deg) rotateZ(-1.5deg); transform-style: preserve-3d;
+    box-shadow: 0 28px 50px rgba(0, 0, 0, 0.85), 0 0 35px rgba(6, 182, 212, 0.15) inset;
+    transition: transform 0.7s cubic-bezier(0.25, 0.8, 0.25, 1);
+  }
+  .iso-floor.flat-view { transform: rotateX(0deg) rotateZ(0deg); }
+  .zone-box { background: rgba(30, 41, 59, 0.75); border: 1px solid rgba(255,255,255,0.12); border-radius: 12px; padding: 12px; transform: translateZ(18px); position: relative; min-width: 0; }
+  .zone-box h4 { font-size: 0.82rem; margin-bottom: 10px; color: #e2e8f0; }
+  .resource-item {
+    background: rgba(15, 23, 42, 0.85); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 7px 10px;
+    margin-bottom: 7px; font-size: 0.72rem; display: flex; flex-direction: column; gap: 4px; animation: fadeIn 0.3s ease;
+  }
+  .resource-item .name { color: #e2e8f0; font-weight: 500; overflow-wrap: anywhere; }
+  .badge-state { align-self: flex-start; font-size: 0.65rem; padding: 2px 7px; border-radius: 6px; font-weight: 600; overflow-wrap: anywhere; }
+  .state-ready { background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid #059669; }
+  .state-busy { background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid #dc2626; }
+  .state-warn { background: rgba(245, 158, 11, 0.2); color: #fbbf24; border: 1px solid #d97706; }
+  .zone-time { font-size: 0.72rem; color: var(--text-muted); margin-top: 8px; }
+
+  /* Layer 3: multi-room Gantt */
+  .timeline-bar { background: rgba(15, 23, 42, 0.9); border: 1px solid rgba(255,255,255,0.15); border-radius: 12px; padding: 12px 16px; z-index: 20; }
+  .timeline-header { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; font-size: 0.78rem; color: var(--text-muted); margin-bottom: 8px; }
+  .gantt { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 6px; }
+  .gantt-labels { display: flex; flex-direction: column; padding-top: 18px; }
+  .gantt-labels div { height: 40px; display: flex; flex-direction: column; justify-content: center; font-size: 0.75rem; font-weight: 600; }
+  .gantt-labels small { font-size: 0.6rem; color: var(--text-muted); font-weight: 400; }
+  .gantt-axis { position: relative; height: 18px; }
+  .gantt-axis span { position: absolute; transform: translateX(-50%); font-size: 0.62rem; color: #64748b; }
+  .gantt-canvas { position: relative; border-radius: 8px; overflow: hidden; background: rgba(30, 41, 59, 0.8); border: 1px solid rgba(255,255,255,0.08); }
+  .gantt-row-line { position: absolute; left: 0; right: 0; height: 1px; background: rgba(255,255,255,0.08); }
+  .gantt-tick { position: absolute; top: 0; bottom: 0; width: 1px; border-left: 1px dashed rgba(255,255,255,0.08); }
+  .gantt-block {
+    position: absolute; height: 30px; border-radius: 6px; font-size: 0.68rem; font-weight: 600; color: #fff;
+    display: flex; align-items: center; padding: 0 6px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.4); transition: left 0.7s cubic-bezier(0.34, 1.3, 0.64, 1), top 0.7s ease, width 0.5s ease, background 0.4s, opacity 0.4s;
+    z-index: 2;
+  }
+  .gantt-clean {
+    position: absolute; height: 30px; border-radius: 0 6px 6px 0; z-index: 1; opacity: 0.55;
+    background: repeating-linear-gradient(135deg, rgba(148,163,184,0.35) 0 4px, transparent 4px 8px);
+    transition: left 0.7s cubic-bezier(0.34, 1.3, 0.64, 1), top 0.7s ease, width 0.5s ease;
+  }
+  .kind-booked { background: var(--slate); }
+  .kind-locked { background: #334155; border: 1px dashed #94a3b8; }
+  .kind-probe { background: var(--cyan); opacity: 0.5; }
+  .kind-probe-ok { background: var(--green); opacity: 0.7; }
+  .kind-conflict { background: var(--red); opacity: 0.85; }
+  .kind-moving { background: var(--gold); color: #111; }
+  .kind-new { background: var(--green); }
+  .kind-emergency { background: var(--red); box-shadow: 0 0 16px rgba(239,68,68,0.7); }
+  .kind-moved { background: var(--cyan); color: #04121a; }
+  .now-line { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--red); box-shadow: 0 0 8px var(--red); z-index: 3; transition: left 0.5s; }
+  .legend { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 8px; font-size: 0.65rem; color: var(--text-muted); }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 4px; vertical-align: -1px; }
+
+  /* Side panel */
+  .side-panel { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+  .card-panel { background: var(--panel-bg); border: 1px solid rgba(255,255,255,0.12); border-radius: 14px; padding: 18px; }
+  .step-title { font-size: 1.05rem; font-weight: 600; color: var(--cyan); margin-bottom: 8px; }
+  .step-desc { font-size: 0.85rem; color: #cbd5e1; line-height: 1.55; }
+  .source-note { font-size: 0.68rem; color: var(--text-muted); margin-top: 10px; }
+  .source-note code { color: #67e8f9; }
+  .console-box {
+    flex: 1; background: #050811; border: 1px solid rgba(6, 182, 212, 0.25); border-radius: 12px; padding: 14px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.74rem; overflow-y: auto; max-height: 520px;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .log-entry { padding: 6px 8px; border-radius: 6px; background: rgba(255,255,255,0.03); border-left: 3px solid var(--cyan); line-height: 1.4; animation: fadeIn 0.3s ease; overflow-wrap: anywhere; font-family: inherit; }
+  .log-entry.bad { border-left-color: var(--red); }
+  .log-entry.good { border-left-color: var(--green); }
+  @keyframes fadeIn { from { opacity: 0; transform: translateX(6px); } to { opacity: 1; transform: translateX(0); } }
+
+  @media (max-width: 1150px) {
+    .workspace { grid-template-columns: minmax(0, 1fr); }
+  }
+  @media (max-width: 760px) {
+    header, .workspace { padding-left: 16px; padding-right: 16px; }
+    .sub-agents-row { grid-template-columns: minmax(0, 1fr); }
+    .iso-floor { grid-template-columns: minmax(0, 1fr); transform: none; }
+    #beam-canvas { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <div class="brand-orb"></div>
+    <h1>ORchestraAI · Multi-Agent OR Scheduling<small>ข้อมูลจาก orchestra_engine จริง (CP-SAT)</small></h1>
+  </div>
+  <div class="controls" id="controls">
+    <button class="btn active" data-step="0">มุมมองรวม</button>
+    <button class="btn" data-step="1">1. Intake รับเคส</button>
+    <button class="btn" data-step="2">2. สแกนทรัพยากร</button>
+    <button class="btn" data-step="3">3. เจรจาแก้เวลาชน</button>
+    <button class="btn" data-step="4">4. ล็อกตารางสำเร็จ</button>
+    <button class="btn btn-emergency" data-step="5">🚨 5. เคสฉุกเฉินแทรก</button>
+    <button class="btn" id="toggle-view" title="สลับมุมมอง 3D / 2D">🔄 มุมมอง 3D</button>
+  </div>
+</header>
+
+<div class="workspace">
+  <div class="stage-container" id="stage">
+    <svg id="beam-canvas"></svg>
+    <span class="layer-badge top">Layer 1: Multi-Agent AI Brain</span>
+
+    <div class="ai-layer">
+      <div class="top-row-agents">
+        <div class="agent-node" id="node-intake">
+          <div class="icon-ring" style="color: var(--cyan);">🎙️</div>
+          <h3>Intake & Triage Agent</h3>
+          <p>รับคำขอ จัดระดับความเร่งด่วน & เวลาผ่าตัด</p>
+          <span class="agent-status-pill" id="pill-intake">Standby</span>
+        </div>
+        <div class="agent-node master" id="node-master">
+          <div class="icon-ring" style="color: var(--gold);">🧠</div>
+          <h3>Master Orchestrator</h3>
+          <p>ศูนย์กลางเจรจา & CP-SAT Optimization</p>
+          <span class="agent-status-pill" id="pill-master">Active core</span>
+        </div>
+      </div>
+      <div class="sub-agents-row">
+        <div class="agent-node" id="node-staff">
+          <div class="icon-ring" style="color: var(--green);">👨‍⚕️</div>
+          <h3>Staffing Agent</h3>
+          <p>ตารางเวร ทักษะ & ชั่วโมงทำงานสะสม</p>
+          <span class="agent-status-pill" id="pill-staff">Idle</span>
+        </div>
+        <div class="agent-node" id="node-equip">
+          <div class="icon-ring" style="color: var(--purple);">🤖</div>
+          <h3>Equipment & CSSD Agent</h3>
+          <p>หุ่นยนต์ผ่าตัด ชุดเครื่องมือ & คิวอบฆ่าเชื้อ</p>
+          <span class="agent-status-pill" id="pill-equip">Idle</span>
+        </div>
+        <div class="agent-node" id="node-or">
+          <div class="icon-ring" style="color: var(--orange);">🏥</div>
+          <h3>OR Facility Agent</h3>
+          <p>สเปกห้อง เวลาทำความสะอาด & เตียง PACU/ICU</p>
+          <span class="agent-status-pill" id="pill-or">Idle</span>
+        </div>
+      </div>
+    </div>
+
+    <span class="layer-badge">Layer 2: Hospital Floor (สถานะทรัพยากรที่ Agent เห็น)</span>
+    <div class="iso-scene">
+      <div class="iso-floor" id="iso-floor">
+        <div class="zone-box" id="zone-staff"><h4>🟢 ทีมบุคลากร (Staff Roster)</h4><div id="items-staff"></div></div>
+        <div class="zone-box" id="zone-equip"><h4>🟣 เครื่องมือ & จ่ายกลาง (CSSD)</h4><div id="items-equip"></div></div>
+        <div class="zone-box" id="zone-or"><h4>🟠 ห้องผ่าตัด & เตียงพักฟื้น</h4><div id="items-or"></div></div>
+      </div>
+      <div class="zone-time" id="zone-time"></div>
+    </div>
+
+    <span class="layer-badge">Layer 3: OR Schedule (ทุกห้อง)</span>
+    <div class="timeline-bar">
+      <div class="timeline-header">
+        <span>📅 ตารางห้องผ่าตัด (Dynamic Gantt) · แถบลายคือเวลาทำความสะอาดห้อง</span>
+        <span id="schedule-summary" style="color: var(--cyan);"></span>
+      </div>
+      <div class="gantt">
+        <div class="gantt-labels" id="gantt-labels"></div>
+        <div>
+          <div class="gantt-axis" id="gantt-axis"></div>
+          <div class="gantt-canvas" id="gantt-canvas"></div>
+        </div>
+      </div>
+      <div class="legend">
+        <span><i class="kind-booked"></i>จองไว้</span>
+        <span><i class="kind-locked"></i>เริ่มแล้ว (ล็อก)</span>
+        <span><i class="kind-probe"></i>กำลังหาสล็อต</span>
+        <span><i class="kind-conflict"></i>ชนเงื่อนไข</span>
+        <span><i class="kind-moving"></i>เสนอเวลาใหม่</span>
+        <span><i class="kind-new"></i>ล็อกใหม่</span>
+        <span><i class="kind-emergency"></i>ฉุกเฉิน</span>
+        <span><i class="kind-moved"></i>ถูกเลื่อน</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="side-panel">
+    <div class="card-panel">
+      <div class="step-title" id="story-title"></div>
+      <div class="step-desc" id="story-desc"></div>
+      <div class="source-note" id="source-note"></div>
+    </div>
+    <div class="card-panel" style="flex:1; display:flex; flex-direction:column;">
+      <div style="font-size:0.85rem; font-weight:600; margin-bottom:10px; color:#94a3b8;">
+        ⚡ บันทึกการสื่อสารระหว่าง Agent (Live Agent Negotiation Log)
+      </div>
+      <div class="console-box" id="console-log"></div>
+    </div>
+  </div>
+</div>
+
+<script id="flow-data" type="application/json">
+{
+ "generatedBy": "python -m orchestra_engine.flow",
+ "rooms": [
+  {
+   "id": "OR-1",
+   "type": "STANDARD",
+   "caps": [
+    "LAPAROSCOPY_TOWER"
+   ]
+  },
+  {
+   "id": "OR-2",
+   "type": "STANDARD",
+   "caps": [
+    "ROBOTIC_READY",
+    "UROLOGY_TABLE"
+   ]
+  },
+  {
+   "id": "OR-3",
+   "type": "HYBRID",
+   "caps": [
+    "LAMINAR_FLOW",
+    "LEAD_LINED_XRAY",
+    "ROBOTIC_READY"
+   ]
+  }
+ ],
+ "axis": {
+  "start": 480,
+  "end": 1080
+ },
+ "steps": [
+  {
+   "title": "ภาพรวม: ตารางที่จองไว้แล้ว + Agent ทั้ง 5",
+   "desc": "ตารางตั้งต้นมี 7 เคสใน 3 ห้อง (solver: OPTIMAL, 0.13 วินาที) ทุกค่าบนหน้านี้คำนวณจาก orchestra_engine จริง กดปุ่ม 1-5 เพื่อดูแต่ละขั้น",
+   "logs": [
+    "[System] loaded 3 rooms, 22 staff, 17 equipment units, 6 recovery beds",
+    "[Master Orchestrator] booked schedule: 7 cases, status OPTIMAL",
+    "[Master Orchestrator] OR-1: C07 08:00-09:00, C06 09:30-10:45, C08 11:30-13:00, C11 13:30-15:30",
+    "[Master Orchestrator] OR-2: C04 08:00-11:30, U01 12:00-13:00, U02 13:30-14:30"
+   ],
+   "agents": {
+    "intake": {
+     "glow": "",
+     "pill": "Standby"
+    },
+    "master": {
+     "glow": "",
+     "pill": "Active core"
+    },
+    "staff": {
+     "glow": "",
+     "pill": "Idle"
+    },
+    "equip": {
+     "glow": "",
+     "pill": "Idle"
+    },
+    "or": {
+     "glow": "",
+     "pill": "Idle"
+    }
+   },
+   "beams": [
+    "intake-master",
+    "master-staff",
+    "master-equip",
+    "master-or"
+   ],
+   "zones": {
+    "staff": [
+     {
+      "label": "Dr.Somchai (Ortho)",
+      "state": "ready",
+      "text": "free 09:00-11:30"
+     },
+     {
+      "label": "Anesthesiologist",
+      "state": "ready",
+      "text": "1 free (Dr.Prasert (on-call))"
+     },
+     {
+      "label": "Scrub Nurse",
+      "state": "ready",
+      "text": "3 free (Kanya, Sirilak, Duangjai (on-call))"
+     },
+     {
+      "label": "Circulating Nurse",
+      "state": "ready",
+      "text": "2 free (Ploy, Fah (on-call))"
+     }
+    ],
+    "equip": [
+     {
+      "label": "KNEE-01 (ORTHO_KNEE_SET)",
+      "state": "warn",
+      "text": "sterilizing at CSSD until 12:30"
+     },
+     {
+      "label": "KNEE-02 (ORTHO_KNEE_SET)",
+      "state": "busy",
+      "text": "in maintenance"
+     },
+     {
+      "label": "DV-01 (ROBOT_DA_VINCI)",
+      "state": "warn",
+      "text": "in use by C04, back from CSSD 12:30"
+     }
+    ],
+    "or": [
+     {
+      "label": "OR-3",
+      "state": "ready",
+      "text": "free 09:00-12:00 incl. 30 min clean"
+     },
+     {
+      "label": "PACU bed",
+      "state": "ready",
+      "text": "2 free from 11:30 (PACU-2, PACU-3)"
+     }
+    ]
+   },
+   "zoneTime": "09:00",
+   "blocks": [
+    {
+     "case_id": "C07",
+     "room": "OR-1",
+     "start": 480,
+     "end": 540,
+     "clean": 570,
+     "kind": "booked",
+     "urgency": "URGENT",
+     "label": "C07 Laparoscopic appendectomy",
+     "time": "08:00-09:00"
+    },
+    {
+     "case_id": "C04",
+     "room": "OR-2",
+     "start": 480,
+     "end": 690,
+     "clean": 720,
+     "kind": "booked",
+     "urgency": "ELECTIVE",
+     "label": "C04 Robotic radical prostatectomy",
+     "time": "08:00-11:30"
+    },
+    {
+     "case_id": "C06",
+     "room": "OR-1",
+     "start": 570,
+     "end": 645,
+     "clean": 675,
+     "kind": "booked",
+     "urgency": "ELECTIVE",
+     "label": "C06 Laparoscopic cholecystectomy",
+     "time": "09:30-10:45"
+    },
+    {
+     "case_id": "C08",
+     "room": "OR-1",
+     "start": 690,
+     "end": 780,
+     "clean": 810,
+     "kind": "booked",
+     "urgency": "ELECTIVE",
+     "label": "C08 Laparoscopic inguinal hernia repair (TEP)",
+     "time": "11:30-13:00"
+    },
+    {
+     "case_id": "U01",
+     "room": "OR-2",
+     "start": 720,
+     "end": 780,
+     "clean": 810,
+     "kind": "booked",
+     "urgency": "ELECTIVE",
+     "label": "U01 Transurethral resection of prostate (TURP)",
+     "time": "12:00-13:00"
+    },
+    {
+     "case_id": "C11",
+     "room": "OR-1",
+     "start": 810,
+     "end": 930,
+     "clean": 960,
+     "kind": "booked",
+     "urgency": "ELECTIVE",
+     "label": "C11 Laparoscopic sleeve gastrectomy",
+     "time": "13:30-15:30"
+    },
+    {
+     "case_id": "U02",
+     "room": "OR-2",
+     "start": 810,
+     "end": 870,
+     "clean": 900,
+     "kind": "booked",
+     "urgency": "ELECTIVE",
+     "label": "U02 Ureteroscopy with laser lithotripsy",
+     "time": "13:30-14:30"
+    }
+   ],
+   "summary": "สถานะ: จองแล้ว 7 เคส ไม่มีการชนกัน"
+  },
+  {
+   "title": "Step 1: Intake & Triage รับคำขอผ่าตัด",
+   "desc": "Dr.Somchai (Ortho) ขอจอง Robotic-assisted total knee arthroplasty (N01) เวลา 09:00 ระยะเวลา 150 นาที ต้องใช้ห้อง LAMINAR_FLOW, ROBOTIC_READY และ ROBOT_DA_VINCI, ORTHO_KNEE_SET (รอบนี้คำขอเป็นข้อมูลโครงสร้าง ส่วน NLP/เสียงและการพยากรณ์เวลาจากประวัติยังไม่ได้ทำ)",
+   "logs": [
+    "[Intake -> Master] N01 Robotic-assisted total knee arthroplasty | Dr.Somchai (Ortho) | ELECTIVE | 150 min | requested 09:00"
+   ],
+   "agents": {
+    "intake": {
+     "glow": "cyan",
+     "pill": "Parsing request"
+    },
+    "master": {
+     "glow": "gold",
+     "pill": "Receiving case"
+    },
+    "staff": {
+     "glow": "",
+     "pill": "Idle"
+    },
+    "equip": {
+     "glow": "",
+     "pill": "Idle"
+    },
+    "or": {
+     "glow": "",
+     "pill": "Idle"
+    }
+   },
+   "beams": [
+    "intake-master"
+   ],
+   "zones": {
+    "staff": [
+     {
+      "label": "Dr.Somchai (Ortho)",
+      "state": "ready",
+      "text": "free 09:00-11:30"
+     },
+     {
+      "label": "Anesthesiologist",
+      "state": "ready",
+      "text": "1 free (Dr.Prasert (on-call))"
+     },
+     {
+      "label": "Scrub Nurse",
+      "state": "ready",
+      "text": "3 free (Kanya, Sirilak, Duangjai (on-call))"
+     },
+     {
+      "label": "Circulating Nurse",
+      "state": "ready",
+      "text": "2 free (Ploy, Fah (on-call))"
+     }
+    ],
+    "equip": [
+     {
+      "label": "KNEE-01 (ORTHO_KNEE_SET)",
+      "state": "warn",
+      "text": "sterilizing at CSSD until 12:30"
+     },
+     {
+      "label": "KNEE-02 (ORTHO_KNEE_SET)",
+      "state": "busy",
+      "text": "in maintenance"
+     },
+     {
+      "label": "DV-01 (ROBOT_DA_VINCI)",
+      "state": "warn",
+      "text": "in use by C04, back from CSSD 12:30"
+     }
+    ],
+    "or": [
+     {
+      "label": "OR-3",
+      "state": "ready",
+      "text": "free 09:00-12:00 incl. 30 min clean"
+     },
+     {
+      "label": "PACU bed",
+      "state": "ready",
+      "text": "2 free from 11:30 (PACU-2, PACU-3)"
+     }
+    ]
+   },
+   "zoneTime": "09:00",
+   "blocks": [
+    {
+     "case_id": "C07",
+     "room": "OR-1",
+     "start": 480,
+     "end": 540,
+     "clean": 570,
+     "kind": "booked",
+     "urgency": "URGENT",
+     "label": "C07 Laparoscopic appendectomy",
+     "time": "08:00-09:00"
+    },
+    {
+     "case_id": "C04",
+     "room": "OR-2",
+     "start": 480,
+     "end": 690,
+     "clean": 720,
+     "kind": "booked",
+     "urgency": "ELECTIVE",
+     "label": "C04 Robotic radical prostatectomy",
+     "time": "08:00-11:30"
+    },
+    {
+     "case_id": "C06",
+     "room": "OR-1",
+     "start": 570,
+     "end": 645,
+     "clean": 675,
+     "kind": "booked",
+     "urgency": "ELECTIVE",
+     "label": "C06 Laparoscopic cholecystectomy",
+     "time": "09:30-10:45"
+    },
+    {
+     "case_id": "C08",
+     "room": "OR-1",
+     "start": 690,
+     "end": 780,
+     "clean": 810,
+     "kind": "booked",
+     "urgency": "ELECTIVE",
+     "label": "C08 Laparoscopic inguinal hernia repair (TEP)",
+     "time": "11:30-13:00"
+    },
+    {
+     "case_id": "U01",
+     "room": "OR-2",
+     "start": 720,
+     "end": 780,
+     "clean": 810,
+     "kind": "booked",
+     "urgency": "ELECTIVE",
+     "label": "U01 Transurethral resection of prostate (TURP)",
+     "time": "12:00-13:00"
+    },
+    {
+     "case_id": "C11",
+     "room": "OR-1",
+     "start": 810,
+     "end": 930,
+     "clean": 960,
+     "kind": "booked",
+     "urgency": "ELECTIVE",
+     "label": "C11 Laparoscopic sleeve gastrectomy",
+     "time": "13:30-15:30"
+    },
+    {
+     "case_id": "U02",
+     "room": "OR-2",
+     "start": 810,
+     "end": 870,
+     "clean": 900,
+     "kind": "booked",
+     "urgency": "ELECTIVE",
+     "label": "U02 Ureteroscopy with laser lithotripsy",
+     "time": "13:30-14:30"
+    },
+    {
+     "case_id": "N01",
+     "room": "OR-3",
+     "start": 540,
+     "end": 690,
+     "clean": 690,
+     "kind": "probe",
+     "urgency": "ELECTIVE",
+     "label": "N01 ? 09:00",
+     "time": "09:00-11:30"
+    }
+   ],
+   "summary": "สถานะ: กำลังหาสล็อตให้ N01 (150 นาที)"
+  },
+  {
+   "title": "Step 2: สแกนทรัพยากรพร้อมกันที่ 09:00",
+   "desc": "Master Orchestrator ส่งเวลาเป้าหมายให้ Agent ทั้ง 3 ตรวจพร้อมกัน: Staffing Agent ผ่าน; Equipment & CSSD Agent ไม่ผ่าน; OR Facility Agent ผ่าน",
+   "logs": [
+    "[Master Orchestrator] parallel scan 09:00-11:30 -> Staffing, Equipment & CSSD, OR Facility",
+    "[Staffing Agent] OK: Dr.Somchai (Ortho) free 09:00-11:30; Anesthesiologist 1 free (Dr.Prasert (on-call)); Scrub Nurse 3 free (Kanya, Sirilak, Duangjai (on-call)); Circulating Nurse 2 free (Ploy, Fah (on-call))",
+    "[Equipment & CSSD Agent] CONFLICT: KNEE-01 (ORTHO_KNEE_SET) sterilizing at CSSD until 12:30; KNEE-02 (ORTHO_KNEE_SET) in maintenance; DV-01 (ROBOT_DA_VINCI) in use by C04, back from CSSD 12:30",
+    "[OR Facility Agent] OK: OR-3 free 09:00-12:00 incl. 30 min clean; PACU bed 2 free from 11:30 (PACU-2, PACU-3)"
+   ],
+   "agents": {
+    "intake": {
+     "glow": "",
+     "pill": "Standby"
+    },
+    "master": {
+     "glow": "gold",
+     "pill": "Parallel scan"
+    },
+    "staff": {
+     "glow": "green",
+     "pill": "OK"
+    },
+    "equip": {
+     "glow": "red",
+     "pill": "Conflict"
+    },
+    "or": {
+     "glow": "green",
+     "pill": "OK"
+    }
+   },
+   "beams": [
+    "master-staff",
+    "master-equip",
+    "master-or",
+    "staff-zone",
+    "equip-zone",
+    "or-zone"
+   ],
+   "zones": {
+    "staff": [
+     {
+      "label": "Dr.Somchai (Ortho)",
+      "state": "ready",
+      "text": "free 09:00-11:30"
+     },
+     {
+      "label": "Anesthesiologist",
+      "state": "ready",
+      "text": "1 free (Dr.Prasert (on-call))"
+     },
+     {
+      "label": "Scrub Nurse",
+      "state": "ready",
+      "text": "3 free (Kanya, Sirilak, Duangjai (on-call))"
+     },
+     {
+      "label": "Circulating Nurse",
+      "state": "ready",
+      "text": "2 free (Ploy, Fah (on-call))"
+     }
+    ],
+    "equip": [
+     {
+      "label": "KNEE-01 (ORTHO_KNEE_SET)",
+      "state": "warn",
+      "text": "sterilizing at CSSD until 12:30"
+     },
+     {
+      "label": "KNEE-02 (ORTHO_KNEE_SET)",
+      "state": "busy",
+      "text": "in maintenance"
+     },
+     {
+      "label": "DV-01 (ROBOT_DA_VINCI)",
+      "state": "warn",
+      "text": "in use by C04, back from CSSD 12:30"
+     }
+    ],
+    "or": [
+     {
+      "label": "OR-3",
+      "state": "ready",
+      "text": "free 09:00-12:00 incl. 30 min clean"
+     },
+     {
+      "label": "PACU bed",
+      "state": "ready",
+      "text": "2 free from 11:30 (PACU-2, PACU-3)"
+     }
+    ]
+   },
+   "zoneTime": "09:00",
+   "blocks": [
+    {
+     "case_id": "C07",
+     "room": "OR-1",
+     "start": 480,
+     "end": 540,
+     "clean": 570,
+     "kind": "booked",
+     "urgency": "URGENT",
+     "label": "C07 Laparoscopic appendectomy",
+     "time": "08:00-09:00"
+    },
+    {
+     "case_id": "C04",
+     "room": "OR-2",
+     "start": 480,
+     "end": 690,
+     "clean": 720,
+     "kind": "booked",
+     "urgency": "ELECTIVE",
+     "label": "C04 Robotic radical prostatectomy",
+     "time": "08:00-11:30"
+    },
+    {
+     "case_id": "C06",
+     "room": "OR-1",
+     "start": 570,
+     "end": 645,
+     "clean": 675,
+     "kind": "booked",
+     "urgency": "ELECTIVE",
+     "label": "C06 Laparoscopic cholecystectomy",
+     "time": "09:30-10:45"
+    },
+    {
+     "case_id": "C08",
+     "room": "OR-1",
+     "start": 690,
+     "end": 780,
+     "clean": 810,
+     "kind": "booked",
+     "urgency": "ELECTIVE",
+     "label": "C08 Laparoscopic inguinal hernia repair (TEP)",
+     "time": "11:30-13:00"
+    },
+    {
+     "case_id": "U01",
+     "room": "OR-2",
+     "start": 720,
+     "end": 780,
+     "clean": 810,
+     "kind": "booked",
+     "urgency": "ELECTIVE",
+     "label": "U01 Transurethral resection of prostate (TURP)",
+     "time": "12:00-13:00"
+    },
+    {
+     "case_id": "C11",
+     "room": "OR-1",
+     "start": 810,
+     "end": 930,
+     "clean": 960,
+     "kind": "booked",
+     "urgency": "ELECTIVE",
+     "label": "C11 Laparoscopic sleeve gastrectomy",
+     "time": "13:30-15:30"
+    },
+    {
+     "case_id": "U02",
+     "room": "OR-2",
+     "start": 810,
+     "end": 870,
+     "clean": 900,
+     "kind": "booked",
+     "urgency": "ELECTIVE",
+     "label": "U02 Ureteroscopy with laser lithotripsy",
+     "time": "13:30-14:30"
+    },
+    {
+     "case_id": "N01",
+     "room": "OR-3",
+     "start": 540,
+     "end": 690,
+     "clean": 690,
+     "kind": "conflict",
+     "urgency": "ELECTIVE",
+     "label": "N01 09:00 ชนเงื่อนไข",
+     "time": "09:00-11:30"
+    }
+   ],
+   "summary": "สถานะ: พบข้อขัดแย้ง 1 Agent ที่ 09:00"
+  },
+  {
+   "title": "Step 3: เจรจาและหาช่วงเวลาใหม่ (CP-SAT)",
+   "desc": "Agent ที่ปฏิเสธแจ้งเวลาที่ตัวเองพร้อม (Equipment & CSSD Agent พร้อม 12:30) แล้ว Master ให้ CP-SAT หาช่วงแรกที่ทุก Agent ผ่านพร้อมกัน ได้ OR-3 12:30-15:00",
+   "logs": [
+    "[Master Orchestrator] 09:00 rejected by Equipment & CSSD Agent. Earliest ready: Equipment & CSSD Agent from 12:30",
+    "[Master Orchestrator] running CP-SAT for the next slot where all agents agree",
+    "[Master Orchestrator] proposed and locked OR-3 12:30-15:00 (waits until KNEE-01 is released by CSSD; DV-01 is back from CSSD after C04)"
+   ],
+   "agents": {
+    "intake": {
+     "glow": "",
+     "pill": "Standby"
+    },
+    "master": {
+     "glow": "gold",
+     "pill": "Optimizing"
+    },
+    "staff": {
+     "glow": "",
+     "pill": "Idle"
+    },
+    "equip": {
+     "glow": "purple",
+     "pill": "Ready 12:30"
+    },
+    "or": {
+     "glow": "",
+     "pill": "Idle"
+    }
+   },
+   "beams": [
+    "master-equip"
+   ],
+   "zones": {
+    "staff": [
+     {
+      "label": "Dr.Somchai (Ortho)",
+      "state": "ready",
+      "text": "free 09:00-11:30"
+     },
+     {
+      "label": "Anesthesiologist",
+      "state": "ready",
+      "text": "1 free (Dr.Prasert (on-call))"
+     },
+     {
+      "label": "Scrub Nurse",
+      "state": "ready",
+      "text": "3 free (Kanya, Sirilak, Duangjai (on-call))"
+     },
+     {
+      "label": "Circulating Nurse",
+      "state": "ready",
+      "text": "2 free (Ploy, Fah (on-call))"
+     }
+    ],
+    "equip": [
+     {
+      "label": "KNEE-01 (ORTHO_KNEE_SET)",
+      "state": "warn",
+      "text": "sterilizing at CSSD until 12:30"
+     },
+     {
+      "label": "KNEE-02 (ORTHO_KNEE_SET)",
+      "state": "busy",
+      "text": "in maintenance"
+     },
+     {
+      "label": "DV-01 (ROBOT_DA_VINCI)",
+      "state": "warn",
+      "text": "in use by C04, back from CSSD 12:30"
+     }
+    ],
+    "or": [
+     {
+      "label": "OR-3",
+      "state": "ready",
+      "text": "free 09:00-12:00 incl. 30 min clean"
+     },
+     {
+      "label": "PACU bed",
+      "state": "ready",
+      "text": "2 free from 11:30 (PACU-2, PACU-3)"
+     }
+    ]
+   },
+   "zoneTime": "09:00",
+   "blocks": [
+    {
+     "case_id": "C07",
+     "room": "OR-1",
+     "start": 480,
+     "end": 540,
+     "clean": 570,
+     "kind": "booked",
+     "urgency": "URGENT",
+     "label": "C07 Laparoscopic appendectomy",
+     "time": "08:00-09:00"
+    },
+    {
+     "case_id": "C04",
+     "room": "OR-2",
+     "start": 480,
+     "end": 690,
+     "clean": 720,
+     "kind": "booked",
+     "urgency": "ELECTIVE",
+     "label": "C04 Robotic radical prostatectomy",
+     "time": "08:00-11:30"
+    },
+    {
+     "case_id": "C06",
+     "room": "OR-1",
+     "start": 570,
+     "end": 645,
+     "clean": 675,
+     "kind": "booked",
+     "urgency": "ELECTIVE",
+     "label": "C06 Laparoscopic cholecystectomy",
+     "time": "09:30-10:45"
+    },
+    {
+     "case_id": "C08",
+     "room": "OR-1",
+     "start": 690,
+     "end": 780,
+     "clean": 810,
+     "kind": "booked",
+     "urgency": "ELECTIVE",
+     "label": "C08 Laparoscopic inguinal hernia repair (TEP)",
+     "time": "11:30-13:00"
+    },
+    {
+     "case_id": "U01",
+     "room": "OR-2",
+     "start": 720,
+     "end": 780,
+     "clean": 810,
+     "kind": "booked",
+     "urgency": "ELECTIVE",
+     "label": "U01 Transurethral resection of prostate (TURP)",
+     "time": "12:00-13:00"
+    },
+    {
+     "case_id": "C11",
+     "room": "OR-1",
+     "start": 810,
+     "end": 930,
+     "clean": 960,
+     "kind": "booked",
+     "urgency": "ELECTIVE",
+     "label": "C11 Laparoscopic sleeve gastrectomy",
+     "time": "13:30-15:30"
+    },
+    {
+     "case_id": "U02",
+     "room": "OR-2",
+     "start": 810,
+     "end": 870,
+     "clean": 900,
+     "kind": "booked",
+     "urgency": "ELECTIVE",
+     "label": "U02 Ureteroscopy with laser lithotripsy",
+     "time": "13:30-14:30"
+    },
+    {
+     "case_id": "N01",
+     "room": "OR-3",
+     "start": 750,
+     "end": 900,
+     "clean": 900,
+     "kind": "moving",
+     "urgency": "ELECTIVE",
+     "label": "N01 -> 12:30",
+     "time": "12:30-15:00"
+    }
+   ],
+   "summary": "สถานะ: เสนอ 12:30-15:00"
+  },
+  {
+   "title": "Step 4: ล็อกตารางสำเร็จ",
+   "desc": "N01 ถูกล็อกที่ OR-3 12:30-15:00 (ทำความสะอาดเสร็จ 15:30) จองเครื่องมือ KNEE-01, DV-01 และเตียง PACU-2 โดยไม่ขยับเคสเดิม ตัวตรวจอิสระยืนยันว่าไม่มีการชนกัน",
+   "logs": [
+    "[Master Orchestrator] proposed and locked OR-3 12:30-15:00 (waits until KNEE-01 is released by CSSD; DV-01 is back from CSSD after C04)",
+    "[Equipment & CSSD Agent] reserved KNEE-01, DV-01; CSSD queue: KNEE-01 back 17:00, DV-01 back 16:00",
+    "[OR Facility Agent] reserved PACU-2 from 15:00",
+    "[Staffing Agent] notified team: Dr.Somchai (Ortho), Dr.Suda, Kanya, Dao"
+   ],
+   "agents": {
+    "intake": {
+     "glow": "",
+     "pill": "Standby"
+    },
+    "master": {
+     "glow": "green",
+     "pill": "Schedule locked"
+    },
+    "staff": {
+     "glow": "green",
+     "pill": "Team notified"
+    },
+    "equip": {
+     "glow": "green",
+     "pill": "Units reserved"
+    },
+    "or": {
+     "glow": "green",
+     "pill": "OR-3 reserved"
+    }
+   },
+   "beams": [
+    "master-staff",
+    "master-equip",
+    "master-or",
+    "staff-zone",
+    "equip-zone",
+    "or-zone"
+   ],
+   "zones": {
+    "staff": [
+     {
+      "label": "Dr.Somchai (Ortho)",
+      "state": "ready",
+      "text": "free 12:30-15:00"
+     },
+     {
+      "label": "Anesthesiologist",
+      "state": "ready",
+      "text": "2 free (Dr.Ratana, Dr.Suda)"
+     },
+     {
+      "label": "Scrub Nurse",
+      "state": "ready",
+      "text": "4 free (Kanya, Jintana, Sirilak...)"
+     },
+     {
+      "label": "Circulating Nurse",
+      "state": "ready",
+      "text": "2 free (Dao, Fah (on-call))"
+     }
+    ],
+    "equip": [
+     {
+      "label": "KNEE-01 (ORTHO_KNEE_SET)",
+      "state": "ready",
+      "text": "ready"
+     },
+     {
+      "label": "KNEE-02 (ORTHO_KNEE_SET)",
+      "state": "busy",
+      "text": "in maintenance"
+     },
+     {
+      "label": "DV-01 (ROBOT_DA_VINCI)",
+      "state": "ready",
+      "text": "ready"
+     }
+    ],
+    "or": [
+     {
+      "label": "OR-3",
+      "state": "ready",
+      "text": "free 12:30-15:30 incl. 30 min clean"
+     },
+     {
+      "label": "PACU bed",
+      "state": "ready",
+      "text": "3 free from 15:00 (PACU-2, PACU-3, PACU-4)"
+     }
+    ]
+   },
+   "zoneTime": "12:30",
+   "blocks": [
+    {
+     "case_id": "C07",
+     "room": "OR-1",
+     "start": 480,
+     "end": 540,
+     "clean": 570,
+     "kind": "booked",
+     "urgency": "URGENT",
+     "label": "C07 Laparoscopic appendectomy",
+     "time": "08:00-09:00"
+    },
+    {
+     "case_id": "C04",
+     "room": "OR-2",
+     "start": 480,
+     "end": 690,
+     "clean": 720,
+     "kind": "booked",
+     "urgency": "ELECTIVE",
+     "label": "C04 Robotic radical prostatectomy",
+     "time": "08:00-11:30"
+    },
+    {
+     "case_id": "C06",
+     "room": "OR-1",
+     "start": 570,
+     "end": 645,
+     "clean": 675,
+     "kind": "booked",
+     "urgency": "ELECTIVE",
+     "label": "C06 Laparoscopic cholecystectomy",
+     "time": "09:30-10:45"
+    },
+    {
+     "case_id": "C08",
+     "room": "OR-1",
+     "start": 690,
+     "end": 780,
+     "clean": 810,
+     "kind": "booked",
+     "urgency": "ELECTIVE",
+     "label": "C08 Laparoscopic inguinal hernia repair (TEP)",
+     "time": "11:30-13:00"
+    },
+    {
+     "case_id": "U01",
+     "room": "OR-2",
+     "start": 720,
+     "end": 780,
+     "clean": 810,
+     "kind": "booked",
+     "urgency": "ELECTIVE",
+     "label": "U01 Transurethral resection of prostate (TURP)",
+     "time": "12:00-13:00"
+    },
+    {
+     "case_id": "N01",
+     "room": "OR-3",
+     "start": 750,
+     "end": 900,
+     "clean": 930,
+     "kind": "new",
+     "urgency": "ELECTIVE",
+     "label": "N01 Robotic-assisted total knee arthroplasty",
+     "time": "12:30-15:00"
+    },
+    {
+     "case_id": "C11",
+     "room": "OR-1",
+     "start": 810,
+     "end": 930,
+     "clean": 960,
+     "kind": "booked",
+     "urgency": "ELECTIVE",
+     "label": "C11 Laparoscopic sleeve gastrectomy",
+     "time": "13:30-15:30"
+    },
+    {
+     "case_id": "U02",
+     "room": "OR-2",
+     "start": 810,
+     "end": 870,
+     "clean": 900,
+     "kind": "booked",
+     "urgency": "ELECTIVE",
+     "label": "U02 Ureteroscopy with laser lithotripsy",
+     "time": "13:30-14:30"
+    }
+   ],
+   "summary": "สถานะ: ล็อก N01 สำเร็จ ไม่มีทรัพยากรชนกัน"
+  },
+  {
+   "title": "Step 5: เคสฉุกเฉินเข้ามา 12:15 (Ripple Effect)",
+   "desc": "Emergency craniotomy (traumatic subdural haematoma) โดย Dr.Thanakorn (Neuro, on-call) ได้ห้อง OR-3 เวลา 12:15 เคสที่เริ่มไปแล้วถูกล็อกไว้ เลื่อน 1 เคส: N01 moved 12:30->14:45, team -[Dr.Suda, Kanya] +[Dr.Ratana, Jintana] และแจ้งเตือน 7 คน",
+   "logs": [
+    "[Intake & Triage Agent] EMERGENCY E01 Emergency craniotomy (traumatic subdural haematoma) | Dr.Thanakorn (Neuro, on-call) | 120 min | arrives 12:15",
+    "[Staffing Agent] OK at 12:15: Dr.Thanakorn (Neuro, on-call) free 12:15-14:15; Anesthesiologist 1 free (Dr.Ratana); Scrub Nurse 3 free (Jintana, Sirilak, Duangjai (on-call)); Circulating Nurse 1 free (Fah (on-call))",
+    "[Equipment & CSSD Agent] OK at 12:15: CRANI-01 (NEURO_CRANIOTOMY_SET) ready",
+    "[OR Facility Agent] CONFLICT at 12:15: OR-1 busy with C08, clean at 13:30; OR-2 busy with U01, clean at 13:30; OR-3 booked for N01 at 12:30; ICU_SURGICAL bed 2 free from 14:15 (ICU-1, ICU-2)",
+    "[Master Orchestrator] locking cases already in progress, re-optimising the rest (ripple effect)",
+    "[Master Orchestrator] E01: NEW booking OR-3 12:15-14:15",
+    "[Master Orchestrator] N01: moved 12:30->14:45; team -[Dr.Suda, Kanya] +[Dr.Ratana, Jintana]",
+    "[Master Orchestrator] E01: EMERGENCY: starts 0 min after it could first start (12:15)",
+    "[Staffing Agent] 10 notifications to 7 staff"
+   ],
+   "agents": {
+    "intake": {
+     "glow": "red",
+     "pill": "EMERGENCY"
+    },
+    "master": {
+     "glow": "red",
+     "pill": "Auto-rescheduling"
+    },
+    "staff": {
+     "glow": "orange",
+     "pill": "Calling on-call team"
+    },
+    "equip": {
+     "glow": "",
+     "pill": "Idle"
+    },
+    "or": {
+     "glow": "red",
+     "pill": "Clearing a room"
+    }
+   },
+   "beams": [
+    "intake-master",
+    "master-staff",
+    "master-or",
+    "or-zone",
+    "staff-zone"
+   ],
+   "zones": {
+    "staff": [
+     {
+      "label": "Dr.Thanakorn (Neuro, on-call)",
+      "state": "ready",
+      "text": "free 12:15-14:15"
+     },
+     {
+      "label": "Anesthesiologist",
+      "state": "ready",
+      "text": "1 free (Dr.Ratana)"
+     },
+     {
+      "label": "Scrub Nurse",
+      "state": "ready",
+      "text": "3 free (Jintana, Sirilak, Duangjai (on-call))"
+     },
+     {
+      "label": "Circulating Nurse",
+      "state": "ready",
+      "text": "1 free (Fah (on-call))"
+     }
+    ],
+    "equip": [
+     {
+      "label": "CRANI-01 (NEURO_CRANIOTOMY_SET)",
+      "state": "ready",
+      "text": "ready"
+     }
+    ],
+    "or": [
+     {
+      "label": "OR-1",
+      "state": "warn",
+      "text": "busy with C08, clean at 13:30"
+     },
+     {
+      "label": "OR-2",
+      "state": "warn",
+      "text": "busy with U01, clean at 13:30"
+     },
+     {
+      "label": "OR-3",
+      "state": "warn",
+      "text": "booked for N01 at 12:30"
+     },
+     {
+      "label": "ICU_SURGICAL bed",
+      "state": "ready",
+      "text": "2 free from 14:15 (ICU-1, ICU-2)"
+     }
+    ]
+   },
+   "zoneTime": "12:15",
+   "blocks": [
+    {
+     "case_id": "C07",
+     "room": "OR-1",
+     "start": 480,
+     "end": 540,
+     "clean": 570,
+     "kind": "locked",
+     "urgency": "URGENT",
+     "label": "C07 Laparoscopic appendectomy",
+     "time": "08:00-09:00"
+    },
+    {
+     "case_id": "C04",
+     "room": "OR-2",
+     "start": 480,
+     "end": 690,
+     "clean": 720,
+     "kind": "locked",
+     "urgency": "ELECTIVE",
+     "label": "C04 Robotic radical prostatectomy",
+     "time": "08:00-11:30"
+    },
+    {
+     "case_id": "C06",
+     "room": "OR-1",
+     "start": 570,
+     "end": 645,
+     "clean": 675,
+     "kind": "locked",
+     "urgency": "ELECTIVE",
+     "label": "C06 Laparoscopic cholecystectomy",
+     "time": "09:30-10:45"
+    },
+    {
+     "case_id": "C08",
+     "room": "OR-1",
+     "start": 690,
+     "end": 780,
+     "clean": 810,
+     "kind": "locked",
+     "urgency": "ELECTIVE",
+     "label": "C08 Laparoscopic inguinal hernia repair (TEP)",
+     "time": "11:30-13:00"
+    },
+    {
+     "case_id": "U01",
+     "room": "OR-2",
+     "start": 720,
+     "end": 780,
+     "clean": 810,
+     "kind": "locked",
+     "urgency": "ELECTIVE",
+     "label": "U01 Transurethral resection of prostate (TURP)",
+     "time": "12:00-13:00"
+    },
+    {
+     "case_id": "E01",
+     "room": "OR-3",
+     "start": 735,
+     "end": 855,
+     "clean": 885,
+     "kind": "emergency",
+     "urgency": "EMERGENCY",
+     "label": "E01 Emergency craniotomy (traumatic subdural haematoma)",
+     "time": "12:15-14:15"
+    },
+    {
+     "case_id": "C11",
+     "room": "OR-1",
+     "start": 810,
+     "end": 930,
+     "clean": 960,
+     "kind": "booked",
+     "urgency": "ELECTIVE",
+     "label": "C11 Laparoscopic sleeve gastrectomy",
+     "time": "13:30-15:30"
+    },
+    {
+     "case_id": "U02",
+     "room": "OR-2",
+     "start": 810,
+     "end": 870,
+     "clean": 900,
+     "kind": "booked",
+     "urgency": "ELECTIVE",
+     "label": "U02 Ureteroscopy with laser lithotripsy",
+     "time": "13:30-14:30"
+    },
+    {
+     "case_id": "N01",
+     "room": "OR-3",
+     "start": 885,
+     "end": 1035,
+     "clean": 1065,
+     "kind": "moved",
+     "urgency": "ELECTIVE",
+     "label": "N01 Robotic-assisted total knee arthroplasty",
+     "time": "14:45-17:15"
+    }
+   ],
+   "now": 735,
+   "summary": "สถานะ: แทรกเคสฉุกเฉิน + เลื่อน 1 เคสอัตโนมัติ"
+  }
+ ],
+ "results": {
+  "booked": {
+   "scenario": "Booked schedule",
+   "status": "OPTIMAL",
+   "objective": -164.0,
+   "now_min": 0,
+   "wall_time_s": 0.128,
+   "bookings": [
+    {
+     "case_id": "C07",
+     "procedure": "Laparoscopic appendectomy",
+     "patient_hn": "HN-0007",
+     "urgency": "URGENT",
+     "or_id": "OR-1",
+     "start_min": 480,
+     "end_min": 540,
+     "cleanup_end_min": 570,
+     "start": "08:00",
+     "end": "09:00",
+     "cleanup_end": "09:30",
+     "team": [
+      {
+       "staff_id": "SUR-GEN",
+       "name": "Dr.Napat (General)"
+      },
+      {
+       "staff_id": "ANE-4",
+       "name": "Dr.Suda"
+      },
+      {
+       "staff_id": "SCR-3",
+       "name": "Orathai"
+      },
+      {
+       "staff_id": "CIR-2",
+       "name": "Ploy"
+      }
+     ],
+     "equipment": [
+      {
+       "unit_id": "LAP-02",
+       "back_from_cssd_min": 630
+      }
+     ],
+     "bed_id": "PACU-2",
+     "recovery_start_min": 540,
+     "recovery_end_min": 600,
+     "frozen": false,
+     "reasoning": [
+      "URGENT: starts 0 min after it could first start (08:00)",
+      "meets deadline 12:00"
+     ]
+    },
+    {
+     "case_id": "C04",
+     "procedure": "Robotic radical prostatectomy",
+     "patient_hn": "HN-0004",
+     "urgency": "ELECTIVE",
+     "or_id": "OR-2",
+     "start_min": 480,
+     "end_min": 690,
+     "cleanup_end_min": 720,
+     "start": "08:00",
+     "end": "11:30",
+     "cleanup_end": "12:00",
+     "team": [
+      {
+       "staff_id": "SUR-URO",
+       "name": "Dr.Kittipong (Uro)"
+      },
+      {
+       "staff_id": "ANE-1",
+       "name": "Dr.Wanida"
+      },
+      {
+       "staff_id": "SCR-1",
+       "name": "Malee"
+      },
+      {
+       "staff_id": "CIR-3",
+       "name": "Fon"
+      }
+     ],
+     "equipment": [
+      {
+       "unit_id": "RIS-01",
+       "back_from_cssd_min": 810
+      },
+      {
+       "unit_id": "DV-01",
+       "back_from_cssd_min": 750
+      }
+     ],
+     "bed_id": "PACU-1",
+     "recovery_start_min": 690,
+     "recovery_end_min": 750,
+     "frozen": false,
+     "reasoning": [
+      "on the surgeon's preferred start time"
+     ]
+    },
+    {
+     "case_id": "C06",
+     "procedure": "Laparoscopic cholecystectomy",
+     "patient_hn": "HN-0006",
+     "urgency": "ELECTIVE",
+     "or_id": "OR-1",
+     "start_min": 570,
+     "end_min": 645,
+     "cleanup_end_min": 675,
+     "start": "09:30",
+     "end": "10:45",
+     "cleanup_end": "11:15",
+     "team": [
+      {
+       "staff_id": "SUR-GEN",
+       "name": "Dr.Napat (General)"
+      },
+      {
+       "staff_id": "ANE-4",
+       "name": "Dr.Suda"
+      },
+      {
+       "staff_id": "SCR-3",
+       "name": "Orathai"
+      },
+      {
+       "staff_id": "CIR-1",
+       "name": "Nok"
+      }
+     ],
+     "equipment": [
+      {
+       "unit_id": "LAP-03",
+       "back_from_cssd_min": 735
+      }
+     ],
+     "bed_id": "PACU-4",
+     "recovery_start_min": 645,
+     "recovery_end_min": 705,
+     "frozen": false,
+     "reasoning": [
+      "90 min after preferred start 08:00",
+      "waits until OR-1 is cleaned after C07"
+     ]
+    },
+    {
+     "case_id": "C08",
+     "procedure": "Laparoscopic inguinal hernia repair (TEP)",
+     "patient_hn": "HN-0008",
+     "urgency": "ELECTIVE",
+     "or_id": "OR-1",
+     "start_min": 690,
+     "end_min": 780,
+     "cleanup_end_min": 810,
+     "start": "11:30",
+     "end": "13:00",
+     "cleanup_end": "13:30",
+     "team": [
+      {
+       "staff_id": "SUR-GEN",
+       "name": "Dr.Napat (General)"
+      },
+      {
+       "staff_id": "ANE-2",
+       "name": "Dr.Chaiwat"
+      },
+      {
+       "staff_id": "SCR-3",
+       "name": "Orathai"
+      },
+      {
+       "staff_id": "CIR-2",
+       "name": "Ploy"
+      }
+     ],
+     "equipment": [
+      {
+       "unit_id": "LAP-02",
+       "back_from_cssd_min": 870
+      }
+     ],
+     "bed_id": "PACU-2",
+     "recovery_start_min": 780,
+     "recovery_end_min": 840,
+     "frozen": false,
+     "reasoning": [
+      "on the surgeon's preferred start time"
+     ]
+    },
+    {
+     "case_id": "U01",
+     "procedure": "Transurethral resection of prostate (TURP)",
+     "patient_hn": "HN-0012",
+     "urgency": "ELECTIVE",
+     "or_id": "OR-2",
+     "start_min": 720,
+     "end_min": 780,
+     "cleanup_end_min": 810,
+     "start": "12:00",
+     "end": "13:00",
+     "cleanup_end": "13:30",
+     "team": [
+      {
+       "staff_id": "SUR-URO",
+       "name": "Dr.Kittipong (Uro)"
+      },
+      {
+       "staff_id": "ANE-1",
+       "name": "Dr.Wanida"
+      },
+      {
+       "staff_id": "SCR-1",
+       "name": "Malee"
+      },
+      {
+       "staff_id": "CIR-3",
+       "name": "Fon"
+      }
+     ],
+     "equipment": [
+      {
+       "unit_id": "MAJ-02",
+       "back_from_cssd_min": 900
+      }
+     ],
+     "bed_id": "PACU-3",
+     "recovery_start_min": 780,
+     "recovery_end_min": 840,
+     "frozen": false,
+     "reasoning": [
+      "on the surgeon's preferred start time"
+     ]
+    },
+    {
+     "case_id": "C11",
+     "procedure": "Laparoscopic sleeve gastrectomy",
+     "patient_hn": "HN-0011",
+     "urgency": "ELECTIVE",
+     "or_id": "OR-1",
+     "start_min": 810,
+     "end_min": 930,
+     "cleanup_end_min": 960,
+     "start": "13:30",
+     "end": "15:30",
+     "cleanup_end": "16:00",
+     "team": [
+      {
+       "staff_id": "SUR-GEN",
+       "name": "Dr.Napat (General)"
+      },
+      {
+       "staff_id": "ANE-ONCALL",
+       "name": "Dr.Prasert (on-call)"
+      },
+      {
+       "staff_id": "SCR-3",
+       "name": "Orathai"
+      },
+      {
+       "staff_id": "CIR-1",
+       "name": "Nok"
+      }
+     ],
+     "equipment": [
+      {
+       "unit_id": "LAP-03",
+       "back_from_cssd_min": 1020
+      }
+     ],
+     "bed_id": "PACU-1",
+     "recovery_start_min": 930,
+     "recovery_end_min": 990,
+     "frozen": false,
+     "reasoning": [
+      "on the surgeon's preferred start time"
+     ]
+    },
+    {
+     "case_id": "U02",
+     "procedure": "Ureteroscopy with laser lithotripsy",
+     "patient_hn": "HN-0013",
+     "urgency": "ELECTIVE",
+     "or_id": "OR-2",
+     "start_min": 810,
+     "end_min": 870,
+     "cleanup_end_min": 900,
+     "start": "13:30",
+     "end": "14:30",
+     "cleanup_end": "15:00",
+     "team": [
+      {
+       "staff_id": "SUR-URO",
+       "name": "Dr.Kittipong (Uro)"
+      },
+      {
+       "staff_id": "ANE-1",
+       "name": "Dr.Wanida"
+      },
+      {
+       "staff_id": "SCR-1",
+       "name": "Malee"
+      },
+      {
+       "staff_id": "CIR-3",
+       "name": "Fon"
+      }
+     ],
+     "equipment": [
+      {
+       "unit_id": "MAJ-01",
+       "back_from_cssd_min": 990
+      }
+     ],
+     "bed_id": "PACU-1",
+     "recovery_start_min": 870,
+     "recovery_end_min": 930,
+     "frozen": false,
+     "reasoning": [
+      "on the surgeon's preferred start time"
+     ]
+    }
+   ],
+   "unscheduled": [],
+   "changes": [],
+   "notifications": []
+  },
+  "slotCheck": {
+   "case_id": "N01",
+   "requested_start_min": 540,
+   "requested_start": "09:00",
+   "ok": false,
+   "verdicts": [
+    {
+     "agent": "Staffing Agent",
+     "ok": true,
+     "ready_at_min": 540,
+     "items": [
+      {
+       "resource": "Dr.Somchai (Ortho)",
+       "ok": true,
+       "note": "free 09:00-11:30",
+       "ready_at_min": 540
+      },
+      {
+       "resource": "Anesthesiologist",
+       "ok": true,
+       "note": "1 free (Dr.Prasert (on-call))",
+       "ready_at_min": 540
+      },
+      {
+       "resource": "Scrub Nurse",
+       "ok": true,
+       "note": "3 free (Kanya, Sirilak, Duangjai (on-call))",
+       "ready_at_min": 540
+      },
+      {
+       "resource": "Circulating Nurse",
+       "ok": true,
+       "note": "2 free (Ploy, Fah (on-call))",
+       "ready_at_min": 540
+      }
+     ]
+    },
+    {
+     "agent": "Equipment & CSSD Agent",
+     "ok": false,
+     "ready_at_min": 750,
+     "items": [
+      {
+       "resource": "KNEE-01 (ORTHO_KNEE_SET)",
+       "ok": false,
+       "note": "sterilizing at CSSD until 12:30",
+       "ready_at_min": 750
+      },
+      {
+       "resource": "KNEE-02 (ORTHO_KNEE_SET)",
+       "ok": false,
+       "note": "in maintenance",
+       "ready_at_min": null
+      },
+      {
+       "resource": "DV-01 (ROBOT_DA_VINCI)",
+       "ok": false,
+       "note": "in use by C04, back from CSSD 12:30",
+       "ready_at_min": 750
+      }
+     ]
+    },
+    {
+     "agent": "OR Facility Agent",
+     "ok": true,
+     "ready_at_min": 540,
+     "items": [
+      {
+       "resource": "OR-3",
+       "ok": true,
+       "note": "free 09:00-12:00 incl. 30 min clean",
+       "ready_at_min": 540
+      },
+      {
+       "resource": "PACU bed",
+       "ok": true,
+       "note": "2 free from 11:30 (PACU-2, PACU-3)",
+       "ready_at_min": 540
+      }
+     ]
+    }
+   ],
+   "log": [
+    "[Intake -> Master] N01 Robotic-assisted total knee arthroplasty | Dr.Somchai (Ortho) | ELECTIVE | 150 min | requested 09:00",
+    "[Master Orchestrator] parallel scan 09:00-11:30 -> Staffing, Equipment & CSSD, OR Facility",
+    "[Staffing Agent] OK: Dr.Somchai (Ortho) free 09:00-11:30; Anesthesiologist 1 free (Dr.Prasert (on-call)); Scrub Nurse 3 free (Kanya, Sirilak, Duangjai (on-call)); Circulating Nurse 2 free (Ploy, Fah (on-call))",
+    "[Equipment & CSSD Agent] CONFLICT: KNEE-01 (ORTHO_KNEE_SET) sterilizing at CSSD until 12:30; KNEE-02 (ORTHO_KNEE_SET) in maintenance; DV-01 (ROBOT_DA_VINCI) in use by C04, back from CSSD 12:30",
+    "[OR Facility Agent] OK: OR-3 free 09:00-12:00 incl. 30 min clean; PACU bed 2 free from 11:30 (PACU-2, PACU-3)",
+    "[Master Orchestrator] 09:00 rejected by Equipment & CSSD Agent. Earliest ready: Equipment & CSSD Agent from 12:30",
+    "[Master Orchestrator] running CP-SAT for the next slot where all agents agree",
+    "[Master Orchestrator] proposed and locked OR-3 12:30-15:00 (waits until KNEE-01 is released by CSSD; DV-01 is back from CSSD after C04)",
+    "[Equipment & CSSD Agent] reserved KNEE-01, DV-01; CSSD queue: KNEE-01 back 17:00, DV-01 back 16:00",
+    "[OR Facility Agent] reserved PACU-2 from 15:00",
+    "[Staffing Agent] notified team: Dr.Somchai (Ortho), Dr.Suda, Kanya, Dao"
+   ],
+   "result": {
+    "scenario": "Slot check N01 @ 09:00",
+    "status": "OPTIMAL",
+    "objective": 21015.0,
+    "now_min": 0,
+    "wall_time_s": 0.008,
+    "bookings": [
+     {
+      "case_id": "C07",
+      "procedure": "Laparoscopic appendectomy",
+      "patient_hn": "HN-0007",
+      "urgency": "URGENT",
+      "or_id": "OR-1",
+      "start_min": 480,
+      "end_min": 540,
+      "cleanup_end_min": 570,
+      "start": "08:00",
+      "end": "09:00",
+      "cleanup_end": "09:30",
+      "team": [
+       {
+        "staff_id": "SUR-GEN",
+        "name": "Dr.Napat (General)"
+       },
+       {
+        "staff_id": "ANE-4",
+        "name": "Dr.Suda"
+       },
+       {
+        "staff_id": "SCR-3",
+        "name": "Orathai"
+       },
+       {
+        "staff_id": "CIR-2",
+        "name": "Ploy"
+       }
+      ],
+      "equipment": [
+       {
+        "unit_id": "LAP-02",
+        "back_from_cssd_min": 630
+       }
+      ],
+      "bed_id": "PACU-2",
+      "recovery_start_min": 540,
+      "recovery_end_min": 600,
+      "frozen": false,
+      "reasoning": [
+       "URGENT: starts 0 min after it could first start (08:00)",
+       "meets deadline 12:00"
+      ]
+     },
+     {
+      "case_id": "C04",
+      "procedure": "Robotic radical prostatectomy",
+      "patient_hn": "HN-0004",
+      "urgency": "ELECTIVE",
+      "or_id": "OR-2",
+      "start_min": 480,
+      "end_min": 690,
+      "cleanup_end_min": 720,
+      "start": "08:00",
+      "end": "11:30",
+      "cleanup_end": "12:00",
+      "team": [
+       {
+        "staff_id": "SUR-URO",
+        "name": "Dr.Kittipong (Uro)"
+       },
+       {
+        "staff_id": "ANE-1",
+        "name": "Dr.Wanida"
+       },
+       {
+        "staff_id": "SCR-1",
+        "name": "Malee"
+       },
+       {
+        "staff_id": "CIR-3",
+        "name": "Fon"
+       }
+      ],
+      "equipment": [
+       {
+        "unit_id": "RIS-01",
+        "back_from_cssd_min": 810
+       },
+       {
+        "unit_id": "DV-01",
+        "back_from_cssd_min": 750
+       }
+      ],
+      "bed_id": "PACU-1",
+      "recovery_start_min": 690,
+      "recovery_end_min": 750,
+      "frozen": false,
+      "reasoning": [
+       "on the surgeon's preferred start time"
+      ]
+     },
+     {
+      "case_id": "C06",
+      "procedure": "Laparoscopic cholecystectomy",
+      "patient_hn": "HN-0006",
+      "urgency": "ELECTIVE",
+      "or_id": "OR-1",
+      "start_min": 570,
+      "end_min": 645,
+      "cleanup_end_min": 675,
+      "start": "09:30",
+      "end": "10:45",
+      "cleanup_end": "11:15",
+      "team": [
+       {
+        "staff_id": "SUR-GEN",
+        "name": "Dr.Napat (General)"
+       },
+       {
+        "staff_id": "ANE-4",
+        "name": "Dr.Suda"
+       },
+       {
+        "staff_id": "SCR-3",
+        "name": "Orathai"
+       },
+       {
+        "staff_id": "CIR-1",
+        "name": "Nok"
+       }
+      ],
+      "equipment": [
+       {
+        "unit_id": "LAP-03",
+        "back_from_cssd_min": 735
+       }
+      ],
+      "bed_id": "PACU-4",
+      "recovery_start_min": 645,
+      "recovery_end_min": 705,
+      "frozen": false,
+      "reasoning": [
+       "90 min after preferred start 08:00",
+       "waits until OR-1 is cleaned after C07"
+      ]
+     },
+     {
+      "case_id": "C08",
+      "procedure": "Laparoscopic inguinal hernia repair (TEP)",
+      "patient_hn": "HN-0008",
+      "urgency": "ELECTIVE",
+      "or_id": "OR-1",
+      "start_min": 690,
+      "end_min": 780,
+      "cleanup_end_min": 810,
+      "start": "11:30",
+      "end": "13:00",
+      "cleanup_end": "13:30",
+      "team": [
+       {
+        "staff_id": "SUR-GEN",
+        "name": "Dr.Napat (General)"
+       },
+       {
+        "staff_id": "ANE-2",
+        "name": "Dr.Chaiwat"
+       },
+       {
+        "staff_id": "SCR-3",
+        "name": "Orathai"
+       },
+       {
+        "staff_id": "CIR-2",
+        "name": "Ploy"
+       }
+      ],
+      "equipment": [
+       {
+        "unit_id": "LAP-02",
+        "back_from_cssd_min": 870
+       }
+      ],
+      "bed_id": "PACU-2",
+      "recovery_start_min": 780,
+      "recovery_end_min": 840,
+      "frozen": false,
+      "reasoning": [
+       "on the surgeon's preferred start time"
+      ]
+     },
+     {
+      "case_id": "U01",
+      "procedure": "Transurethral resection of prostate (TURP)",
+      "patient_hn": "HN-0012",
+      "urgency": "ELECTIVE",
+      "or_id": "OR-2",
+      "start_min": 720,
+      "end_min": 780,
+      "cleanup_end_min": 810,
+      "start": "12:00",
+      "end": "13:00",
+      "cleanup_end": "13:30",
+      "team": [
+       {
+        "staff_id": "SUR-URO",
+        "name": "Dr.Kittipong (Uro)"
+       },
+       {
+        "staff_id": "ANE-1",
+        "name": "Dr.Wanida"
+       },
+       {
+        "staff_id": "SCR-1",
+        "name": "Malee"
+       },
+       {
+        "staff_id": "CIR-3",
+        "name": "Fon"
+       }
+      ],
+      "equipment": [
+       {
+        "unit_id": "MAJ-02",
+        "back_from_cssd_min": 900
+       }
+      ],
+      "bed_id": "PACU-3",
+      "recovery_start_min": 780,
+      "recovery_end_min": 840,
+      "frozen": false,
+      "reasoning": [
+       "on the surgeon's preferred start time"
+      ]
+     },
+     {
+      "case_id": "N01",
+      "procedure": "Robotic-assisted total knee arthroplasty",
+      "patient_hn": "HN-0101",
+      "urgency": "ELECTIVE",
+      "or_id": "OR-3",
+      "start_min": 750,
+      "end_min": 900,
+      "cleanup_end_min": 930,
+      "start": "12:30",
+      "end": "15:00",
+      "cleanup_end": "15:30",
+      "team": [
+       {
+        "staff_id": "SUR-ORTHO",
+        "name": "Dr.Somchai (Ortho)"
+       },
+       {
+        "staff_id": "ANE-4",
+        "name": "Dr.Suda"
+       },
+       {
+        "staff_id": "SCR-2",
+        "name": "Kanya"
+       },
+       {
+        "staff_id": "CIR-4",
+        "name": "Dao"
+       }
+      ],
+      "equipment": [
+       {
+        "unit_id": "KNEE-01",
+        "back_from_cssd_min": 1020
+       },
+       {
+        "unit_id": "DV-01",
+        "back_from_cssd_min": 960
+       }
+      ],
+      "bed_id": "PACU-2",
+      "recovery_start_min": 900,
+      "recovery_end_min": 960,
+      "frozen": false,
+      "reasoning": [
+       "waits until KNEE-01 is released by CSSD; DV-01 is back from CSSD after C04"
+      ]
+     },
+     {
+      "case_id": "C11",
+      "procedure": "Laparoscopic sleeve gastrectomy",
+      "patient_hn": "HN-0011",
+      "urgency": "ELECTIVE",
+      "or_id": "OR-1",
+      "start_min": 810,
+      "end_min": 930,
+      "cleanup_end_min": 960,
+      "start": "13:30",
+      "end": "15:30",
+      "cleanup_end": "16:00",
+      "team": [
+       {
+        "staff_id": "SUR-GEN",
+        "name": "Dr.Napat (General)"
+       },
+       {
+        "staff_id": "ANE-ONCALL",
+        "name": "Dr.Prasert (on-call)"
+       },
+       {
+        "staff_id": "SCR-3",
+        "name": "Orathai"
+       },
+       {
+        "staff_id": "CIR-1",
+        "name": "Nok"
+       }
+      ],
+      "equipment": [
+       {
+        "unit_id": "LAP-03",
+        "back_from_cssd_min": 1020
+       }
+      ],
+      "bed_id": "PACU-1",
+      "recovery_start_min": 930,
+      "recovery_end_min": 990,
+      "frozen": false,
+      "reasoning": [
+       "on the surgeon's preferred start time"
+      ]
+     },
+     {
+      "case_id": "U02",
+      "procedure": "Ureteroscopy with laser lithotripsy",
+      "patient_hn": "HN-0013",
+      "urgency": "ELECTIVE",
+      "or_id": "OR-2",
+      "start_min": 810,
+      "end_min": 870,
+      "cleanup_end_min": 900,
+      "start": "13:30",
+      "end": "14:30",
+      "cleanup_end": "15:00",
+      "team": [
+       {
+        "staff_id": "SUR-URO",
+        "name": "Dr.Kittipong (Uro)"
+       },
+       {
+        "staff_id": "ANE-1",
+        "name": "Dr.Wanida"
+       },
+       {
+        "staff_id": "SCR-1",
+        "name": "Malee"
+       },
+       {
+        "staff_id": "CIR-3",
+        "name": "Fon"
+       }
+      ],
+      "equipment": [
+       {
+        "unit_id": "MAJ-01",
+        "back_from_cssd_min": 990
+       }
+      ],
+      "bed_id": "PACU-1",
+      "recovery_start_min": 870,
+      "recovery_end_min": 930,
+      "frozen": false,
+      "reasoning": [
+       "on the surgeon's preferred start time"
+      ]
+     }
+    ],
+    "unscheduled": [],
+    "changes": [
+     {
+      "case_id": "N01",
+      "details": [
+       "NEW booking OR-3 12:30-15:00"
+      ]
+     }
+    ],
+    "notifications": [
+     {
+      "staff_id": "SUR-ORTHO",
+      "name": "Dr.Somchai (Ortho)",
+      "case_id": "N01",
+      "message": "[ORchestraAI] N01 Robotic-assisted total knee arthroplasty (HN HN-0101): NEW booking OR-3 12:30-15:00"
+     },
+     {
+      "staff_id": "ANE-4",
+      "name": "Dr.Suda",
+      "case_id": "N01",
+      "message": "[ORchestraAI] N01 Robotic-assisted total knee arthroplasty (HN HN-0101): NEW booking OR-3 12:30-15:00"
+     },
+     {
+      "staff_id": "SCR-2",
+      "name": "Kanya",
+      "case_id": "N01",
+      "message": "[ORchestraAI] N01 Robotic-assisted total knee arthroplasty (HN HN-0101): NEW booking OR-3 12:30-15:00"
+     },
+     {
+      "staff_id": "CIR-4",
+      "name": "Dao",
+      "case_id": "N01",
+      "message": "[ORchestraAI] N01 Robotic-assisted total knee arthroplasty (HN HN-0101): NEW booking OR-3 12:30-15:00"
+     }
+    ]
+   }
+  },
+  "emergency": {
+   "scenario": "Emergency insert",
+   "status": "OPTIMAL",
+   "objective": 1172.0,
+   "now_min": 735,
+   "wall_time_s": 0.067,
+   "bookings": [
+    {
+     "case_id": "C07",
+     "procedure": "Laparoscopic appendectomy",
+     "patient_hn": "HN-0007",
+     "urgency": "URGENT",
+     "or_id": "OR-1",
+     "start_min": 480,
+     "end_min": 540,
+     "cleanup_end_min": 570,
+     "start": "08:00",
+     "end": "09:00",
+     "cleanup_end": "09:30",
+     "team": [
+      {
+       "staff_id": "SUR-GEN",
+       "name": "Dr.Napat (General)"
+      },
+      {
+       "staff_id": "ANE-4",
+       "name": "Dr.Suda"
+      },
+      {
+       "staff_id": "SCR-3",
+       "name": "Orathai"
+      },
+      {
+       "staff_id": "CIR-2",
+       "name": "Ploy"
+      }
+     ],
+     "equipment": [
+      {
+       "unit_id": "LAP-02",
+       "back_from_cssd_min": 630
+      }
+     ],
+     "bed_id": "PACU-2",
+     "recovery_start_min": 540,
+     "recovery_end_min": 600,
+     "frozen": true,
+     "reasoning": []
+    },
+    {
+     "case_id": "C04",
+     "procedure": "Robotic radical prostatectomy",
+     "patient_hn": "HN-0004",
+     "urgency": "ELECTIVE",
+     "or_id": "OR-2",
+     "start_min": 480,
+     "end_min": 690,
+     "cleanup_end_min": 720,
+     "start": "08:00",
+     "end": "11:30",
+     "cleanup_end": "12:00",
+     "team": [
+      {
+       "staff_id": "SUR-URO",
+       "name": "Dr.Kittipong (Uro)"
+      },
+      {
+       "staff_id": "ANE-1",
+       "name": "Dr.Wanida"
+      },
+      {
+       "staff_id": "SCR-1",
+       "name": "Malee"
+      },
+      {
+       "staff_id": "CIR-3",
+       "name": "Fon"
+      }
+     ],
+     "equipment": [
+      {
+       "unit_id": "RIS-01",
+       "back_from_cssd_min": 810
+      },
+      {
+       "unit_id": "DV-01",
+       "back_from_cssd_min": 750
+      }
+     ],
+     "bed_id": "PACU-1",
+     "recovery_start_min": 690,
+     "recovery_end_min": 750,
+     "frozen": true,
+     "reasoning": []
+    },
+    {
+     "case_id": "C06",
+     "procedure": "Laparoscopic cholecystectomy",
+     "patient_hn": "HN-0006",
+     "urgency": "ELECTIVE",
+     "or_id": "OR-1",
+     "start_min": 570,
+     "end_min": 645,
+     "cleanup_end_min": 675,
+     "start": "09:30",
+     "end": "10:45",
+     "cleanup_end": "11:15",
+     "team": [
+      {
+       "staff_id": "SUR-GEN",
+       "name": "Dr.Napat (General)"
+      },
+      {
+       "staff_id": "ANE-4",
+       "name": "Dr.Suda"
+      },
+      {
+       "staff_id": "SCR-3",
+       "name": "Orathai"
+      },
+      {
+       "staff_id": "CIR-1",
+       "name": "Nok"
+      }
+     ],
+     "equipment": [
+      {
+       "unit_id": "LAP-03",
+       "back_from_cssd_min": 735
+      }
+     ],
+     "bed_id": "PACU-4",
+     "recovery_start_min": 645,
+     "recovery_end_min": 705,
+     "frozen": true,
+     "reasoning": []
+    },
+    {
+     "case_id": "C08",
+     "procedure": "Laparoscopic inguinal hernia repair (TEP)",
+     "patient_hn": "HN-0008",
+     "urgency": "ELECTIVE",
+     "or_id": "OR-1",
+     "start_min": 690,
+     "end_min": 780,
+     "cleanup_end_min": 810,
+     "start": "11:30",
+     "end": "13:00",
+     "cleanup_end": "13:30",
+     "team": [
+      {
+       "staff_id": "SUR-GEN",
+       "name": "Dr.Napat (General)"
+      },
+      {
+       "staff_id": "ANE-2",
+       "name": "Dr.Chaiwat"
+      },
+      {
+       "staff_id": "SCR-3",
+       "name": "Orathai"
+      },
+      {
+       "staff_id": "CIR-2",
+       "name": "Ploy"
+      }
+     ],
+     "equipment": [
+      {
+       "unit_id": "LAP-02",
+       "back_from_cssd_min": 870
+      }
+     ],
+     "bed_id": "PACU-2",
+     "recovery_start_min": 780,
+     "recovery_end_min": 840,
+     "frozen": true,
+     "reasoning": []
+    },
+    {
+     "case_id": "U01",
+     "procedure": "Transurethral resection of prostate (TURP)",
+     "patient_hn": "HN-0012",
+     "urgency": "ELECTIVE",
+     "or_id": "OR-2",
+     "start_min": 720,
+     "end_min": 780,
+     "cleanup_end_min": 810,
+     "start": "12:00",
+     "end": "13:00",
+     "cleanup_end": "13:30",
+     "team": [
+      {
+       "staff_id": "SUR-URO",
+       "name": "Dr.Kittipong (Uro)"
+      },
+      {
+       "staff_id": "ANE-1",
+       "name": "Dr.Wanida"
+      },
+      {
+       "staff_id": "SCR-1",
+       "name": "Malee"
+      },
+      {
+       "staff_id": "CIR-3",
+       "name": "Fon"
+      }
+     ],
+     "equipment": [
+      {
+       "unit_id": "MAJ-02",
+       "back_from_cssd_min": 900
+      }
+     ],
+     "bed_id": "PACU-3",
+     "recovery_start_min": 780,
+     "recovery_end_min": 840,
+     "frozen": true,
+     "reasoning": []
+    },
+    {
+     "case_id": "E01",
+     "procedure": "Emergency craniotomy (traumatic subdural haematoma)",
+     "patient_hn": "HN-9002",
+     "urgency": "EMERGENCY",
+     "or_id": "OR-3",
+     "start_min": 735,
+     "end_min": 855,
+     "cleanup_end_min": 885,
+     "start": "12:15",
+     "end": "14:15",
+     "cleanup_end": "14:45",
+     "team": [
+      {
+       "staff_id": "SUR-NEURO",
+       "name": "Dr.Thanakorn (Neuro, on-call)"
+      },
+      {
+       "staff_id": "ANE-3",
+       "name": "Dr.Ratana"
+      },
+      {
+       "staff_id": "SCR-2",
+       "name": "Kanya"
+      },
+      {
+       "staff_id": "CIR-4",
+       "name": "Dao"
+      }
+     ],
+     "equipment": [
+      {
+       "unit_id": "CRANI-01",
+       "back_from_cssd_min": 975
+      }
+     ],
+     "bed_id": "ICU-1",
+     "recovery_start_min": 855,
+     "recovery_end_min": 2295,
+     "frozen": false,
+     "reasoning": [
+      "EMERGENCY: starts 0 min after it could first start (12:15)"
+     ]
+    },
+    {
+     "case_id": "C11",
+     "procedure": "Laparoscopic sleeve gastrectomy",
+     "patient_hn": "HN-0011",
+     "urgency": "ELECTIVE",
+     "or_id": "OR-1",
+     "start_min": 810,
+     "end_min": 930,
+     "cleanup_end_min": 960,
+     "start": "13:30",
+     "end": "15:30",
+     "cleanup_end": "16:00",
+     "team": [
+      {
+       "staff_id": "SUR-GEN",
+       "name": "Dr.Napat (General)"
+      },
+      {
+       "staff_id": "ANE-ONCALL",
+       "name": "Dr.Prasert (on-call)"
+      },
+      {
+       "staff_id": "SCR-3",
+       "name": "Orathai"
+      },
+      {
+       "staff_id": "CIR-1",
+       "name": "Nok"
+      }
+     ],
+     "equipment": [
+      {
+       "unit_id": "LAP-03",
+       "back_from_cssd_min": 1020
+      }
+     ],
+     "bed_id": "PACU-1",
+     "recovery_start_min": 930,
+     "recovery_end_min": 990,
+     "frozen": false,
+     "reasoning": [
+      "on the surgeon's preferred start time"
+     ]
+    },
+    {
+     "case_id": "U02",
+     "procedure": "Ureteroscopy with laser lithotripsy",
+     "patient_hn": "HN-0013",
+     "urgency": "ELECTIVE",
+     "or_id": "OR-2",
+     "start_min": 810,
+     "end_min": 870,
+     "cleanup_end_min": 900,
+     "start": "13:30",
+     "end": "14:30",
+     "cleanup_end": "15:00",
+     "team": [
+      {
+       "staff_id": "SUR-URO",
+       "name": "Dr.Kittipong (Uro)"
+      },
+      {
+       "staff_id": "ANE-1",
+       "name": "Dr.Wanida"
+      },
+      {
+       "staff_id": "SCR-1",
+       "name": "Malee"
+      },
+      {
+       "staff_id": "CIR-3",
+       "name": "Fon"
+      }
+     ],
+     "equipment": [
+      {
+       "unit_id": "MAJ-01",
+       "back_from_cssd_min": 990
+      }
+     ],
+     "bed_id": "PACU-1",
+     "recovery_start_min": 870,
+     "recovery_end_min": 930,
+     "frozen": false,
+     "reasoning": [
+      "on the surgeon's preferred start time"
+     ]
+    },
+    {
+     "case_id": "N01",
+     "procedure": "Robotic-assisted total knee arthroplasty",
+     "patient_hn": "HN-0101",
+     "urgency": "ELECTIVE",
+     "or_id": "OR-3",
+     "start_min": 885,
+     "end_min": 1035,
+     "cleanup_end_min": 1065,
+     "start": "14:45",
+     "end": "17:15",
+     "cleanup_end": "17:45",
+     "team": [
+      {
+       "staff_id": "SUR-ORTHO",
+       "name": "Dr.Somchai (Ortho)"
+      },
+      {
+       "staff_id": "ANE-3",
+       "name": "Dr.Ratana"
+      },
+      {
+       "staff_id": "SCR-4",
+       "name": "Jintana"
+      },
+      {
+       "staff_id": "CIR-4",
+       "name": "Dao"
+      }
+     ],
+     "equipment": [
+      {
+       "unit_id": "KNEE-01",
+       "back_from_cssd_min": 1155
+      },
+      {
+       "unit_id": "DV-01",
+       "back_from_cssd_min": 1095
+      }
+     ],
+     "bed_id": "PACU-2",
+     "recovery_start_min": 1035,
+     "recovery_end_min": 1095,
+     "frozen": false,
+     "reasoning": [
+      "345 min after preferred start 09:00",
+      "waits until OR-3 is cleaned after E01"
+     ]
+    }
+   ],
+   "unscheduled": [],
+   "changes": [
+    {
+     "case_id": "E01",
+     "details": [
+      "NEW booking OR-3 12:15-14:15"
+     ]
+    },
+    {
+     "case_id": "N01",
+     "details": [
+      "moved 12:30->14:45",
+      "team -[Dr.Suda, Kanya] +[Dr.Ratana, Jintana]"
+     ]
+    }
+   ],
+   "notifications": [
+    {
+     "staff_id": "SUR-NEURO",
+     "name": "Dr.Thanakorn (Neuro, on-call)",
+     "case_id": "E01",
+     "message": "[ORchestraAI] E01 Emergency craniotomy (traumatic subdural haematoma) (HN HN-9002): NEW booking OR-3 12:15-14:15"
+    },
+    {
+     "staff_id": "ANE-3",
+     "name": "Dr.Ratana",
+     "case_id": "E01",
+     "message": "[ORchestraAI] E01 Emergency craniotomy (traumatic subdural haematoma) (HN HN-9002): NEW booking OR-3 12:15-14:15"
+    },
+    {
+     "staff_id": "SCR-2",
+     "name": "Kanya",
+     "case_id": "E01",
+     "message": "[ORchestraAI] E01 Emergency craniotomy (traumatic subdural haematoma) (HN HN-9002): NEW booking OR-3 12:15-14:15"
+    },
+    {
+     "staff_id": "CIR-4",
+     "name": "Dao",
+     "case_id": "E01",
+     "message": "[ORchestraAI] E01 Emergency craniotomy (traumatic subdural haematoma) (HN HN-9002): NEW booking OR-3 12:15-14:15"
+    },
+    {
+     "staff_id": "SUR-ORTHO",
+     "name": "Dr.Somchai (Ortho)",
+     "case_id": "N01",
+     "message": "[ORchestraAI] N01 Robotic-assisted total knee arthroplasty (HN HN-0101): moved 12:30->14:45; team -[Dr.Suda, Kanya] +[Dr.Ratana, Jintana]"
+    },
+    {
+     "staff_id": "ANE-4",
+     "name": "Dr.Suda",
+     "case_id": "N01",
+     "message": "[ORchestraAI] N01 Robotic-assisted total knee arthroplasty (HN HN-0101): moved 12:30->14:45; team -[Dr.Suda, Kanya] +[Dr.Ratana, Jintana]"
+    },
+    {
+     "staff_id": "SCR-2",
+     "name": "Kanya",
+     "case_id": "N01",
+     "message": "[ORchestraAI] N01 Robotic-assisted total knee arthroplasty (HN HN-0101): moved 12:30->14:45; team -[Dr.Suda, Kanya] +[Dr.Ratana, Jintana]"
+    },
+    {
+     "staff_id": "CIR-4",
+     "name": "Dao",
+     "case_id": "N01",
+     "message": "[ORchestraAI] N01 Robotic-assisted total knee arthroplasty (HN HN-0101): moved 12:30->14:45; team -[Dr.Suda, Kanya] +[Dr.Ratana, Jintana]"
+    },
+    {
+     "staff_id": "ANE-3",
+     "name": "Dr.Ratana",
+     "case_id": "N01",
+     "message": "[ORchestraAI] N01 Robotic-assisted total knee arthroplasty (HN HN-0101): moved 12:30->14:45; team -[Dr.Suda, Kanya] +[Dr.Ratana, Jintana]"
+    },
+    {
+     "staff_id": "SCR-4",
+     "name": "Jintana",
+     "case_id": "N01",
+     "message": "[ORchestraAI] N01 Robotic-assisted total knee arthroplasty (HN HN-0101): moved 12:30->14:45; team -[Dr.Suda, Kanya] +[Dr.Ratana, Jintana]"
+    }
+   ]
+  }
+ }
+}
+</script>
+<script>
+  const FLOW = JSON.parse(document.getElementById('flow-data').textContent);
+  const ROW_H = 40;
+  const AGENTS = { intake: 'node-intake', master: 'node-master', staff: 'node-staff', equip: 'node-equip', or: 'node-or' };
+  const BEAMS = {
+    'intake-master': ['node-intake', 'node-master', 'var(--cyan)'],
+    'master-staff':  ['node-master', 'node-staff', 'var(--green)'],
+    'master-equip':  ['node-master', 'node-equip', 'var(--purple)'],
+    'master-or':     ['node-master', 'node-or', 'var(--orange)'],
+    'staff-zone':    ['node-staff', 'zone-staff', 'var(--green)'],
+    'equip-zone':    ['node-equip', 'zone-equip', 'var(--purple)'],
+    'or-zone':       ['node-or', 'zone-or', 'var(--orange)']
+  };
+  let current = 0;
+  let logTimers = [];
+
+  const span = FLOW.axis.end - FLOW.axis.start;
+  const pct = t => ((t - FLOW.axis.start) / span * 100) + '%';
+  const hhmm = t => String(Math.floor(t / 60) % 24).padStart(2, '0') + ':' + String(t % 60).padStart(2, '0');
+
+  function el(tag, cls, text) {
+    const node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (text !== undefined) node.textContent = text;
+    return node;
+  }
+
+  function buildGanttFrame() {
+    const labels = document.getElementById('gantt-labels');
+    const canvas = document.getElementById('gantt-canvas');
+    canvas.style.height = (FLOW.rooms.length * ROW_H) + 'px';
+    FLOW.rooms.forEach((room, i) => {
+      const label = el('div');
+      label.append(el('span', '', room.id), el('small', '', room.type));
+      label.title = room.caps.join(', ');
+      labels.appendChild(label);
+      if (i > 0) {
+        const line = el('div', 'gantt-row-line');
+        line.style.top = (i * ROW_H) + 'px';
+        canvas.appendChild(line);
+      }
+    });
+    buildAxis();
+  }
+
+  function buildAxis() {
+    // Hour labels, spaced so they never overlap on narrow screens.
+    const axis = document.getElementById('gantt-axis');
+    const canvas = document.getElementById('gantt-canvas');
+    axis.replaceChildren();
+    canvas.querySelectorAll('.gantt-tick').forEach(n => n.remove());
+    const hours = span / 60;
+    const width = canvas.clientWidth || 600;
+    const every = [1, 2, 3, 4, 6, 12].find(h => width / (hours / h) >= 46) || 12;
+    for (let t = FLOW.axis.start; t <= FLOW.axis.end; t += every * 60) {
+      const tick = el('span', '', hhmm(t));
+      tick.style.left = pct(t);
+      axis.appendChild(tick);
+      const line = el('div', 'gantt-tick');
+      line.style.left = pct(t);
+      canvas.appendChild(line);
+    }
+  }
+
+  function renderGantt(step) {
+    const canvas = document.getElementById('gantt-canvas');
+    const rowOf = Object.fromEntries(FLOW.rooms.map((r, i) => [r.id, i]));
+    const seen = new Set();
+    step.blocks.forEach(b => {
+      const top = rowOf[b.room] * ROW_H + 5;
+      const keyB = 'b-' + b.case_id, keyC = 'c-' + b.case_id;
+      seen.add(keyB); seen.add(keyC);
+      let block = canvas.querySelector(`[data-key="${keyB}"]`);
+      if (!block) { block = el('div'); block.dataset.key = keyB; canvas.appendChild(block); }
+      block.className = 'gantt-block kind-' + b.kind;
+      block.style.left = pct(b.start);
+      block.style.width = ((b.end - b.start) / span * 100) + '%';
+      block.style.top = top + 'px';
+      block.textContent = b.case_id + ' ' + b.time;
+      block.title = b.label + ' · ' + b.time + ' · ' + b.urgency;
+      let clean = canvas.querySelector(`[data-key="${keyC}"]`);
+      if (!clean) { clean = el('div', 'gantt-clean'); clean.dataset.key = keyC; canvas.appendChild(clean); }
+      clean.style.left = pct(b.end);
+      clean.style.width = ((b.clean - b.end) / span * 100) + '%';
+      clean.style.top = top + 'px';
+    });
+    canvas.querySelectorAll('[data-key]').forEach(n => { if (!seen.has(n.dataset.key)) n.remove(); });
+    let now = canvas.querySelector('.now-line');
+    if (step.now !== undefined) {
+      if (!now) { now = el('div', 'now-line'); canvas.appendChild(now); }
+      now.style.left = pct(step.now);
+      now.title = 'เวลาปัจจุบัน ' + hhmm(step.now);
+    } else if (now) {
+      now.remove();
+    }
+  }
+
+  function renderZones(step) {
+    ['staff', 'equip', 'or'].forEach(zone => {
+      const box = document.getElementById('items-' + zone);
+      box.replaceChildren();
+      (step.zones[zone] || []).forEach(item => {
+        const row = el('div', 'resource-item');
+        row.append(el('span', 'name', item.label), el('span', 'badge-state state-' + item.state, item.text));
+        box.appendChild(row);
+      });
+    });
+    document.getElementById('zone-time').textContent = 'สถานะ ณ เวลา ' + step.zoneTime + ' ตามที่ Agent สแกน';
+  }
+
+  function renderAgents(step) {
+    Object.entries(AGENTS).forEach(([key, id]) => {
+      const node = document.getElementById(id);
+      const state = step.agents[key];
+      node.className = 'agent-node' + (key === 'master' ? ' master' : '') + (state.glow ? ' glow-' + state.glow : '');
+      document.getElementById('pill-' + key).textContent = state.pill;
+    });
+  }
+
+  function renderLog(step) {
+    logTimers.forEach(clearTimeout);
+    logTimers = [];
+    const box = document.getElementById('console-log');
+    box.replaceChildren();
+    step.logs.forEach((line, i) => {
+      logTimers.push(setTimeout(() => {
+        let cls = 'log-entry';
+        if (/CONFLICT|EMERGENCY|rejected|no conflict-free/.test(line)) cls += ' bad';
+        else if (/\bOK\b|locked|reserved|notified|NEW booking/.test(line)) cls += ' good';
+        box.appendChild(el('div', cls, line));
+        box.scrollTop = box.scrollHeight;
+      }, i * 160));
+    });
+  }
+
+  function drawBeams(keys) {
+    const svg = document.getElementById('beam-canvas');
+    svg.replaceChildren();
+    const stage = document.getElementById('stage').getBoundingClientRect();
+    const center = id => {
+      const r = document.getElementById(id).getBoundingClientRect();
+      return { x: r.left - stage.left + r.width / 2, y: r.top - stage.top + r.height / 2 };
+    };
+    keys.forEach(key => {
+      const [from, to, color] = BEAMS[key];
+      const p1 = center(from), p2 = center(to);
+      const midY = (p1.y + p2.y) / 2;
+      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path.setAttribute('d', `M ${p1.x} ${p1.y} C ${p1.x} ${midY}, ${p2.x} ${midY}, ${p2.x} ${p2.y}`);
+      path.setAttribute('stroke', color);
+      path.setAttribute('class', 'beam-line');
+      svg.appendChild(path);
+    });
+  }
+
+  function runScenario(i) {
+    current = i;
+    const step = FLOW.steps[i];
+    document.querySelectorAll('#controls [data-step]').forEach(btn => btn.classList.toggle('active', Number(btn.dataset.step) === i));
+    document.getElementById('story-title').textContent = step.title;
+    document.getElementById('story-desc').textContent = step.desc;
+    document.getElementById('schedule-summary').textContent = step.summary;
+    renderAgents(step);
+    renderZones(step);
+    renderGantt(step);
+    renderLog(step);
+    setTimeout(() => drawBeams(step.beams), 380);
+  }
+
+  document.querySelectorAll('#controls [data-step]').forEach(btn => btn.addEventListener('click', () => runScenario(Number(btn.dataset.step))));
+  document.getElementById('toggle-view').addEventListener('click', () => {
+    document.getElementById('iso-floor').classList.toggle('flat-view');
+    setTimeout(() => drawBeams(FLOW.steps[current].beams), 750);
+  });
+  window.addEventListener('resize', () => { buildAxis(); drawBeams(FLOW.steps[current].beams); });
+  document.getElementById('source-note').innerHTML = '';
+  document.getElementById('source-note').append(
+    'ข้อมูลทุกขั้นสร้างโดย ', el('code', '', FLOW.generatedBy), ' (CP-SAT + ตัวตรวจ hard constraint อิสระ)'
+  );
+  buildGanttFrame();
+  runScenario(0);
+  window.addEventListener('load', () => { buildAxis(); drawBeams(FLOW.steps[current].beams); });
+</script>
+</body>
+</html>

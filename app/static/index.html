@@ -1,0 +1,817 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ORchestraAI</title>
+<link href="https://fonts.googleapis.com/css2?family=Prompt:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #f4f6fb; --surface: #ffffff; --surface-2: #f8fafc; --text: #0f172a; --muted: #64748b;
+    --border: #e2e8f0; --accent: #0e7490; --accent-soft: #e0f2fe; --ok: #047857; --ok-soft: #d1fae5;
+    --bad: #b91c1c; --bad-soft: #fee2e2; --warn: #b45309; --warn-soft: #fef3c7;
+    --elective: #2563eb; --urgent: #f59e0b; --emergency: #dc2626; --track: #f1f5f9; --clean: rgba(100,116,139,.35);
+    --shadow: 0 1px 3px rgba(15,23,42,.08), 0 8px 24px rgba(15,23,42,.06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0b1220; --surface: #111a2e; --surface-2: #0f172a; --text: #e2e8f0; --muted: #94a3b8;
+      --border: #1f2a44; --accent: #22d3ee; --accent-soft: rgba(34,211,238,.12); --ok: #34d399; --ok-soft: rgba(16,185,129,.15);
+      --bad: #f87171; --bad-soft: rgba(239,68,68,.15); --warn: #fbbf24; --warn-soft: rgba(245,158,11,.15);
+      --elective: #3b82f6; --track: #0f172a; --clean: rgba(148,163,184,.3); --shadow: none;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0b1220; --surface: #111a2e; --surface-2: #0f172a; --text: #e2e8f0; --muted: #94a3b8;
+    --border: #1f2a44; --accent: #22d3ee; --accent-soft: rgba(34,211,238,.12); --ok: #34d399; --ok-soft: rgba(16,185,129,.15);
+    --bad: #f87171; --bad-soft: rgba(239,68,68,.15); --warn: #fbbf24; --warn-soft: rgba(245,158,11,.15);
+    --elective: #3b82f6; --track: #0f172a; --clean: rgba(148,163,184,.3); --shadow: none;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 'Prompt', 'Noto Sans Thai', system-ui, sans-serif; }
+  button, input, select { font: inherit; color: inherit; }
+  .top { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; padding: 14px 24px; background: var(--surface); border-bottom: 1px solid var(--border); }
+  .brand { display: flex; align-items: center; gap: 12px; }
+  .orb { width: 14px; height: 14px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 12px var(--accent); }
+  .brand h1 { margin: 0; font-size: 1.15rem; }
+  .brand p { margin: 0; font-size: .8rem; color: var(--muted); }
+  .top nav { display: flex; gap: 8px; flex-wrap: wrap; }
+  .btn { border: 1px solid var(--border); background: var(--surface); padding: 8px 14px; border-radius: 8px; cursor: pointer; text-decoration: none; color: var(--text); font-size: .88rem; }
+  .btn:hover { border-color: var(--accent); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  :root[data-theme="dark"] .btn.primary { color: #04121a; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .btn.primary { color: #04121a; } }
+  .btn.danger { background: var(--emergency); border-color: var(--emergency); color: #fff; font-weight: 600; }
+  .btn:disabled { opacity: .55; cursor: progress; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .layout { display: grid; grid-template-columns: minmax(0, 1fr) 420px; gap: 20px; padding: 20px 24px; align-items: start; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow); padding: 18px; min-width: 0; }
+  .card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+  h2 { margin: 0; font-size: 1.05rem; }
+  h3 { margin: 16px 0 8px; font-size: .95rem; }
+  .stats { display: flex; gap: 8px; flex-wrap: wrap; }
+  .chip { font-size: .75rem; padding: 3px 10px; border-radius: 99px; background: var(--surface-2); border: 1px solid var(--border); color: var(--muted); }
+  .chip.ok { background: var(--ok-soft); color: var(--ok); border-color: transparent; }
+  .chip.bad { background: var(--bad-soft); color: var(--bad); border-color: transparent; }
+
+  /* Gantt */
+  .gantt-scroll { overflow-x: auto; }
+  .gantt { min-width: 720px; display: grid; grid-template-columns: 76px minmax(0, 1fr); }
+  .g-labels { padding-top: 22px; }
+  .g-label { height: 48px; display: flex; flex-direction: column; justify-content: center; font-weight: 600; font-size: .85rem; }
+  .g-label small { font-weight: 400; color: var(--muted); font-size: .68rem; }
+  .g-axis { position: relative; height: 22px; }
+  .g-axis span { position: absolute; transform: translateX(-50%); font-size: .7rem; color: var(--muted); }
+  .g-canvas { position: relative; background: var(--track); border-radius: 10px; border: 1px solid var(--border); }
+  .g-row { position: absolute; left: 0; right: 0; height: 1px; background: var(--border); }
+  .g-tick { position: absolute; top: 0; bottom: 0; border-left: 1px dashed var(--border); }
+  .g-block { position: absolute; height: 36px; border-radius: 7px; padding: 2px 7px; color: #fff; font-size: .72rem; line-height: 1.25;
+    overflow: hidden; cursor: pointer; border: 2px solid transparent; text-align: left; transition: transform .15s, box-shadow .15s; z-index: 2; }
+  .g-block:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,.2); }
+  .g-block b { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .g-block span { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: .9; }
+  .u-ELECTIVE { background: var(--elective); }
+  .u-URGENT { background: var(--urgent); color: #1f1300; }
+  .u-EMERGENCY { background: var(--emergency); }
+  .g-block.frozen { border-style: dashed; border-color: rgba(255,255,255,.85); filter: saturate(.6); }
+  .g-block.hl { box-shadow: 0 0 0 3px var(--ok), 0 0 16px var(--ok); }
+  .g-block.sel { box-shadow: 0 0 0 3px var(--accent); }
+  .g-clean { position: absolute; height: 36px; border-radius: 0 7px 7px 0; background: repeating-linear-gradient(135deg, var(--clean) 0 4px, transparent 4px 8px); z-index: 1; }
+  .g-now { position: absolute; top: -4px; bottom: -4px; width: 2px; background: var(--emergency); z-index: 3; }
+  .g-axis .now { color: var(--emergency); font-weight: 600; }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 10px; font-size: .75rem; color: var(--muted); }
+  .legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 5px; vertical-align: -2px; }
+  .detail { margin-top: 16px; border-top: 1px solid var(--border); padding-top: 12px; }
+  .detail dl { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 4px 12px; margin: 0; font-size: .85rem; }
+  .detail dt { color: var(--muted); }
+  .detail dd { margin: 0; overflow-wrap: anywhere; }
+  .why { margin: 6px 0 0; padding-left: 18px; font-size: .82rem; color: var(--muted); }
+
+  /* Panel */
+  .tabs { display: flex; flex-wrap: wrap; gap: 4px; background: var(--surface-2); padding: 4px; border-radius: 10px; margin-bottom: 14px; }
+  .tab { flex: 1 1 auto; border: 0; background: transparent; padding: 8px 6px; border-radius: 7px; cursor: pointer; font-size: .85rem; color: var(--muted); }
+  .tab[aria-selected="true"] { background: var(--surface); color: var(--text); font-weight: 600; box-shadow: var(--shadow); }
+  .tab.er[aria-selected="true"] { color: var(--emergency); }
+  form { display: grid; gap: 10px; }
+  label { display: grid; gap: 4px; font-size: .82rem; color: var(--muted); }
+  input[type="text"], input[type="number"], input[type="time"], select {
+    width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); color: var(--text); }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  fieldset { border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px 10px; margin: 0; min-width: 0; }
+  legend { font-size: .78rem; color: var(--muted); padding: 0 4px; }
+  .checks { display: flex; flex-wrap: wrap; gap: 6px 12px; }
+  .checks label { display: flex; align-items: center; gap: 6px; color: var(--text); font-size: .8rem; }
+  .hint { font-size: .78rem; color: var(--muted); margin: 0; }
+  .result { margin-top: 16px; }
+  .verdict { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; }
+  .verdict.ok { border-color: var(--ok); background: var(--ok-soft); }
+  .verdict.bad { border-color: var(--bad); background: var(--bad-soft); }
+  .verdict h4 { margin: 0 0 4px; font-size: .85rem; }
+  .verdict ul { margin: 0; padding-left: 18px; font-size: .78rem; }
+  .proposal { border-radius: 10px; padding: 12px; background: var(--accent-soft); margin: 10px 0; font-size: .88rem; }
+  .proposal.none { background: var(--bad-soft); color: var(--bad); }
+  details { margin-top: 8px; }
+  summary { cursor: pointer; font-size: .82rem; color: var(--muted); }
+  pre.log { white-space: pre-wrap; overflow-wrap: anywhere; font: .74rem/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 10px; margin: 6px 0 0; }
+  .changes { margin: 6px 0; padding-left: 18px; font-size: .84rem; }
+  .activity-item { border-bottom: 1px solid var(--border); padding: 10px 0; font-size: .85rem; }
+  .activity-item .kind { font-size: .7rem; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); }
+  .unsched { margin-top: 14px; }
+  .unsched li { font-size: .82rem; margin-bottom: 4px; }
+  #toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); background: var(--bad); color: #fff; padding: 10px 16px; border-radius: 10px; font-size: .88rem; max-width: calc(100% - 32px); display: none; z-index: 50; }
+  .busy-overlay { font-size: .82rem; color: var(--accent); }
+  .banner { border-radius: 12px; padding: 12px 14px; font-size: .86rem; margin: 0 24px 0; }
+  .banner.bad { background: var(--bad-soft); color: var(--bad); border: 1px solid var(--bad); }
+  .banner.warn { background: var(--warn-soft); color: var(--warn); border: 1px solid var(--warn); }
+  .banner ul { margin: 6px 0 0; padding-left: 18px; }
+  .banner .btn { margin-top: 8px; }
+  #banners { display: grid; gap: 10px; padding-top: 16px; }
+  #banners:empty { display: none; }
+  .mode { font-size: .72rem; padding: 2px 8px; border-radius: 99px; background: var(--accent-soft); color: var(--accent); margin-left: 6px; vertical-align: 2px; }
+  .top input[type="date"] { padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); color: var(--text); }
+  .who { display: flex; flex-direction: column; justify-content: center; font-size: .8rem; line-height: 1.25; text-align: right; }
+  .who small { color: var(--muted); }
+  .g-block.mine::after { content: "ของฉัน"; position: absolute; right: 4px; top: 2px; font-size: .6rem; background: rgba(255,255,255,.9); color: #0f172a; padding: 0 4px; border-radius: 4px; }
+  .rows { display: grid; gap: 8px; }
+  .row-item { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; display: grid; gap: 8px; font-size: .84rem; }
+  .row-item .line { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .row-item .line > * { flex: 1 1 120px; min-width: 0; }
+  .row-item .title { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+  .row-item .title small { color: var(--muted); }
+  .row-item .btn { flex: 0 0 auto; padding: 6px 12px; }
+  .badge { font-size: .7rem; padding: 2px 8px; border-radius: 99px; background: var(--surface-2); border: 1px solid var(--border); color: var(--muted); }
+  .badge.ok { background: var(--ok-soft); color: var(--ok); border-color: transparent; }
+  .badge.bad { background: var(--bad-soft); color: var(--bad); border-color: transparent; }
+  .badge.warn { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
+  .secret { font: .9rem ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--warn-soft); color: var(--warn); padding: 8px 10px; border-radius: 8px; overflow-wrap: anywhere; }
+  dialog { border: 1px solid var(--border); border-radius: 14px; background: var(--surface); color: var(--text); padding: 20px; width: min(380px, calc(100% - 32px)); }
+  dialog::backdrop { background: rgba(15,23,42,.5); }
+  [hidden] { display: none !important; }
+
+  @media (max-width: 1100px) { .layout { grid-template-columns: minmax(0, 1fr); } }
+  @media (max-width: 600px) {
+    .top, .layout { padding-left: 16px; padding-right: 16px; }
+    .banner { margin: 0 16px; }
+    .row2 { grid-template-columns: 1fr; }
+    .detail dl { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <span class="orb" aria-hidden="true"></span>
+    <div><h1>ORchestraAI <span class="mode" id="mode"></span></h1><p id="day">กำลังโหลด…</p></div>
+  </div>
+  <nav>
+    <input type="date" id="date" aria-label="วันที่วางแผน" hidden>
+    <button class="btn" id="reload" type="button">โหลดใหม่</button>
+    <a class="btn" href="/flow" target="_blank" rel="noopener">ดู Flow สาธิต</a>
+    <button class="btn" id="reset" type="button" hidden>รีเซ็ตข้อมูลตัวอย่าง</button>
+    <span class="who" id="who"></span>
+    <button class="btn" id="change-pass" type="button">เปลี่ยนรหัสผ่าน</button>
+    <button class="btn" id="logout" type="button">ออกจากระบบ</button>
+  </nav>
+</header>
+<div id="banners"></div>
+
+<main class="layout">
+  <section class="card" aria-labelledby="sched-title">
+    <div class="card-head">
+      <h2 id="sched-title">ตารางห้องผ่าตัด</h2>
+      <div class="stats" id="stats"></div>
+    </div>
+    <div class="gantt-scroll"><div class="gantt" id="gantt"></div></div>
+    <div class="legend">
+      <span><i class="u-ELECTIVE"></i>Elective</span>
+      <span><i class="u-URGENT"></i>Urgent</span>
+      <span><i class="u-EMERGENCY"></i>Emergency</span>
+      <span><i style="background: repeating-linear-gradient(135deg, var(--clean) 0 3px, transparent 3px 6px)"></i>ทำความสะอาดห้อง</span>
+      <span>เส้นประ = เริ่มผ่าตัดแล้ว (ล็อก)</span>
+      <span>กรอบเขียว = เพิ่งเปลี่ยน</span>
+    </div>
+    <div id="detail" class="detail" hidden></div>
+    <div id="unscheduled" class="unsched"></div>
+  </section>
+
+  <aside class="card">
+    <div class="tabs" role="tablist">
+      <button class="tab" role="tab" aria-selected="true" data-tab="book" data-perm="book">จองผ่าตัด</button>
+      <button class="tab er" role="tab" aria-selected="false" data-tab="er" data-perm="emergency">ฉุกเฉิน</button>
+      <button class="tab" role="tab" aria-selected="false" data-tab="over" data-perm="overrun">เกินเวลา</button>
+      <button class="tab" role="tab" aria-selected="false" data-tab="equip" data-perm="equipment">เครื่องมือ</button>
+      <button class="tab" role="tab" aria-selected="false" data-tab="users" data-perm="users">ผู้ใช้</button>
+      <button class="tab" role="tab" aria-selected="false" data-tab="log" data-perm="view">กิจกรรม</button>
+    </div>
+
+    <section data-panel="book">
+      <form id="form-book">
+        <p class="hint">กรอกคำขอ แล้วให้ Agent ทั้ง 3 ตรวจเวลาที่ต้องการ ถ้าไม่ว่าง ระบบจะเสนอช่วงถัดไปที่พร้อมครบ</p>
+        <div data-case="book"></div>
+        <div class="row2">
+          <label>ความเร่งด่วน
+            <select name="urgency"><option value="ELECTIVE">Elective</option><option value="URGENT">Urgent</option></select>
+          </label>
+          <label>เวลาที่ต้องการ<input type="time" name="start" value="09:00" required></label>
+        </div>
+        <button class="btn primary" type="submit">ตรวจสอบช่วงเวลา</button>
+      </form>
+      <div class="result" id="result-book"></div>
+    </section>
+
+    <section data-panel="er" hidden>
+      <form id="form-er">
+        <p class="hint">เคสฉุกเฉินได้ห้องเร็วที่สุด เคสที่เริ่มแล้วถูกล็อก เคสที่ยังไม่เริ่มจะถูกเลื่อนให้น้อยที่สุด และแจ้งทีมที่ได้รับผลกระทบ</p>
+        <div data-case="er"></div>
+        <label>เวลาที่ผู้ป่วยมาถึง (เวลาปัจจุบัน)<input type="time" name="now" required></label>
+        <button class="btn danger" type="submit">แทรกเคสฉุกเฉิน</button>
+      </form>
+      <div class="result" id="result-er"></div>
+    </section>
+
+    <section data-panel="over" hidden>
+      <form id="form-over">
+        <p class="hint">เคสที่กำลังผ่าตัดใช้เวลานานกว่าที่วางไว้ ระบบจะขยับเคสถัดไปตามผลกระทบ</p>
+        <label>เคส<select name="case_id" required></select></label>
+        <div class="row2">
+          <label>ใช้เวลาเพิ่มอีก (นาที)<input type="number" name="extra" min="5" max="600" step="5" value="60" required></label>
+          <label>เวลาปัจจุบัน<input type="time" name="now" required></label>
+        </div>
+        <button class="btn primary" type="submit">คำนวณผลกระทบ</button>
+      </form>
+      <div class="result" id="result-over"></div>
+    </section>
+
+    <section data-panel="equip" hidden>
+      <p class="hint">Equipment &amp; Inventory Agent: อัปเดตสถานะเครื่องมือและเวลาที่อบฆ่าเชื้อเสร็จ ระบบใช้เวลานี้ตอนจัดตาราง</p>
+      <div id="equip-list" class="rows"></div>
+    </section>
+
+    <section data-panel="users" hidden>
+      <form id="form-user">
+        <h3 style="margin-top:0">เพิ่มผู้ใช้</h3>
+        <div class="row2">
+          <label>ชื่อผู้ใช้ (a-z 0-9 . _ -)<input type="text" name="username" required minlength="3" maxlength="80" pattern="[A-Za-z0-9._\-]+"></label>
+          <label>ชื่อที่แสดง<input type="text" name="display_name" required maxlength="150"></label>
+        </div>
+        <div class="row2">
+          <label>บทบาท<select name="role" required></select></label>
+          <label>ผูกกับรายชื่อบุคลากร<select name="staff_id"></select></label>
+        </div>
+        <p class="hint">ระบบสร้างรหัสผ่านชั่วคราวให้ ผู้ใช้ต้องตั้งรหัสใหม่เมื่อเข้าครั้งแรก</p>
+        <button class="btn primary" type="submit">สร้างบัญชี</button>
+      </form>
+      <div id="user-secret"></div>
+      <h3>ผู้ใช้ทั้งหมด</h3>
+      <div id="user-list" class="rows"></div>
+    </section>
+
+    <section data-panel="log" hidden>
+      <div id="activity"></div>
+    </section>
+  </aside>
+</main>
+<div id="toast" role="alert"></div>
+<dialog id="pass-dialog">
+  <form id="pass-form">
+    <h3 style="margin-top:0">เปลี่ยนรหัสผ่าน</h3>
+    <label>รหัสผ่านปัจจุบัน<input type="password" name="current_password" autocomplete="current-password" required></label>
+    <label>รหัสผ่านใหม่ (อย่างน้อย 10 ตัวอักษร)<input type="password" name="new_password" autocomplete="new-password" minlength="10" required></label>
+    <label>ยืนยันรหัสผ่านใหม่<input type="password" name="confirm" autocomplete="new-password" minlength="10" required></label>
+    <div class="row2">
+      <button class="btn" type="button" id="pass-cancel">ยกเลิก</button>
+      <button class="btn primary" type="submit">บันทึก</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+  let STATE = null;
+  let selected = null;
+  let highlight = new Set();
+  const ROW = 48;
+
+  const $ = (sel, root = document) => root.querySelector(sel);
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const hhmm = t => String(Math.floor(t / 60) % 24).padStart(2, '0') + ':' + String(t % 60).padStart(2, '0');
+  const nowText = () => {
+    // Real clock during working hours, otherwise a mid-morning demo time.
+    const d = new Date(), m = d.getHours() * 60 + d.getMinutes();
+    return m >= 8 * 60 && m <= 20 * 60 ? hhmm(m) : '10:30';
+  };
+
+  const withDate = path => (STATE && STATE.date && !path.includes('date=')
+    ? path + (path.includes('?') ? '&' : '?') + 'date=' + STATE.date : path);
+
+  const can = perm => !!(STATE && STATE.me && STATE.me.permissions.includes(perm));
+
+  async function api(path, body, method) {
+    const res = await fetch(withDate(path), body === undefined ? {} : {
+      method: method || 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+    });
+    if (res.status === 401) { location.href = '/login'; throw new Error('กรุณาเข้าสู่ระบบ'); }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const detail = Array.isArray(data.detail) ? data.detail.map(d => (d.loc || []).slice(-1)[0] + ': ' + d.msg).join(', ') : data.detail;
+      throw new Error(detail || ('HTTP ' + res.status));
+    }
+    return data;
+  }
+
+  function toast(msg, ok = false) {
+    const el = $('#toast');
+    el.style.background = ok ? 'var(--ok)' : 'var(--bad)';
+    el.textContent = msg;
+    el.style.display = 'block';
+    clearTimeout(toast.t);
+    toast.t = setTimeout(() => { el.style.display = 'none'; }, 6000);
+  }
+
+  async function busy(button, fn) {
+    const label = button.textContent;
+    button.disabled = true;
+    button.textContent = 'กำลังคำนวณ…';
+    try { await fn(); } catch (e) { toast(e.message); } finally { button.disabled = false; button.textContent = label; }
+  }
+
+  // ------------------------------------------------------------ case form
+  function caseFields(kind) {
+    const o = STATE.options;
+    const own = STATE.me.role === 'surgeon';
+    const surgeons = o.surgeons.filter(s => !own || s.id === STATE.me.staff_id).map(s => `<option value="${esc(s.id)}">${esc(s.name)} (${esc(s.shifts.join(', '))})</option>`).join('');
+    const caps = o.capabilities.map(c => `<label><input type="checkbox" name="cap" value="${esc(c)}">${esc(c)}</label>`).join('');
+    const eq = o.equipment_types.map(e => `<label><input type="checkbox" name="eq" value="${esc(e.type)}">${esc(e.type)} <small>(${e.units})</small></label>`).join('');
+    const db = STATE.mode === 'supabase';
+    const defaults = kind === 'er'
+      ? { proc: 'Emergency exploratory laparotomy', hn: db ? '' : 'HN-ER', dur: 120 }
+      : { proc: 'Laparoscopic cholecystectomy', hn: db ? '' : 'HN-1001', dur: 90 };
+    const procs = o.procedures || [];
+    const procSelect = procs.length ? `<label>หัตถการจากฐานข้อมูล<select name="procedure_id">
+        <option value="">— พิมพ์ชื่อหัตถการเอง —</option>
+        ${procs.map(p => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('')}</select></label>` : '';
+    return `
+      <label>ศัลยแพทย์<select name="surgeon_id" required>${surgeons}</select></label>
+      ${procSelect}
+      <label>หัตถการ<input type="text" name="procedure" value="${esc(defaults.proc)}" required minlength="2" maxlength="200"></label>
+      <p class="hint" data-role="card-hint"></p>
+      <div class="row2">
+        <label>HN ผู้ป่วย<input type="text" name="patient_hn" value="${esc(defaults.hn)}" required maxlength="50"></label>
+        <label>ชื่อผู้ป่วย${db ? '' : ' (ไม่บังคับ)'}<input type="text" name="patient_name" maxlength="150" ${db ? 'required' : ''}></label>
+      </div>
+      <label>ระยะเวลาผ่าตัด (นาที)<input type="number" name="duration_mins" value="${defaults.dur}" min="15" max="720" step="5" required></label>
+      <fieldset><legend>ห้องต้องมี</legend><div class="checks">${caps}</div></fieldset>
+      <fieldset><legend>เครื่องมือ (ชุดละ 1)</legend><div class="checks">${eq}</div></fieldset>
+      <div class="row2">
+        <label>ความเสี่ยงติดเชื้อ
+          <select name="infection_risk"><option>CLEAN</option><option>CONTAMINATED</option><option ${kind === 'er' ? 'selected' : ''}>DIRTY</option></select>
+        </label>
+        <fieldset><legend>อื่น ๆ</legend><div class="checks">
+          <label><input type="checkbox" name="icu" ${kind === 'er' ? 'checked' : ''}>ต้องการ ICU</label>
+          <label><input type="checkbox" name="robotic">พยาบาล Robotic</label>
+        </div></fieldset>
+      </div>`;
+  }
+
+  // Intake defaults: procedure (room, ICU, infection) + surgeon preference card (time, team, equipment).
+  function applyDefaults(form) {
+    const o = STATE.options;
+    const pid = form.elements['procedure_id']?.value;
+    const hint = form.querySelector('[data-role="card-hint"]');
+    form.dataset.roles = '';
+    if (!pid) { hint.textContent = ''; return; }
+    const p = (o.procedures || []).find(x => x.id === pid);
+    const card = (o.cards || []).find(c => c.procedure_id === pid && c.surgeon_id === form.elements['surgeon_id'].value);
+    form.elements['procedure'].value = p.name;
+    form.elements['duration_mins'].value = card ? card.duration : p.duration;
+    form.querySelectorAll('input[name="cap"]').forEach(x => { x.checked = p.caps.includes(x.value); });
+    form.querySelectorAll('input[name="eq"]').forEach(x => { x.checked = card ? card.equipment.includes(x.value) : false; });
+    form.elements['icu'].checked = p.icu;
+    form.elements['infection_risk'].value = p.infection;
+    if (card) form.dataset.roles = JSON.stringify(card.roles);
+    hint.textContent = card
+      ? `ค่าจาก preference card: ${card.duration} นาที (±${card.stddev ?? '?'}), ทีม ${Object.entries(card.roles).map(([r, n]) => n + ' ' + r).join(', ')}`
+      : 'ศัลยแพทย์คนนี้ยังไม่มี preference card สำหรับหัตถการนี้ ใช้เวลามาตรฐานของหัตถการและทีมมาตรฐาน';
+  }
+
+  function readCase(form, urgency) {
+    const f = new FormData(form);
+    return {
+      procedure: f.get('procedure').trim(),
+      patient_hn: f.get('patient_hn').trim(),
+      surgeon_id: f.get('surgeon_id'),
+      duration_mins: Number(f.get('duration_mins')),
+      urgency,
+      required_capabilities: f.getAll('cap'),
+      required_equipment_types: f.getAll('eq'),
+      requires_icu_post_op: f.get('icu') === 'on',
+      infection_risk: f.get('infection_risk'),
+      robotic_certified_scrub: f.get('robotic') === 'on',
+      patient_name: (f.get('patient_name') || '').trim() || null,
+      procedure_id: f.get('procedure_id') || null,
+      required_staff_roles: form.dataset.roles ? JSON.parse(form.dataset.roles) : null,
+    };
+  }
+
+  // ---------------------------------------------------------------- render
+  function render() {
+    const s = STATE.schedule;
+    const db = STATE.mode === 'supabase';
+    $('#mode').textContent = db ? 'Supabase' : 'ข้อมูลจำลอง';
+    $('#date').hidden = !db;
+    if (db) $('#date').value = STATE.date;
+    $('#reset').hidden = db || !can('reset');
+    $('#who').innerHTML = `<span>${esc(STATE.me.display_name)}</span><small>${esc(STATE.me.role_label)}</small>`;
+    $('#change-pass').hidden = STATE.me.user_id === 'env-admin' || STATE.me.user_id === 'dev';
+    applyTabs();
+    $('#day').textContent = STATE.planning_day + (s.now_min ? ' · เวลาปัจจุบันของตาราง ' + hhmm(s.now_min) : '');
+    renderBanners();
+    $('#stats').innerHTML = `
+      <span class="chip ok">จองแล้ว ${s.bookings.length} เคส</span>
+      <span class="chip ${s.unscheduled.length ? 'bad' : ''}">ยังไม่ได้จัด ${s.unscheduled.length}</span>
+      <span class="chip">${s.status === 'LOADED' ? 'ข้อมูลจาก Supabase' : 'solver ' + esc(s.status)}</span>`;
+    renderGantt();
+    renderUnscheduled();
+    renderOverrunOptions();
+    renderActivity();
+    if (selected) showDetail(selected);
+  }
+
+  function renderGantt() {
+    const { start, end } = STATE.axis;
+    const span = end - start;
+    const pct = t => ((t - start) / span * 100) + '%';
+    const rooms = STATE.options.rooms;
+    const rowOf = Object.fromEntries(rooms.map((r, i) => [r.id, i]));
+    const nowMin = STATE.schedule.now_min;
+    let ticks = '', axis = '';
+    for (let t = start; t <= end; t += 60) {
+      if (!nowMin || Math.abs(t - nowMin) >= 40) axis += `<span style="left:${pct(t)}">${hhmm(t)}</span>`;
+      ticks += `<div class="g-tick" style="left:${pct(t)}"></div>`;
+    }
+    if (nowMin) axis += `<span class="now" style="left:${pct(nowMin)}">ตอนนี้ ${hhmm(nowMin)}</span>`;
+    const rows = rooms.slice(1).map((_, i) => `<div class="g-row" style="top:${(i + 1) * ROW}px"></div>`).join('');
+    const blocks = STATE.schedule.bookings.map(b => {
+      const top = rowOf[b.or_id] * ROW + 6;
+      const mine = STATE.me.staff_id && b.team.some(t => t.staff_id === STATE.me.staff_id);
+      const cls = ['g-block', 'u-' + b.urgency, b.frozen ? 'frozen' : '', highlight.has(b.case_id) ? 'hl' : '', selected === b.case_id ? 'sel' : '', mine ? 'mine' : ''].join(' ');
+      return `<div class="g-clean" style="left:${pct(b.end_min)};width:${(b.cleanup_end_min - b.end_min) / span * 100}%;top:${top}px"></div>
+        <button type="button" class="${cls}" data-case="${esc(b.case_id)}" style="left:${pct(b.start_min)};width:${(b.end_min - b.start_min) / span * 100}%;top:${top}px"
+          title="${esc(b.case_id + ' ' + b.procedure + ' ' + b.start + '-' + b.end)}">
+          <b>${esc(b.case_id)} ${esc(b.procedure)}</b><span>${esc(b.start)}-${esc(b.end)}</span></button>`;
+    }).join('');
+    const now = nowMin ? `<div class="g-now" style="left:${pct(nowMin)}"></div>` : '';
+    $('#gantt').innerHTML = `
+      <div class="g-labels">${rooms.map(r => `<div class="g-label" title="${esc(r.caps.join(', '))}">${esc(r.id)}<small>${esc(r.type)}</small></div>`).join('')}</div>
+      <div><div class="g-axis">${axis}</div><div class="g-canvas" style="height:${rooms.length * ROW}px">${ticks}${rows}${blocks}${now}</div></div>`;
+    document.querySelectorAll('.g-block').forEach(b => b.addEventListener('click', () => { selected = b.dataset.case; renderGantt(); showDetail(selected); }));
+  }
+
+  function showDetail(caseId) {
+    const b = STATE.schedule.bookings.find(x => x.case_id === caseId);
+    const box = $('#detail');
+    if (!b) { box.hidden = true; return; }
+    box.hidden = false;
+    box.innerHTML = `
+      <h3>${esc(b.case_id)} · ${esc(b.procedure)}</h3>
+      <dl>
+        <dt>ผู้ป่วย</dt><dd>${esc(b.patient_hn)}${b.patient_name ? ' · ' + esc(b.patient_name) : ''} · ${esc(b.urgency)}${b.frozen ? ' · เริ่มแล้ว (ล็อก)' : ''}</dd>
+        <dt>ห้อง / เวลา</dt><dd>${esc(b.or_id)} ${esc(b.start)}-${esc(b.end)} (ห้องพร้อมใหม่ ${esc(b.cleanup_end)})</dd>
+        <dt>ทีม</dt><dd>${b.team.map(t => esc(t.name)).join(', ')}</dd>
+        <dt>เครื่องมือ</dt><dd>${b.equipment.map(e => esc(e.unit_id) + ' (กลับจาก CSSD ' + hhmm(e.back_from_cssd_min) + ')').join(', ') || '-'}</dd>
+        <dt>เตียงพักฟื้น</dt><dd>${b.bed_id ? esc(b.bed_id) + ' ' + hhmm(b.recovery_start_min) + '-' + hhmm(b.recovery_end_min) : '-'}</dd>
+      </dl>
+      ${b.reasoning.length ? '<ul class="why">' + b.reasoning.map(r => '<li>' + esc(r) + '</li>').join('') + '</ul>' : ''}`;
+  }
+
+  function applyTabs() {
+    const tabs = [...document.querySelectorAll('.tab')];
+    tabs.forEach(t => { t.hidden = !can(t.dataset.perm); });
+    const current = tabs.find(t => t.getAttribute('aria-selected') === 'true');
+    if (!current || current.hidden) selectTab(tabs.find(t => !t.hidden).dataset.tab);
+    const log = tabs.find(t => t.dataset.tab === 'log');
+    log.textContent = can('all_notifications') ? 'กิจกรรม' : 'แจ้งเตือนของฉัน';
+  }
+
+  function selectTab(name) {
+    const already = document.querySelector(`.tab[data-tab="${name}"]`).getAttribute('aria-selected') === 'true'
+      && !document.querySelector(`[data-panel="${name}"]`).hidden;
+    if (already) return;  // no reload: it would wipe what the user is typing
+    document.querySelectorAll('.tab').forEach(t => t.setAttribute('aria-selected', String(t.dataset.tab === name)));
+    document.querySelectorAll('[data-panel]').forEach(p => { p.hidden = p.dataset.panel !== name; });
+    if (name === 'equip') loadEquipment().catch(e => toast(e.message));
+    if (name === 'users') loadUsers().catch(e => toast(e.message));
+  }
+
+  function renderBanners() {
+    const parts = [];
+    if (STATE.empty && can('seed')) {
+      parts.push(`<div class="banner warn"><b>ฐานข้อมูลยังไม่มีห้องผ่าตัดหรือบุคลากร</b><br>
+        ใส่ข้อมูลของโรงพยาบาลใน Supabase หรือกดปุ่มด้านล่างเพื่อใส่ข้อมูลตัวอย่าง (ชื่อสมมติทั้งหมด) และจองเคสตัวอย่างของวันนี้
+        <br><button class="btn primary" type="button" id="seed">ใส่ข้อมูลตัวอย่าง</button></div>`);
+    }
+    if (STATE.rls_off && STATE.rls_off.length) {
+      parts.push(`<div class="banner bad"><b>ยังไม่ได้เปิด Row Level Security</b> บนตาราง ${esc(STATE.rls_off.join(', '))}
+        ข้อมูลผู้ป่วยอาจถูกอ่านผ่าน Supabase API ด้วย anon key ได้ ให้รันไฟล์ supabase/migrations/20261101000000_security_and_integrity.sql ใน SQL Editor</div>`);
+    }
+    if (STATE.warnings && STATE.warnings.length) {
+      parts.push(`<div class="banner warn"><b>ข้อมูลในฐานข้อมูลมีจุดขัดกัน ${STATE.warnings.length} รายการ</b> (ระบบจะไม่เพิ่มจุดขัดกันใหม่)
+        <ul>${STATE.warnings.slice(0, 5).map(w => '<li>' + esc(w) + '</li>').join('')}</ul></div>`);
+    }
+    $('#banners').innerHTML = parts.join('');
+    const seed = $('#seed');
+    if (seed) seed.addEventListener('click', () => busy(seed, async () => {
+      const data = await api('/api/seed-demo', {});
+      STATE = data.state;
+      buildForms();
+      render();
+    }));
+  }
+
+  function renderUnscheduled() {
+    const u = STATE.schedule.unscheduled;
+    $('#unscheduled').innerHTML = u.length ? `<h3>ยังจัดไม่ได้</h3><ul>${u.map(x =>
+      `<li><b>${esc(x.case_id)}</b> ${esc(x.urgency)} ${esc(x.procedure)}: ${esc(x.reasons.join('; '))}</li>`).join('')}</ul>` : '';
+  }
+
+  function renderOverrunOptions() {
+    const select = $('#form-over select[name="case_id"]');
+    const keep = select.value;
+    select.innerHTML = STATE.schedule.bookings.slice().sort((a, b) => a.start_min - b.start_min).map(b =>
+      `<option value="${esc(b.case_id)}" data-start="${b.start_min}" data-dur="${b.end_min - b.start_min}">${esc(b.case_id)} · ${esc(b.or_id)} ${esc(b.start)}-${esc(b.end)} · ${esc(b.procedure)}</option>`).join('');
+    if (keep) select.value = keep;
+  }
+
+  function renderActivity() {
+    $('#activity').innerHTML = STATE.activity.map(a => `
+      <div class="activity-item">
+        <div class="kind">${esc(a.kind)}${a.created_at ? ' · ' + esc(new Date(a.created_at).toLocaleString('th-TH')) : ''}${a.actor ? ' · โดย ' + esc(a.actor) : ''}</div>
+        <div>${esc(a.title)}</div>
+        ${a.changes.length ? '<ul class="changes">' + a.changes.map(c => '<li>' + esc(c.case_id) + ': ' + esc(c.details.join('; ')) + '</li>').join('') + '</ul>' : ''}
+        ${a.notifications.length ? '<div class="hint">แจ้งเตือน ' + a.notifications.length + ' ข้อความ: ' + esc([...new Set(a.notifications.map(n => n.name))].join(', ')) + '</div>' : ''}
+        ${a.log.length ? '<details><summary>Agent log</summary><pre class="log">' + esc(a.log.join('\n')) + '</pre></details>' : ''}
+      </div>`).join('') || '<p class="hint">ยังไม่มีกิจกรรม</p>';
+  }
+
+  function renderSlotResult(r, body) {
+    const verdicts = r.verdicts.map(v => `
+      <div class="verdict ${v.ok ? 'ok' : 'bad'}">
+        <h4>${v.ok ? '✓' : '✗'} ${esc(v.agent)}${!v.ok && v.ready_at_min !== null ? ' · พร้อม ' + hhmm(v.ready_at_min) : ''}</h4>
+        <ul>${v.items.map(i => `<li>${i.ok ? '✓' : '✗'} ${esc(i.resource)}: ${esc(i.note)}</li>`).join('')}</ul>
+      </div>`).join('');
+    const placed = r.result.bookings.find(b => b.case_id === r.case_id);
+    let proposal;
+    if (r.booked) {
+      proposal = `<div class="proposal">✅ จองแล้ว: <b>${esc(placed.case_id)}</b> ห้อง ${esc(placed.or_id)} ${esc(placed.start)}-${esc(placed.end)}<br>ทีม: ${placed.team.map(t => esc(t.name)).join(', ')}</div>`;
+    } else if (placed) {
+      proposal = `<div class="proposal">${r.ok ? 'ว่างตามเวลาที่ขอ' : 'เวลาที่ขอไม่ว่าง ช่วงแรกที่ทุก Agent ผ่าน'}: <b>${esc(placed.or_id)} ${esc(placed.start)}-${esc(placed.end)}</b><br>
+        ทีม: ${placed.team.map(t => esc(t.name)).join(', ')}${placed.bed_id ? '<br>เตียง: ' + esc(placed.bed_id) : ''}
+        <div style="margin-top:10px"><button class="btn primary" type="button" id="confirm-book">ยืนยันจอง ${esc(placed.start)}</button></div></div>`;
+    } else {
+      const reasons = (r.result.unscheduled.find(u => u.case_id === r.case_id) || { reasons: [] }).reasons;
+      proposal = `<div class="proposal none">ไม่มีช่วงเวลาที่จองได้วันนี้: ${esc(reasons.join('; '))}</div>`;
+    }
+    $('#result-book').innerHTML = `<h3>ผลตรวจ ${esc(r.requested_start)}</h3>${verdicts}${proposal}
+      <details><summary>Negotiation log</summary><pre class="log">${esc(r.log.join('\n'))}</pre></details>`;
+    const confirm = $('#confirm-book');
+    if (confirm) confirm.addEventListener('click', () => busy(confirm, async () => {
+      const data = await api('/api/bookings', body);
+      STATE = data.state;
+      highlight = new Set([data.result.case_id]);
+      selected = data.result.case_id;
+      render();
+      renderSlotResult(data.result, body);
+    }));
+  }
+
+  function renderChangeResult(target, r, title) {
+    const people = [...new Set(r.notifications.map(n => n.name))];
+    $(target).innerHTML = `<h3>${esc(title)}</h3>
+      ${r.changes.length ? '<ul class="changes">' + r.changes.map(c => '<li><b>' + esc(c.case_id) + '</b>: ' + esc(c.details.join('; ')) + '</li>').join('') + '</ul>' : '<p class="hint">ไม่มีเคสอื่นได้รับผลกระทบ</p>'}
+      ${r.unscheduled.length ? '<div class="proposal none">' + r.unscheduled.map(u => esc(u.case_id) + ': ' + esc(u.reasons.join('; '))).join('<br>') + '</div>' : ''}
+      <p class="hint">แจ้งเตือน ${r.notifications.length} ข้อความถึง ${people.length} คน${people.length ? ': ' + esc(people.join(', ')) : ''}</p>
+      ${r.log.length ? '<details><summary>Agent log</summary><pre class="log">' + esc(r.log.join('\n')) + '</pre></details>' : ''}`;
+  }
+
+  // ----------------------------------------------------------------- events
+  document.querySelectorAll('.tab').forEach(tab => tab.addEventListener('click', () => selectTab(tab.dataset.tab)));
+
+  $('#form-book').addEventListener('submit', e => {
+    e.preventDefault();
+    const form = e.target;
+    const body = { case: readCase(form, new FormData(form).get('urgency')), start: new FormData(form).get('start') };
+    busy(form.querySelector('[type="submit"]'), async () => renderSlotResult(await api('/api/slot-check', body), body));
+  });
+
+  $('#form-er').addEventListener('submit', e => {
+    e.preventDefault();
+    const form = e.target;
+    const body = { case: readCase(form, 'EMERGENCY'), now: new FormData(form).get('now') };
+    busy(form.querySelector('[type="submit"]'), async () => {
+      const data = await api('/api/emergency', body);
+      STATE = data.state;
+      highlight = new Set(data.result.changes.map(c => c.case_id));
+      render();
+      renderChangeResult('#result-er', data.result, 'ผลการแทรกเคสฉุกเฉิน');
+    });
+  });
+
+  $('#form-over').addEventListener('submit', e => {
+    e.preventDefault();
+    const form = e.target;
+    const f = new FormData(form);
+    const option = form.querySelector('select[name="case_id"]').selectedOptions[0];
+    const body = { case_id: f.get('case_id'), new_duration_mins: Number(option.dataset.dur) + Number(f.get('extra')), now: f.get('now') };
+    busy(form.querySelector('[type="submit"]'), async () => {
+      const data = await api('/api/overrun', body);
+      STATE = data.state;
+      highlight = new Set(data.result.changes.map(c => c.case_id));
+      render();
+      renderChangeResult('#result-over', data.result, 'ผลกระทบจากการผ่าตัดเกินเวลา');
+    });
+  });
+
+  $('#reset').addEventListener('click', e => {
+    if (!confirm('รีเซ็ตกลับเป็นข้อมูลตัวอย่างตั้งต้น? การจองทั้งหมดจะหายไป')) return;
+    busy(e.target, async () => {
+      STATE = (await api('/api/reset', {})).state;
+      highlight = new Set(); selected = null;
+      ['#result-book', '#result-er', '#result-over'].forEach(id => { $(id).innerHTML = ''; });
+      render();
+    });
+  });
+
+  function buildForms() {
+    $('[data-case="book"]').innerHTML = caseFields('book');
+    $('[data-case="er"]').innerHTML = caseFields('er');
+    const book = $('#form-book'), er = $('#form-er');
+    const oncall = STATE.options.surgeons.find(s => /on-call|เวร/i.test(s.name));
+    if (oncall && STATE.me.role !== 'surgeon') er.elements['surgeon_id'].value = oncall.id;
+    const procs = STATE.options.procedures || [];
+    const cards = (STATE.options.cards || []).filter(c => STATE.me.role !== 'surgeon' || c.surgeon_id === STATE.me.staff_id);
+    // Start each form on a surgeon + procedure pair that has a preference card.
+    const pick = (form, test) => {
+      const card = cards.find(c => test((procs.find(x => x.id === c.procedure_id) || {}).name || ''));
+      if (!card || !form.elements['procedure_id']) return false;
+      form.elements['surgeon_id'].value = card.surgeon_id;
+      form.elements['procedure_id'].value = card.procedure_id;
+      applyDefaults(form);
+      return true;
+    };
+    if (!pick(er, n => /emergency/i.test(n))) er.querySelector('input[value="MAJOR_GENERAL_TRAY"]')?.click();
+    if (!pick(book, n => /cholecystectomy/i.test(n)) && !pick(book, n => !/emergency/i.test(n))) {
+      book.querySelector('input[value="LAPAROSCOPY_TRAY"]')?.click();
+    }
+    [book, er].forEach(form => ['surgeon_id', 'procedure_id'].forEach(name =>
+      form.elements[name]?.addEventListener('change', () => applyDefaults(form))));
+    const now = STATE.schedule.now_min && STATE.schedule.now_min < 24 * 60 ? hhmm(STATE.schedule.now_min) : nowText();
+    er.elements['now'].value = now;
+    $('#form-over').elements['now'].value = now;
+  }
+
+  // ------------------------------------------------------------ equipment (CSSD)
+  const STATUS = { AVAILABLE: 'พร้อมใช้', IN_USE: 'กำลังใช้', STERILIZING: 'กำลังอบที่ CSSD', MAINTENANCE: 'ซ่อมบำรุง' };
+
+  let equipmentRequest = 0;  // only the newest response may redraw the list
+  async function loadEquipment() {
+    const n = ++equipmentRequest;
+    const data = await api('/api/equipment');
+    if (n === equipmentRequest) renderEquipment(data.units);
+  }
+
+  function renderEquipment(units) {
+    const edit = can('equipment');
+    $('#equip-list').innerHTML = units.map(u => `
+      <div class="row-item" data-unit="${esc(u.unit_id)}">
+        <div class="title"><b>${esc(u.unit_id)}</b>
+          <span class="badge ${u.status === 'AVAILABLE' ? 'ok' : u.status === 'MAINTENANCE' ? 'bad' : 'warn'}">${esc(STATUS[u.status] || u.status)}${u.ready_at ? ' · พร้อม ' + esc(u.ready_at) : ''}</span></div>
+        <small class="hint">${esc(u.type)} · อบฆ่าเชื้อ ${u.sterilization_mins} นาทีหลังใช้</small>
+        ${edit ? `<div class="line">
+          <select name="status">${Object.entries(STATUS).map(([k, v]) => `<option value="${k}" ${k === u.status ? 'selected' : ''}>${v}</option>`).join('')}</select>
+          <input type="time" name="ready_at" value="${esc(u.ready_at || '')}" aria-label="พร้อมใช้เวลา">
+          <button class="btn primary" type="button">บันทึก</button></div>` : ''}
+      </div>`).join('');
+    $('#equip-list').querySelectorAll('.row-item button').forEach(button => button.addEventListener('click', () => {
+      const row = button.closest('.row-item');
+      const body = { status: row.querySelector('[name="status"]').value, ready_at: row.querySelector('[name="ready_at"]').value || null };
+      busy(button, async () => {
+        const n = ++equipmentRequest;
+        const data = await api('/api/equipment/' + encodeURIComponent(row.dataset.unit), body, 'PATCH');
+        STATE = data.state; render();
+        if (n === equipmentRequest) renderEquipment(data.units);
+        if (data.result.warnings.length) toast('มีเคสที่ใช้เครื่องนี้อยู่และขัดกับสถานะใหม่ ผู้จัดตารางต้องแก้: ' + data.result.warnings[0]);
+      });
+    }));
+  }
+
+  // ------------------------------------------------------------------ users (admin)
+  function tempPassword() {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
+    const bytes = crypto.getRandomValues(new Uint8Array(14));
+    return [...bytes].map(b => chars[b % chars.length]).join('');
+  }
+
+  function showSecret(username, password) {
+    $('#user-secret').innerHTML = `<p class="hint">ส่งรหัสชั่วคราวนี้ให้ <b>${esc(username)}</b> (แสดงครั้งเดียว ผู้ใช้ต้องเปลี่ยนเมื่อเข้าครั้งแรก)</p>
+      <div class="secret">${esc(password)}</div>`;
+  }
+
+  let USERS = null;
+  async function loadUsers() { USERS = await api('/api/users'); renderUsers(); }
+
+  function renderUsers() {
+    const { users, people, roles } = USERS;
+    const roleOptions = sel => Object.entries(roles).map(([k, v]) => `<option value="${k}" ${k === sel ? 'selected' : ''}>${esc(v)}</option>`).join('');
+    const staffOptions = sel => '<option value="">— ไม่ผูก —</option>' + people.map(p =>
+      `<option value="${esc(p.id)}" ${p.id === sel ? 'selected' : ''}>${esc(p.name)} · ${esc(p.role)}</option>`).join('');
+    const form = $('#form-user');
+    if (!form.elements['role'].options.length) {
+      form.elements['role'].innerHTML = roleOptions('scheduler');
+      form.elements['staff_id'].innerHTML = staffOptions(null);
+    }
+    $('#user-list').innerHTML = users.map(u => `
+      <div class="row-item" data-user="${esc(u.user_id)}">
+        <div class="title"><b>${esc(u.display_name)}</b>
+          <span><span class="badge ${u.is_active ? 'ok' : 'bad'}">${u.is_active ? 'ใช้งาน' : 'ปิด'}</span>
+          ${u.must_change_password ? '<span class="badge warn">รอตั้งรหัสใหม่</span>' : ''}</span></div>
+        <small class="hint">${esc(u.username)}${u.last_login_at ? ' · เข้าล่าสุด ' + esc(new Date(u.last_login_at).toLocaleString('th-TH')) : ' · ยังไม่เคยเข้า'}</small>
+        <div class="line"><select name="role">${roleOptions(u.role)}</select><select name="staff_id">${staffOptions(u.staff_id)}</select></div>
+        <div class="line">
+          <label style="flex:0 0 auto;display:flex;flex-direction:row;align-items:center;gap:6px;color:var(--text)"><input type="checkbox" name="is_active" ${u.is_active ? 'checked' : ''}>ใช้งาน</label>
+          <button class="btn primary" type="button" data-act="save">บันทึก</button>
+          <button class="btn" type="button" data-act="reset">รีเซ็ตรหัสผ่าน</button>
+        </div>
+      </div>`).join('') || '<p class="hint">ยังไม่มีผู้ใช้ (บัญชีหลักจาก Render ใช้ได้เสมอ)</p>';
+    $('#user-list').querySelectorAll('[data-act]').forEach(button => button.addEventListener('click', () => {
+      const row = button.closest('.row-item'), id = row.dataset.user;
+      busy(button, async () => {
+        if (button.dataset.act === 'save') {
+          await api('/api/users/' + id, {
+            role: row.querySelector('[name="role"]').value,
+            staff_id: row.querySelector('[name="staff_id"]').value || null,
+            is_active: row.querySelector('[name="is_active"]').checked,
+          }, 'PATCH');
+          toast('บันทึกแล้ว ผู้ใช้จะต้องเข้าสู่ระบบใหม่', true);
+        } else {
+          const password = tempPassword();
+          await api('/api/users/' + id + '/reset-password', { password });
+          showSecret(users.find(u => u.user_id === id).username, password);
+        }
+        await loadUsers();
+      });
+    }));
+  }
+
+  $('#form-user').addEventListener('submit', e => {
+    e.preventDefault();
+    const form = e.target, f = new FormData(form), password = tempPassword();
+    busy(form.querySelector('[type="submit"]'), async () => {
+      await api('/api/users', { username: f.get('username').trim().toLowerCase(), display_name: f.get('display_name').trim(),
+        role: f.get('role'), staff_id: f.get('staff_id') || null, password });
+      showSecret(f.get('username').trim().toLowerCase(), password);
+      form.reset();
+      form.elements['role'].innerHTML = '';
+      await loadUsers();
+    });
+  });
+
+  // ------------------------------------------------------------------ account
+  $('#logout').addEventListener('click', async () => { await api('/api/logout', {}).catch(() => {}); location.href = '/login'; });
+  $('#change-pass').addEventListener('click', () => $('#pass-dialog').showModal());
+  $('#pass-cancel').addEventListener('click', () => $('#pass-dialog').close());
+  $('#pass-form').addEventListener('submit', e => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    if (f.get('new_password') !== f.get('confirm')) { toast('รหัสผ่านใหม่ทั้งสองช่องไม่ตรงกัน'); return; }
+    busy(e.target.querySelector('[type="submit"]'), async () => {
+      await api('/api/password', { current_password: f.get('current_password'), new_password: f.get('new_password') });
+      e.target.reset(); $('#pass-dialog').close(); toast('เปลี่ยนรหัสผ่านแล้ว', true);
+      if (!STATE) await loadDay(null);
+    });
+  });
+
+  async function loadDay(day) {
+    const path = day ? '/api/state?date=' + day : '/api/state';
+    STATE = await api(path);
+    highlight = new Set(); selected = null;
+    ['#result-book', '#result-er', '#result-over'].forEach(id => { $(id).innerHTML = ''; });
+    buildForms();
+    render();
+  }
+
+  $('#date').addEventListener('change', e => { if (e.target.value) loadDay(e.target.value).catch(err => toast(err.message)); });
+  $('#reload').addEventListener('click', e => busy(e.target, () => loadDay(STATE && STATE.date)));
+
+  (async () => {
+    const me = (await api('/api/me')).user;
+    if (me.must_change_password) {  // temporary password from an admin: change it first
+      $('#pass-cancel').hidden = true;
+      $('#pass-dialog').addEventListener('cancel', e => e.preventDefault());
+      $('#pass-dialog').showModal();
+      return;
+    }
+    await loadDay(null);
+  })().catch(e => toast('โหลดข้อมูลไม่สำเร็จ: ' + e.message));
+</script>
+</body>
+</html>

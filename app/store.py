@@ -1,0 +1,290 @@
+"""In-memory schedule for the web app (synthetic demo hospital, one planning day).
+
+Every change goes through the engine and is checked by ``validate_schedule``
+before it replaces the current schedule, so the stored schedule never holds
+a conflict. State lives in memory: it resets when the service restarts. The
+Supabase data layer will replace this class.
+"""
+from __future__ import annotations
+
+import threading
+from collections import Counter
+from dataclasses import dataclass, field
+
+from orchestra_engine import (
+    ScheduleResult,
+    StaffRole,
+    SurgeryCase,
+    Urgency,
+    fmt,
+    hm,
+    validate_schedule,
+)
+from orchestra_engine.demo import Hospital, build_hospital, elective_day
+from orchestra_engine.models import DEFAULT_TEAM
+
+
+class StoreError(ValueError):
+    """Request that cannot be carried out; the message is shown to the user."""
+
+
+class Forbidden(StoreError):
+    """The signed-in role may not do this (HTTP 403)."""
+
+
+EQUIPMENT_STATUSES = ("AVAILABLE", "IN_USE", "STERILIZING", "MAINTENANCE")
+
+
+def actor_name(actor: dict | None) -> str | None:
+    return None if actor is None else f"{actor.get('name')} ({actor.get('role')})"
+
+
+def check_own_case(actor: dict | None, surgeon_id: str) -> None:
+    """Surgeons may only act on cases where they are the primary surgeon."""
+    if actor and actor.get("role") == "surgeon" and actor.get("staff_id") != surgeon_id:
+        raise Forbidden("ศัลยแพทย์ทำรายการได้เฉพาะเคสที่ตัวเองเป็นแพทย์ผ่าตัดหลัก")
+
+
+def equipment_rows(units) -> list[dict]:
+    return [
+        {"unit_id": u.unit_id, "type": u.eq_type, "status": u.status,
+         "ready_at": fmt(u.available_at) if 0 < u.available_at < 24 * 60 else None,
+         "sterilization_mins": u.reprocess_mins, "usable": u.is_usable}
+        for u in sorted(units, key=lambda u: (u.eq_type, u.unit_id))
+    ]
+
+
+def ready_minute(status: str, ready_text: str | None) -> int | None:
+    if status not in EQUIPMENT_STATUSES:
+        raise StoreError(f"สถานะไม่ถูกต้อง: {status}")
+    if status in ("IN_USE", "STERILIZING") and not ready_text:
+        raise StoreError("กรุณาระบุเวลาที่เครื่องมือจะพร้อมใช้")
+    return parse_time(ready_text) if ready_text else None
+
+
+@dataclass
+class Activity:
+    kind: str  # reset / booking / emergency / overrun
+    title: str
+    log: list[str] = field(default_factory=list)
+    changes: list[dict] = field(default_factory=list)
+    notifications: list[dict] = field(default_factory=list)
+    highlight: list[str] = field(default_factory=list)
+    actor: str | None = None
+
+
+KNOWN_ROLES = {StaffRole.ANESTHESIOLOGIST, StaffRole.SCRUB_NURSE, StaffRole.CIRCULATING_NURSE, StaffRole.SURGEON}
+
+
+def build_case(hospital: Hospital, data: dict, case_id: str, *, release: int = 0) -> SurgeryCase:
+    """Turn a request from the web form into a ``SurgeryCase`` after checking it."""
+    surgeon = next((s for s in hospital.staff if s.staff_id == data["surgeon_id"]), None)
+    if surgeon is None or surgeon.role != StaffRole.SURGEON:
+        raise StoreError(f"ไม่พบศัลยแพทย์ {data['surgeon_id']}")
+    known_types = {u.eq_type for u in hospital.equipments}
+    unknown = [t for t in data.get("required_equipment_types") or [] if t not in known_types]
+    if unknown:
+        raise StoreError(f"ไม่รู้จักเครื่องมือ: {', '.join(unknown)}")
+    known_caps = {c for r in hospital.rooms for c in r.all_capabilities}
+    unknown = [c for c in data.get("required_capabilities") or [] if c not in known_caps]
+    if unknown:
+        raise StoreError(f"ไม่มีห้องที่มีความสามารถ: {', '.join(unknown)}")
+    roles = data.get("required_staff_roles") or dict(DEFAULT_TEAM)
+    bad = [r for r, n in roles.items() if r not in KNOWN_ROLES or not 0 <= int(n) <= 4]
+    if bad:
+        raise StoreError(f"บทบาททีมไม่ถูกต้อง: {', '.join(bad)}")
+    skills = {StaffRole.SCRUB_NURSE: {"ROBOTIC_CERTIFIED"}} if data.get("robotic_certified_scrub") else {}
+    return SurgeryCase(
+        case_id, data["patient_hn"], data["procedure"], surgeon.staff_id, int(data["duration_mins"]),
+        urgency=Urgency(data.get("urgency") or "ELECTIVE"),
+        required_capabilities=set(data.get("required_capabilities") or []),
+        required_staff_roles={r: int(n) for r, n in roles.items()},
+        required_staff_skills=skills,
+        required_equipment_types=list(data.get("required_equipment_types") or []),
+        infection_risk=data.get("infection_risk") or "CLEAN",
+        requires_icu_post_op=bool(data.get("requires_icu_post_op")),
+        release_min=release,
+        patient_name=(data.get("patient_name") or "").strip() or None,
+    )
+
+
+def parse_time(text: str) -> int:
+    try:
+        minute = hm(text)
+    except (ValueError, AttributeError) as exc:
+        raise StoreError(f"รูปแบบเวลาไม่ถูกต้อง: {text!r} (ใช้ HH:MM)") from exc
+    if not 0 <= minute < 24 * 60:
+        raise StoreError(f"เวลาต้องอยู่ระหว่าง 00:00-23:59: {text}")
+    return minute
+
+
+class ScheduleStore:
+    """Demo mode: synthetic hospital kept in memory (used when DATABASE_URL is not set)."""
+
+    mode = "demo"
+
+    def __init__(self, *, workers: int = 2, time_limit_s: float = 10.0) -> None:
+        self._lock = threading.Lock()
+        self.workers = workers
+        self.time_limit_s = time_limit_s
+        self.reset()
+
+    # ----------------------------------------------------------- lifecycle
+
+    def reset(self) -> None:
+        with self._lock:
+            self.hospital: Hospital = build_hospital()
+            self.opt = self.hospital.optimizer(time_limit_s=self.time_limit_s, num_workers=self.workers)
+            self.result: ScheduleResult = self.opt.solve_schedule(elective_day(), "Elective day", verbose=False)
+            self._ids = Counter()
+            self.activity: list[Activity] = [Activity(
+                "reset", "โหลดข้อมูลตัวอย่าง",
+                [f"[Master Orchestrator] booked {len(self.result.assignments)} elective cases, "
+                 f"status {self.result.status}"],
+            )]
+
+    # -------------------------------------------------------------- reads
+
+    def options(self) -> dict:
+        h = self.hospital
+        usable = Counter(u.eq_type for u in h.equipments if u.is_usable)
+        caps = sorted({c for r in h.rooms for c in r.all_capabilities})
+        return {
+            "rooms": [{"id": r.or_id, "type": r.room_type, "caps": sorted(r.capabilities)} for r in h.rooms],
+            "surgeons": [
+                {"id": s.staff_id, "name": s.name,
+                 "shifts": [f"{fmt(a)}-{fmt(b)}" for a, b in s.shifts]}
+                for s in h.staff if s.role == StaffRole.SURGEON and s.is_active
+            ],
+            "equipment_types": [{"type": t, "units": n} for t, n in sorted(usable.items())],
+            "capabilities": caps,
+            "bed_types": sorted({b.bed_type for b in h.beds}),
+        }
+
+    def state(self, day: str | None = None) -> dict:
+        schedule = self.result.to_dict()
+        bookings = schedule["bookings"]
+        start = min([hm("08:00"), *[b["start_min"] for b in bookings]]) // 60 * 60
+        now = self.result.now_min
+        end = -(-max([hm("18:00"), *[b["cleanup_end_min"] for b in bookings],
+                      *([now + 30] if 0 < now < 24 * 60 else [])]) // 60) * 60
+        return {
+            "mode": self.mode,
+            "date": None,
+            "planning_day": "วันตัวอย่าง (ข้อมูลจำลอง)",
+            "warnings": [],
+            "rls_off": [],
+            "empty": False,
+            "schedule": schedule,
+            "axis": {"start": start, "end": end},
+            "options": self.options(),
+            "activity": [a.__dict__ for a in reversed(self.activity[-30:])],
+        }
+
+    # ------------------------------------------------------------- writes
+
+    def _next_id(self, prefix: str, commit: bool) -> str:
+        number = self._ids[prefix] + 1
+        if commit:
+            self._ids[prefix] = number
+        return f"{prefix}{number:03d}"
+
+    def _commit(self, result: ScheduleResult) -> None:
+        h = self.hospital
+        errors = validate_schedule(result, result.cases.values(), h.rooms, h.equipments, h.staff, h.beds)
+        if errors:  # never store a schedule with a conflict
+            raise StoreError("ตารางที่คำนวณได้ไม่ผ่านการตรวจ: " + "; ".join(errors[:3]))
+        self.result = result
+
+    def people(self) -> list[dict]:
+        return [{"id": s.staff_id, "name": s.name, "role": s.role} for s in self.hospital.staff]
+
+    def equipment(self, day: str | None = None) -> list[dict]:
+        return equipment_rows(self.hospital.equipments)
+
+    def update_equipment(self, serial: str, status: str, ready_text: str | None, *,
+                         day: str | None = None, actor: dict | None = None) -> dict:
+        ready = ready_minute(status, ready_text)
+        with self._lock:
+            unit = next((u for u in self.hospital.equipments if u.unit_id == serial), None)
+            if unit is None:
+                raise StoreError(f"ไม่พบเครื่องมือ {serial}")
+            unit.status, unit.available_at = status, ready or 0
+            h = self.hospital
+            problems = [p for p in validate_schedule(self.result, self.result.cases.values(), h.rooms,
+                                                     h.equipments, h.staff, h.beds) if serial in p]
+            when = f" พร้อม {fmt(ready)}" if ready else ""
+            self.activity.append(Activity("equipment", f"{serial}: {status}{when}", problems,
+                                          actor=actor_name(actor)))
+            return {"unit": equipment_rows([unit])[0], "warnings": problems}
+
+    def slot_check(self, data: dict, start_text: str, *, commit: bool, day: str | None = None,
+                   actor: dict | None = None) -> dict:
+        start = parse_time(start_text)
+        with self._lock:
+            if start < self.result.now_min:
+                raise StoreError(f"เวลาที่ขอผ่านไปแล้ว (เวลาปัจจุบันของตาราง {fmt(self.result.now_min)})")
+            case = build_case(self.hospital, data, self._next_id("R", commit=False))
+            check = self.opt.check_slot(self.result, case, start, verbose=False)
+            out = check.to_dict()
+            out["booked"] = False
+            if commit and check.assignment is not None:
+                self._commit(check.result)
+                self._next_id("R", commit=True)
+                out["booked"] = True
+                self.activity.append(Activity(
+                    "booking", f"จอง {case.case_id} {case.procedure}", check.log,
+                    [{"case_id": c.case_id, "details": c.details} for c in check.result.changes],
+                    check.result.to_dict()["notifications"], [case.case_id], actor_name(actor),
+                ))
+            return out
+
+    def emergency(self, data: dict, now_text: str, *, day: str | None = None, actor: dict | None = None) -> dict:
+        now = parse_time(now_text)
+        with self._lock:
+            case = build_case(self.hospital, {**data, "urgency": "EMERGENCY"}, self._next_id("E", commit=False), release=now)
+            after = self.opt.insert_emergency(
+                self.result, list(self.result.cases.values()), [case], now_min=now,
+                scenario_name=f"Emergency {case.case_id}", verbose=False,
+            )
+            if not after.is_feasible:
+                raise StoreError(f"คำนวณไม่สำเร็จ ({after.status})")
+            self._commit(after)
+            self._next_id("E", commit=True)
+            return self._record_change("emergency", f"ฉุกเฉิน {case.case_id} {case.procedure}", after, case.case_id,
+                                       actor)
+
+    def overrun(self, case_id: str, new_duration: int, now_text: str, *, day: str | None = None,
+                actor: dict | None = None) -> dict:
+        now = parse_time(now_text)
+        with self._lock:
+            current = self.result.assignments.get(case_id)
+            if current is None:
+                raise StoreError(f"ไม่พบเคส {case_id} ในตาราง")
+            check_own_case(actor, current.staff_ids[0])
+            if not current.start_min < now:
+                raise StoreError(f"{case_id} ยังไม่เริ่ม (เริ่ม {fmt(current.start_min)}) ให้แก้เวลาผ่าตัดแทน")
+            if current.start_min + new_duration <= now:
+                raise StoreError("เวลาผ่าตัดใหม่ต้องจบหลังเวลาปัจจุบัน")
+            after = self.opt.handle_overrun(
+                self.result, list(self.result.cases.values()), case_id,
+                new_duration_mins=new_duration, now_min=now, scenario_name=f"Overrun {case_id}", verbose=False,
+            )
+            if not after.is_feasible:
+                raise StoreError(f"คำนวณไม่สำเร็จ ({after.status})")
+            self._commit(after)
+            return self._record_change("overrun", f"{case_id} ผ่าตัดเกินเวลา -> {new_duration} นาที", after, case_id,
+                                       actor)
+
+    def _record_change(self, kind: str, title: str, after: ScheduleResult, case_id: str,
+                       actor: dict | None = None) -> dict:
+        data = after.to_dict()
+        log = [f"[Master Orchestrator] {c['case_id']}: {'; '.join(c['details'])}" for c in data["changes"]]
+        unscheduled = [f"[Master Orchestrator] NOT SCHEDULED {u['case_id']}: {'; '.join(u['reasons'])}"
+                       for u in data["unscheduled"]]
+        self.activity.append(Activity(
+            kind, title, log + unscheduled, data["changes"], data["notifications"],
+            [c["case_id"] for c in data["changes"]] or [case_id], actor_name(actor),
+        ))
+        return {"changes": data["changes"], "notifications": data["notifications"],
+                "unscheduled": data["unscheduled"], "log": log + unscheduled}
