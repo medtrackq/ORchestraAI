@@ -131,6 +131,11 @@ def validate_schedule(
 
         room_busy[room.or_id].append((a.start_min, a.cleanup_end_min, cid))
 
+    # Time held by bookings outside this horizon (only for resources this schedule uses).
+    for busy, lookup in ((room_busy, room_by_id), (unit_busy, unit_by_id), (bed_busy, bed_by_id)):
+        for resource in list(busy):
+            busy[resource] += [(a, b, "another day") for a, b in getattr(lookup.get(resource), "blocked", ())]
+
     for kind, busy in (("room", room_busy), ("staff", staff_busy), ("equipment", unit_busy), ("bed", bed_busy)):
         for resource, spans in busy.items():
             spans.sort()

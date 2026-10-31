@@ -4,6 +4,9 @@ Run locally:
     uvicorn app.main:app --reload
 
 Environment:
+    DATABASE_URL       Supabase Postgres connection string (Session pooler). Without it
+                       the app runs in demo mode on synthetic in-memory data.
+    APP_TIMEZONE       planning time zone (default Asia/Bangkok)
     APP_PASSWORD       password for the login prompt (no password = open access)
     APP_USERNAME       login name (default "orchestra")
     SOLVER_WORKERS     CP-SAT worker threads (default 2)
@@ -28,10 +31,16 @@ ROOT = Path(__file__).resolve().parent
 FLOW_PAGE = ROOT.parent / "web" / "orchestra-flow.html"
 TIME = r"^\d{2}:\d{2}$"
 
-store = ScheduleStore(
-    workers=int(os.environ.get("SOLVER_WORKERS", "2")),
-    time_limit_s=float(os.environ.get("SOLVER_TIME_LIMIT", "10")),
-)
+_solver = {
+    "workers": int(os.environ.get("SOLVER_WORKERS", "2")),
+    "time_limit_s": float(os.environ.get("SOLVER_TIME_LIMIT", "10")),
+}
+if os.environ.get("DATABASE_URL"):
+    from .db_store import DatabaseStore
+
+    store = DatabaseStore(os.environ["DATABASE_URL"], tz=os.environ.get("APP_TIMEZONE", "Asia/Bangkok"), **_solver)
+else:
+    store = ScheduleStore(**_solver)
 app = FastAPI(title="ORchestraAI", docs_url="/api/docs", redoc_url=None, openapi_url="/api/openapi.json")
 
 
@@ -75,6 +84,9 @@ class CaseIn(BaseModel):
     requires_icu_post_op: bool = False
     infection_risk: Literal["CLEAN", "CONTAMINATED", "DIRTY"] = "CLEAN"
     robotic_certified_scrub: bool = False
+    patient_name: str | None = Field(default=None, max_length=150)
+    procedure_id: str | None = None
+    required_staff_roles: dict[str, int] | None = None
 
 
 class SlotIn(BaseModel):
@@ -112,40 +124,53 @@ def flow() -> FileResponse:
 
 @app.get("/api/health")
 def health() -> dict:
-    return {"status": "ok"}
+    return {"status": "ok", "mode": store.mode}
 
 
 @app.get("/api/state")
-def state() -> dict:
-    return store.state()
+def state(date: str | None = None) -> dict:
+    """Schedule, resources and activity for one planning day (default: today)."""
+    return _run(store.state, date)
 
 
 @app.post("/api/slot-check")
-def slot_check(body: SlotIn) -> dict:
+def slot_check(body: SlotIn, date: str | None = None) -> dict:
     """Ask the agents about a time; nothing is booked."""
-    return _run(store.slot_check, body.case.model_dump(), body.start, commit=False)
+    return _run(store.slot_check, body.case.model_dump(), body.start, commit=False, day=date)
 
 
 @app.post("/api/bookings")
-def book(body: SlotIn) -> dict:
+def book(body: SlotIn, date: str | None = None) -> dict:
     """Same check, then lock the slot that every agent accepts."""
-    result = _run(store.slot_check, body.case.model_dump(), body.start, commit=True)
-    return {"result": result, "state": store.state()}
+    result = _run(store.slot_check, body.case.model_dump(), body.start, commit=True, day=date)
+    return {"result": result, "state": _run(store.state, date)}
 
 
 @app.post("/api/emergency")
-def emergency(body: EmergencyIn) -> dict:
-    result = _run(store.emergency, body.case.model_dump(), body.now)
-    return {"result": result, "state": store.state()}
+def emergency(body: EmergencyIn, date: str | None = None) -> dict:
+    result = _run(store.emergency, body.case.model_dump(), body.now, day=date)
+    return {"result": result, "state": _run(store.state, date)}
 
 
 @app.post("/api/overrun")
-def overrun(body: OverrunIn) -> dict:
-    result = _run(store.overrun, body.case_id, body.new_duration_mins, body.now)
-    return {"result": result, "state": store.state()}
+def overrun(body: OverrunIn, date: str | None = None) -> dict:
+    result = _run(store.overrun, body.case_id, body.new_duration_mins, body.now, day=date)
+    return {"result": result, "state": _run(store.state, date)}
 
 
 @app.post("/api/reset")
 def reset() -> dict:
+    """Demo mode only: back to the synthetic demo day."""
+    if store.mode != "demo":
+        raise HTTPException(status_code=400, detail="ใช้ได้เฉพาะโหมดข้อมูลจำลอง")
     store.reset()
     return {"state": store.state()}
+
+
+@app.post("/api/seed-demo")
+def seed_demo() -> dict:
+    """Supabase mode only: fill an EMPTY database with the synthetic demo hospital."""
+    if store.mode != "supabase":
+        raise HTTPException(status_code=400, detail="ใช้ได้เฉพาะเมื่อเชื่อม Supabase")
+    result = _run(store.seed_demo)
+    return {"result": result, "state": _run(store.state, result["date"])}

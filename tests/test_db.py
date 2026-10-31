@@ -1,0 +1,169 @@
+"""Supabase mode against a real PostgreSQL server.
+
+Runs only when TEST_DATABASE_URL points at a PostgreSQL server where the user
+may create databases (each test gets a fresh database with both migrations):
+
+    TEST_DATABASE_URL=postgresql://postgres@127.0.0.1:54329/postgres pytest tests/test_db.py
+"""
+from __future__ import annotations
+
+import os
+import uuid
+from datetime import timedelta
+from pathlib import Path
+
+import psycopg
+import pytest
+from psycopg.conninfo import make_conninfo
+
+ADMIN_URL = os.environ.get("TEST_DATABASE_URL")
+MIGRATIONS = Path(__file__).resolve().parent.parent / "supabase" / "migrations"
+pytestmark = pytest.mark.skipif(not ADMIN_URL, reason="set TEST_DATABASE_URL to run database tests")
+
+
+@pytest.fixture()
+def db_url():
+    name = "orchestra_test_" + uuid.uuid4().hex[:10]
+    with psycopg.connect(ADMIN_URL, autocommit=True) as admin:
+        admin.execute(f'CREATE DATABASE "{name}"')
+    url = make_conninfo(ADMIN_URL, dbname=name)
+    try:
+        with psycopg.connect(url, autocommit=True) as conn:
+            for migration in sorted(MIGRATIONS.glob("*.sql")):
+                conn.execute(migration.read_text())
+        yield url
+    finally:
+        with psycopg.connect(ADMIN_URL, autocommit=True) as admin:
+            admin.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
+
+
+@pytest.fixture()
+def store(db_url):
+    from app.db_store import DatabaseStore
+
+    s = DatabaseStore(db_url, workers=2, time_limit_s=10)
+    s.seed_demo()
+    return s
+
+
+def _tomorrow(store) -> str:
+    return (store.db.today() + timedelta(days=1)).isoformat()
+
+
+def _request(state, surgeon_name, procedure_name, hn, **extra):
+    surgeon = next(s["id"] for s in state["options"]["surgeons"] if s["name"].startswith(surgeon_name))
+    procedure = next(p for p in state["options"]["procedures"] if p["name"] == procedure_name)
+    card = next(c for c in state["options"]["cards"]
+                if c["surgeon_id"] == surgeon and c["procedure_id"] == procedure["id"])
+    data = {
+        "procedure": procedure["name"], "procedure_id": procedure["id"], "patient_hn": hn,
+        "patient_name": f"Test {hn}", "surgeon_id": surgeon, "duration_mins": card["duration"],
+        "urgency": "ELECTIVE", "required_capabilities": procedure["caps"],
+        "required_equipment_types": card["equipment"], "required_staff_roles": card["roles"],
+        "requires_icu_post_op": procedure["icu"], "infection_risk": procedure["infection"],
+    }
+    data.update(extra)
+    return data
+
+
+def _rows(url, sql, *args):
+    with psycopg.connect(url) as conn:
+        return conn.execute(sql, args).fetchall()
+
+
+def test_seed_loads_a_clean_day(store, db_url):
+    state = store.state()
+    assert len(state["schedule"]["bookings"]) == 10
+    assert state["warnings"] == [] and state["rls_off"] == [] and not state["empty"]
+    assert _rows(db_url, "SELECT count(*) FROM scheduled_surgeries")[0][0] == 10
+    from app.db_store import DatabaseStore
+    from app.store import StoreError
+
+    with pytest.raises(StoreError):
+        store.seed_demo()  # refuses to touch a database that has data
+
+
+def test_booking_is_saved_and_reloaded(store, db_url):
+    day = _tomorrow(store)
+    state = store.state(day)
+    assert state["schedule"]["bookings"] == []
+    data = _request(state, "Dr.Napat", "Laparoscopic cholecystectomy", "HN-T1")
+    preview = store.slot_check(data, "09:00", commit=False, day=day)
+    assert preview["booked"] is False and _rows(db_url, "SELECT count(*) FROM surgery_requests")[0][0] == 10
+    booked = store.slot_check(data, "09:00", commit=True, day=day)
+    assert booked["booked"]
+
+    from app.db_store import DatabaseStore
+
+    fresh = DatabaseStore(db_url).state(day)  # new process view: read back from the database
+    [b] = fresh["schedule"]["bookings"]
+    assert b["start"] == "09:00" and b["patient_name"] == "Test HN-T1"
+    assert fresh["warnings"] == []
+    assert _rows(db_url, "SELECT status FROM surgery_requests WHERE patient_hn = 'HN-T1'")[0][0] == "SCHEDULED"
+    kinds = {r[0] for r in _rows(db_url, "SELECT resource_type FROM resource_allocations a "
+                                         "JOIN scheduled_surgeries s USING (schedule_id) "
+                                         "JOIN surgery_requests r USING (request_id) WHERE r.patient_hn = 'HN-T1'")}
+    assert kinds == {"STAFF", "EQUIPMENT"}
+    assert fresh["activity"][0]["kind"] == "booking"
+
+
+def test_emergency_and_overrun_ripple_are_persisted(store, db_url):
+    day = _tomorrow(store)
+    state = store.state(day)
+    for hn, proc in (("HN-A", "Laparoscopic cholecystectomy"), ("HN-B", "Open inguinal hernia repair"),
+                     ("HN-C", "Laparoscopic appendectomy")):
+        assert store.slot_check(_request(state, "Dr.Napat", proc, hn), "08:00", commit=True, day=day)["booked"]
+    before = {b["patient_hn"]: b for b in store.state(day)["schedule"]["bookings"]}
+
+    er = _request(state, "Dr.Anan", "Emergency exploratory laparotomy", "HN-ER")
+    result = store.emergency(er, "08:30", day=day)
+    after_state = store.state(day)
+    after = {b["patient_hn"]: b for b in after_state["schedule"]["bookings"]}
+    assert "HN-ER" in after and after_state["warnings"] == []
+    moved = [hn for hn in before if hn in after and after[hn]["start_min"] != before[hn]["start_min"]]
+    for hn in moved:
+        status = _rows(db_url, "SELECT status FROM surgery_requests WHERE patient_hn = %s", hn)[0][0]
+        assert status == "RESCHEDULED"
+    assert any(c["case_id"] == after["HN-ER"]["case_id"] for c in result["changes"])
+
+    first = min(after.values(), key=lambda b: b["start_min"])
+    store.overrun(first["case_id"], first["end_min"] - first["start_min"] + 30,
+                  f"{(first['start_min'] + 10) // 60:02d}:{(first['start_min'] + 10) % 60:02d}", day=day)
+    final = store.state(day)
+    extended = next(b for b in final["schedule"]["bookings"] if b["patient_hn"] == first["patient_hn"])
+    assert extended["end_min"] == first["end_min"] + 30
+    assert final["warnings"] == []
+
+
+def test_database_rejects_overlap_even_without_the_app(store, db_url):
+    """A second writer with a stale view hits the exclusion constraint, not a silent double booking."""
+    from app.db import ConflictError
+
+    day = store.db.today() + timedelta(days=1)
+    state = store.state(day.isoformat())
+    data = _request(state, "Dr.Napat", "Laparoscopic cholecystectomy", "HN-S1")
+    with store.db.connect() as conn:
+        stale = store.db.load(conn, day)
+    assert store.slot_check(data, "09:00", commit=True, day=day.isoformat())["booked"]
+
+    from app.store import build_case
+
+    case = build_case(stale.hospital, {**data, "patient_hn": "HN-S2"}, "R-STALE1")
+    check = store._optimizer(stale).check_slot(stale.result, case, 9 * 60, verbose=False)
+    assert check.assignment is not None  # the stale view thinks 09:00 is free
+    request = {"request_id": uuid.uuid4(), "patient_name": "Stale", "procedure_id": None, "raw_text": "x"}
+    with pytest.raises(ConflictError):
+        with store.db.connect() as conn:
+            store.db.save(conn, stale, check.result, {"R-STALE1": request})
+    assert _rows(db_url, "SELECT count(*) FROM surgery_requests WHERE patient_hn = 'HN-S2'")[0][0] == 0
+
+
+def test_row_level_security_hides_patients_from_the_public_api_role(store, db_url):
+    with psycopg.connect(db_url, autocommit=True) as conn:
+        conn.execute("DO $$ BEGIN CREATE ROLE anon NOLOGIN; EXCEPTION WHEN duplicate_object THEN NULL; END $$")
+        conn.execute("GRANT USAGE ON SCHEMA public TO anon")
+        conn.execute("GRANT SELECT ON ALL TABLES IN SCHEMA public TO anon")
+        assert conn.execute("SELECT count(*) FROM surgery_requests").fetchone()[0] == 10
+        conn.execute("SET ROLE anon")
+        assert conn.execute("SELECT count(*) FROM surgery_requests").fetchone()[0] == 0
+        assert conn.execute("SELECT count(*) FROM staff").fetchone()[0] == 0

@@ -50,6 +50,10 @@ UNUSABLE_ROOM_STATUSES = frozenset({"MAINTENANCE", "CLOSED", "OUT_OF_SERVICE"})
 UNUSABLE_EQUIPMENT_STATUSES = frozenset({"MAINTENANCE"})
 
 
+def _spans(spans) -> tuple[tuple[int, int], ...]:
+    return tuple(sorted((int(a), int(b)) for a, b in spans if int(b) > int(a)))
+
+
 @dataclass
 class OperatingRoom:
     """Row of ``operating_rooms``.
@@ -66,9 +70,11 @@ class OperatingRoom:
     open_min: int = 0
     close_min: int | None = None  # None = open until the end of the horizon
     status: str = "AVAILABLE"
+    blocked: tuple[tuple[int, int], ...] = ()  # held by bookings outside this horizon
 
     def __post_init__(self) -> None:
         self.capabilities = frozenset(self.capabilities)
+        self.blocked = _spans(self.blocked)
 
     @property
     def all_capabilities(self) -> frozenset[str]:
@@ -132,6 +138,10 @@ class EquipmentUnit:
     available_at: int = 0  # when it is back from CSSD / current use
     status: str = "AVAILABLE"
     name: str | None = None
+    blocked: tuple[tuple[int, int], ...] = ()  # in use / in CSSD for bookings outside this horizon
+
+    def __post_init__(self) -> None:
+        self.blocked = _spans(self.blocked)
 
     @property
     def reprocess_mins(self) -> int:
@@ -150,6 +160,10 @@ class RecoveryBed:
     bed_id: str
     bed_type: str = BedType.PACU
     available_from: int = 0
+    blocked: tuple[tuple[int, int], ...] = ()  # reserved by bookings outside this horizon
+
+    def __post_init__(self) -> None:
+        self.blocked = _spans(self.blocked)
 
 
 @dataclass

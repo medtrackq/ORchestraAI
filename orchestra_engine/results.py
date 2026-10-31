@@ -78,6 +78,7 @@ class ScheduleResult:
                 "case_id": a.case_id,
                 "procedure": case.procedure,
                 "patient_hn": case.patient_hn,
+                "patient_name": case.patient_name,
                 "urgency": case.urgency.value,
                 "or_id": a.or_id,
                 "start_min": a.start_min,

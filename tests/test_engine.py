@@ -251,3 +251,14 @@ def test_validator_detects_double_booking():
 def test_duplicate_ids_are_rejected():
     with pytest.raises(ValueError):
         ORchestraOptimizer([OperatingRoom("OR-1"), OperatingRoom("OR-1")], [], [])
+
+
+def test_resources_held_by_another_day_are_respected():
+    rooms = [OperatingRoom("OR-1")]
+    beds = [RecoveryBed("ICU-1", "ICU_SURGICAL", blocked=[(-600, hm("10:00"))])]  # ICU stay from yesterday
+    units = [EquipmentUnit("SET-1", "SET", 60, blocked=[(hm("08:00"), hm("09:00"))])]
+    cases = [case("X", "SUR-A", 60, required_equipment_types=["SET"], requires_icu_post_op=True,
+                  preferred_start=hm("08:00"))]
+    _, result = solve(rooms, units, crew("A"), cases, beds=beds)
+    a = result.assignments["X"]
+    assert a.start_min >= hm("09:00") and a.end_min >= hm("10:00")

@@ -14,6 +14,8 @@
 | `orchestra_engine/agents.py` | Staffing / Equipment & CSSD / OR Facility Agent สแกน ณ เวลาที่ขอ (`SlotCheck`) |
 | `orchestra_engine/flow.py` | สร้างข้อมูลจริงให้หน้า Flow (`python -m orchestra_engine.flow`) |
 | `app/` | เว็บแอป FastAPI (หน้าเว็บ `app/static/index.html` + API) สำหรับ Render |
+| `app/db.py`, `app/db_store.py`, `app/seed.py` | โหมด Supabase: อ่าน/เขียนตาราง, lock + ตรวจก่อนบันทึก, ข้อมูลตัวอย่าง |
+| `supabase/migrations/20261101000000_security_and_integrity.sql` | RLS ทุกตาราง, exclusion constraint ใหม่, ตาราง activity |
 | `render.yaml` | Render Blueprint (web service ฟรี + รหัสผ่านอัตโนมัติ) |
 | `web/orchestra-flow.html` | หน้า interactive 5 ขั้น (ปรับจาก ORchestraAIFlow.html) แสดงผลจาก engine จริง |
 | `orchestra_engine/validation.py` | ตัวตรวจ Hard Constraint อิสระ (ไม่ใช้โค้ด solver) |
@@ -30,7 +32,25 @@ repo มี `render.yaml` (Render Blueprint) สำหรับ deploy เว็
 
 หน้าเว็บ: ตารางทุกห้อง · จองผ่าตัด (Agent ตรวจเวลา + เสนอช่วงใหม่) · แทรกเคสฉุกเฉิน · ผ่าตัดเกินเวลา · ประวัติกิจกรรม/แจ้งเตือน · `/flow` หน้า Flow สาธิต · `/api/docs` เอกสาร API
 
-ข้อจำกัดตอนนี้: ใช้ข้อมูลจำลองในหน่วยความจำ (รีเซ็ตเมื่อ service restart) และ plan ฟรีของ Render จะหลับเมื่อไม่มีคนใช้ 15 นาที เปิดครั้งแรกหลังจากนั้นรอประมาณ 1 นาที การเชื่อม Supabase จะมาแทนในรอบถัดไป
+ถ้าไม่ได้ตั้ง `DATABASE_URL` แอปจะใช้ข้อมูลจำลองในหน่วยความจำ (รีเซ็ตเมื่อ service restart) plan ฟรีของ Render จะหลับเมื่อไม่มีคนใช้ 15 นาที เปิดครั้งแรกหลังจากนั้นรอประมาณ 1 นาที
+
+### เชื่อม Supabase
+
+1. Supabase → **SQL Editor** → วางเนื้อหา `supabase/migrations/20261101000000_security_and_integrity.sql` → **Run**
+   (เปิด Row Level Security ทุกตาราง, เคสที่ยกเลิกไม่บล็อกห้อง, ห้ามจองเตียงพักฟื้นซ้อน, ตาราง `orchestra_activity`)
+2. Supabase → **Connect** → คัดลอก connection string แบบ **Session pooler** (Render ต่อแบบ direct ไม่ได้เพราะเป็น IPv6) แล้วแทน `[YOUR-PASSWORD]` ด้วยรหัสผ่านฐานข้อมูล (อักขระพิเศษต้อง URL-encode)
+3. Render → service `orchestra-ai` → **Environment** → เพิ่ม `DATABASE_URL` = connection string นั้น → Save (Render deploy ใหม่เอง)
+4. เปิดเว็บ ป้าย **Supabase** จะขึ้นข้างชื่อ ถ้าฐานข้อมูลยังว่าง กด **ใส่ข้อมูลตัวอย่าง** ได้ (ใช้ได้เฉพาะตอนที่ยังไม่มีห้องหรือบุคลากร)
+
+การทำงานในโหมด Supabase: ทุกคำขออ่านข้อมูลของวันนั้นจากฐานข้อมูลสด · การเขียนทำในทรานแซกชันเดียวภายใต้ advisory lock · ผลจาก engine ต้องผ่าน `validate_schedule` โดยไม่เพิ่มจุดขัดกันใหม่ · exclusion constraint ในฐานข้อมูลเป็นด่านสุดท้าย (ถ้ามีคนเขียนซ้อนจะได้ข้อความให้ลองใหม่ ไม่ใช่จองซ้อน) · ห้อง/เครื่องมือ/เตียงที่ถูกใช้โดยเคสของวันอื่น (เช่นเตียง ICU ข้ามวัน) ถูกนับด้วย
+
+ค่าที่ schema ยังไม่มีและใช้ค่า default: เวลาเปิด-ปิดห้อง, skill ที่ต้องใช้ต่อ role (มีช่อง "พยาบาล Robotic" ในฟอร์ม) · `current_weekly_hours` ถือเป็นชั่วโมงที่ทำไปแล้วก่อนวันที่วางแผน
+
+ทดสอบกับ PostgreSQL จริง (สร้างฐานข้อมูลใหม่ต่อเทสต์และรันทั้งสอง migration):
+
+```bash
+TEST_DATABASE_URL=postgresql://postgres@127.0.0.1:5432/postgres .venv/bin/python -m pytest -q
+```
 
 รันเว็บบนเครื่อง:
 

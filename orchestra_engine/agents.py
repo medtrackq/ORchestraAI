@@ -25,6 +25,7 @@ EQUIPMENT = "Equipment & CSSD Agent"
 FACILITY = "OR Facility Agent"
 
 _FAR = 10**9
+OTHER_DAY = "a booking on another day"
 _STATUS_WORDS = {"STERILIZING": "sterilizing at CSSD", "IN_USE": "in use", "MAINTENANCE": "in maintenance"}
 
 Span = tuple[int, int, str]  # (start, end, case_id)
@@ -244,7 +245,7 @@ def _equipment(opt, case: SurgeryCase, start: int, busy: Busy) -> AgentVerdict:
                 states.append(ResourceStatus(label, False, _STATUS_WORDS.get(u.status, u.status.lower())))
                 continue
             occupy = dur + u.reprocess_mins
-            spans = busy.unit.get(u.unit_id, [])
+            spans = busy.unit.get(u.unit_id, []) + [(a, b, OTHER_DAY) for a, b in u.blocked]
             nxt = earliest_free(spans, occupy, start, [(u.available_at, _FAR)], 0, latest)
             clash = _clash(spans, start, start + occupy)
             if u.available_at > start:
@@ -282,7 +283,7 @@ def _facility(opt, case: SurgeryCase, start: int, busy: Busy) -> AgentVerdict:
         if not r.is_usable:
             room_states.append(ResourceStatus(r.or_id, False, r.status.lower()))
             continue
-        spans = busy.room.get(r.or_id, [])
+        spans = busy.room.get(r.or_id, []) + [(a, b, OTHER_DAY) for a, b in r.blocked]
         nxt = earliest_free(spans, dur + turnover, start, [(r.open_min, r.close(horizon))], dur, latest)
         clash = _clash(spans, start, end + turnover)
         if start < r.open_min or end > r.close(horizon):
@@ -304,7 +305,7 @@ def _facility(opt, case: SurgeryCase, start: int, busy: Busy) -> AgentVerdict:
         pool = [b for b in opt.beds if b.bed_type == bed_type]
         free, nexts = [], []
         for b in pool:
-            spans = busy.bed.get(b.bed_id, [])
+            spans = busy.bed.get(b.bed_id, []) + [(s, e, OTHER_DAY) for s, e in b.blocked]
             shifted = [(s - dur, e - dur, c) for s, e, c in spans]
             nxt = earliest_free(shifted, rec, start, [(b.available_from - dur, _FAR)], 0, latest)
             if nxt == start:

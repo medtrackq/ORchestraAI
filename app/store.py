@@ -21,6 +21,7 @@ from orchestra_engine import (
     validate_schedule,
 )
 from orchestra_engine.demo import Hospital, build_hospital, elective_day
+from orchestra_engine.models import DEFAULT_TEAM
 
 
 class StoreError(ValueError):
@@ -37,6 +38,41 @@ class Activity:
     highlight: list[str] = field(default_factory=list)
 
 
+KNOWN_ROLES = {StaffRole.ANESTHESIOLOGIST, StaffRole.SCRUB_NURSE, StaffRole.CIRCULATING_NURSE, StaffRole.SURGEON}
+
+
+def build_case(hospital: Hospital, data: dict, case_id: str, *, release: int = 0) -> SurgeryCase:
+    """Turn a request from the web form into a ``SurgeryCase`` after checking it."""
+    surgeon = next((s for s in hospital.staff if s.staff_id == data["surgeon_id"]), None)
+    if surgeon is None or surgeon.role != StaffRole.SURGEON:
+        raise StoreError(f"ไม่พบศัลยแพทย์ {data['surgeon_id']}")
+    known_types = {u.eq_type for u in hospital.equipments}
+    unknown = [t for t in data.get("required_equipment_types") or [] if t not in known_types]
+    if unknown:
+        raise StoreError(f"ไม่รู้จักเครื่องมือ: {', '.join(unknown)}")
+    known_caps = {c for r in hospital.rooms for c in r.all_capabilities}
+    unknown = [c for c in data.get("required_capabilities") or [] if c not in known_caps]
+    if unknown:
+        raise StoreError(f"ไม่มีห้องที่มีความสามารถ: {', '.join(unknown)}")
+    roles = data.get("required_staff_roles") or dict(DEFAULT_TEAM)
+    bad = [r for r, n in roles.items() if r not in KNOWN_ROLES or not 0 <= int(n) <= 4]
+    if bad:
+        raise StoreError(f"บทบาททีมไม่ถูกต้อง: {', '.join(bad)}")
+    skills = {StaffRole.SCRUB_NURSE: {"ROBOTIC_CERTIFIED"}} if data.get("robotic_certified_scrub") else {}
+    return SurgeryCase(
+        case_id, data["patient_hn"], data["procedure"], surgeon.staff_id, int(data["duration_mins"]),
+        urgency=Urgency(data.get("urgency") or "ELECTIVE"),
+        required_capabilities=set(data.get("required_capabilities") or []),
+        required_staff_roles={r: int(n) for r, n in roles.items()},
+        required_staff_skills=skills,
+        required_equipment_types=list(data.get("required_equipment_types") or []),
+        infection_risk=data.get("infection_risk") or "CLEAN",
+        requires_icu_post_op=bool(data.get("requires_icu_post_op")),
+        release_min=release,
+        patient_name=(data.get("patient_name") or "").strip() or None,
+    )
+
+
 def parse_time(text: str) -> int:
     try:
         minute = hm(text)
@@ -48,6 +84,10 @@ def parse_time(text: str) -> int:
 
 
 class ScheduleStore:
+    """Demo mode: synthetic hospital kept in memory (used when DATABASE_URL is not set)."""
+
+    mode = "demo"
+
     def __init__(self, *, workers: int = 2, time_limit_s: float = 10.0) -> None:
         self._lock = threading.Lock()
         self.workers = workers
@@ -86,13 +126,20 @@ class ScheduleStore:
             "bed_types": sorted({b.bed_type for b in h.beds}),
         }
 
-    def state(self) -> dict:
+    def state(self, day: str | None = None) -> dict:
         schedule = self.result.to_dict()
         bookings = schedule["bookings"]
         start = min([hm("08:00"), *[b["start_min"] for b in bookings]]) // 60 * 60
-        end = -(-max([hm("18:00"), *[b["cleanup_end_min"] for b in bookings]]) // 60) * 60
+        now = self.result.now_min
+        end = -(-max([hm("18:00"), *[b["cleanup_end_min"] for b in bookings],
+                      *([now + 30] if 0 < now < 24 * 60 else [])]) // 60) * 60
         return {
+            "mode": self.mode,
+            "date": None,
             "planning_day": "วันตัวอย่าง (ข้อมูลจำลอง)",
+            "warnings": [],
+            "rls_off": [],
+            "empty": False,
             "schedule": schedule,
             "axis": {"start": start, "end": end},
             "options": self.options(),
@@ -107,31 +154,6 @@ class ScheduleStore:
             self._ids[prefix] = number
         return f"{prefix}{number:03d}"
 
-    def _build_case(self, data: dict, case_id: str, *, release: int = 0) -> SurgeryCase:
-        h = self.hospital
-        surgeon = next((s for s in h.staff if s.staff_id == data["surgeon_id"]), None)
-        if surgeon is None or surgeon.role != StaffRole.SURGEON:
-            raise StoreError(f"ไม่พบศัลยแพทย์ {data['surgeon_id']}")
-        known_types = {u.eq_type for u in h.equipments}
-        unknown = [t for t in data.get("required_equipment_types", []) if t not in known_types]
-        if unknown:
-            raise StoreError(f"ไม่รู้จักเครื่องมือ: {', '.join(unknown)}")
-        known_caps = {c for r in h.rooms for c in r.all_capabilities}
-        unknown = [c for c in data.get("required_capabilities", []) if c not in known_caps]
-        if unknown:
-            raise StoreError(f"ไม่มีห้องที่มีความสามารถ: {', '.join(unknown)}")
-        skills = {StaffRole.SCRUB_NURSE: {"ROBOTIC_CERTIFIED"}} if data.get("robotic_certified_scrub") else {}
-        return SurgeryCase(
-            case_id, data["patient_hn"], data["procedure"], surgeon.staff_id, int(data["duration_mins"]),
-            urgency=Urgency(data.get("urgency", "ELECTIVE")),
-            required_capabilities=set(data.get("required_capabilities", [])),
-            required_staff_skills=skills,
-            required_equipment_types=list(data.get("required_equipment_types", [])),
-            infection_risk=data.get("infection_risk", "CLEAN"),
-            requires_icu_post_op=bool(data.get("requires_icu_post_op")),
-            release_min=release,
-        )
-
     def _commit(self, result: ScheduleResult) -> None:
         h = self.hospital
         errors = validate_schedule(result, result.cases.values(), h.rooms, h.equipments, h.staff, h.beds)
@@ -139,12 +161,12 @@ class ScheduleStore:
             raise StoreError("ตารางที่คำนวณได้ไม่ผ่านการตรวจ: " + "; ".join(errors[:3]))
         self.result = result
 
-    def slot_check(self, data: dict, start_text: str, *, commit: bool) -> dict:
+    def slot_check(self, data: dict, start_text: str, *, commit: bool, day: str | None = None) -> dict:
         start = parse_time(start_text)
         with self._lock:
             if start < self.result.now_min:
                 raise StoreError(f"เวลาที่ขอผ่านไปแล้ว (เวลาปัจจุบันของตาราง {fmt(self.result.now_min)})")
-            case = self._build_case(data, self._next_id("R", commit=False))
+            case = build_case(self.hospital, data, self._next_id("R", commit=False))
             check = self.opt.check_slot(self.result, case, start, verbose=False)
             out = check.to_dict()
             out["booked"] = False
@@ -159,10 +181,10 @@ class ScheduleStore:
                 ))
             return out
 
-    def emergency(self, data: dict, now_text: str) -> dict:
+    def emergency(self, data: dict, now_text: str, *, day: str | None = None) -> dict:
         now = parse_time(now_text)
         with self._lock:
-            case = self._build_case({**data, "urgency": "EMERGENCY"}, self._next_id("E", commit=False), release=now)
+            case = build_case(self.hospital, {**data, "urgency": "EMERGENCY"}, self._next_id("E", commit=False), release=now)
             after = self.opt.insert_emergency(
                 self.result, list(self.result.cases.values()), [case], now_min=now,
                 scenario_name=f"Emergency {case.case_id}", verbose=False,
@@ -173,7 +195,7 @@ class ScheduleStore:
             self._next_id("E", commit=True)
             return self._record_change("emergency", f"ฉุกเฉิน {case.case_id} {case.procedure}", after, case.case_id)
 
-    def overrun(self, case_id: str, new_duration: int, now_text: str) -> dict:
+    def overrun(self, case_id: str, new_duration: int, now_text: str, *, day: str | None = None) -> dict:
         now = parse_time(now_text)
         with self._lock:
             current = self.result.assignments.get(case_id)

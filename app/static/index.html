@@ -121,11 +121,21 @@
   .unsched li { font-size: .82rem; margin-bottom: 4px; }
   #toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); background: var(--bad); color: #fff; padding: 10px 16px; border-radius: 10px; font-size: .88rem; max-width: calc(100% - 32px); display: none; z-index: 50; }
   .busy-overlay { font-size: .82rem; color: var(--accent); }
+  .banner { border-radius: 12px; padding: 12px 14px; font-size: .86rem; margin: 0 24px 0; }
+  .banner.bad { background: var(--bad-soft); color: var(--bad); border: 1px solid var(--bad); }
+  .banner.warn { background: var(--warn-soft); color: var(--warn); border: 1px solid var(--warn); }
+  .banner ul { margin: 6px 0 0; padding-left: 18px; }
+  .banner .btn { margin-top: 8px; }
+  #banners { display: grid; gap: 10px; padding-top: 16px; }
+  #banners:empty { display: none; }
+  .mode { font-size: .72rem; padding: 2px 8px; border-radius: 99px; background: var(--accent-soft); color: var(--accent); margin-left: 6px; vertical-align: 2px; }
+  .top input[type="date"] { padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); color: var(--text); }
   [hidden] { display: none !important; }
 
   @media (max-width: 1100px) { .layout { grid-template-columns: minmax(0, 1fr); } }
   @media (max-width: 600px) {
     .top, .layout { padding-left: 16px; padding-right: 16px; }
+    .banner { margin: 0 16px; }
     .row2 { grid-template-columns: 1fr; }
     .detail dl { grid-template-columns: 1fr; }
   }
@@ -135,13 +145,16 @@
 <header class="top">
   <div class="brand">
     <span class="orb" aria-hidden="true"></span>
-    <div><h1>ORchestraAI</h1><p id="day">กำลังโหลด…</p></div>
+    <div><h1>ORchestraAI <span class="mode" id="mode"></span></h1><p id="day">กำลังโหลด…</p></div>
   </div>
   <nav>
+    <input type="date" id="date" aria-label="วันที่วางแผน" hidden>
+    <button class="btn" id="reload" type="button">โหลดใหม่</button>
     <a class="btn" href="/flow" target="_blank" rel="noopener">ดู Flow สาธิต</a>
-    <button class="btn" id="reset" type="button">รีเซ็ตข้อมูลตัวอย่าง</button>
+    <button class="btn" id="reset" type="button" hidden>รีเซ็ตข้อมูลตัวอย่าง</button>
   </nav>
 </header>
+<div id="banners"></div>
 
 <main class="layout">
   <section class="card" aria-labelledby="sched-title">
@@ -230,8 +243,11 @@
     return m >= 8 * 60 && m <= 20 * 60 ? hhmm(m) : '10:30';
   };
 
+  const withDate = path => (STATE && STATE.date && !path.includes('date=')
+    ? path + (path.includes('?') ? '&' : '?') + 'date=' + STATE.date : path);
+
   async function api(path, body) {
-    const res = await fetch(path, body === undefined ? {} : {
+    const res = await fetch(withDate(path), body === undefined ? {} : {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
     });
     const data = await res.json().catch(() => ({}));
@@ -263,16 +279,24 @@
     const surgeons = o.surgeons.map(s => `<option value="${esc(s.id)}">${esc(s.name)} (${esc(s.shifts.join(', '))})</option>`).join('');
     const caps = o.capabilities.map(c => `<label><input type="checkbox" name="cap" value="${esc(c)}">${esc(c)}</label>`).join('');
     const eq = o.equipment_types.map(e => `<label><input type="checkbox" name="eq" value="${esc(e.type)}">${esc(e.type)} <small>(${e.units})</small></label>`).join('');
+    const db = STATE.mode === 'supabase';
     const defaults = kind === 'er'
-      ? { proc: 'Emergency exploratory laparotomy', hn: 'HN-ER', dur: 120 }
-      : { proc: 'Laparoscopic cholecystectomy', hn: 'HN-1001', dur: 90 };
+      ? { proc: 'Emergency exploratory laparotomy', hn: db ? '' : 'HN-ER', dur: 120 }
+      : { proc: 'Laparoscopic cholecystectomy', hn: db ? '' : 'HN-1001', dur: 90 };
+    const procs = o.procedures || [];
+    const procSelect = procs.length ? `<label>หัตถการจากฐานข้อมูล<select name="procedure_id">
+        <option value="">— พิมพ์ชื่อหัตถการเอง —</option>
+        ${procs.map(p => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('')}</select></label>` : '';
     return `
+      <label>ศัลยแพทย์<select name="surgeon_id" required>${surgeons}</select></label>
+      ${procSelect}
       <label>หัตถการ<input type="text" name="procedure" value="${esc(defaults.proc)}" required minlength="2" maxlength="200"></label>
+      <p class="hint" data-role="card-hint"></p>
       <div class="row2">
         <label>HN ผู้ป่วย<input type="text" name="patient_hn" value="${esc(defaults.hn)}" required maxlength="50"></label>
-        <label>ระยะเวลาผ่าตัด (นาที)<input type="number" name="duration_mins" value="${defaults.dur}" min="15" max="720" step="5" required></label>
+        <label>ชื่อผู้ป่วย${db ? '' : ' (ไม่บังคับ)'}<input type="text" name="patient_name" maxlength="150" ${db ? 'required' : ''}></label>
       </div>
-      <label>ศัลยแพทย์<select name="surgeon_id" required>${surgeons}</select></label>
+      <label>ระยะเวลาผ่าตัด (นาที)<input type="number" name="duration_mins" value="${defaults.dur}" min="15" max="720" step="5" required></label>
       <fieldset><legend>ห้องต้องมี</legend><div class="checks">${caps}</div></fieldset>
       <fieldset><legend>เครื่องมือ (ชุดละ 1)</legend><div class="checks">${eq}</div></fieldset>
       <div class="row2">
@@ -284,6 +308,27 @@
           <label><input type="checkbox" name="robotic">พยาบาล Robotic</label>
         </div></fieldset>
       </div>`;
+  }
+
+  // Intake defaults: procedure (room, ICU, infection) + surgeon preference card (time, team, equipment).
+  function applyDefaults(form) {
+    const o = STATE.options;
+    const pid = form.elements['procedure_id']?.value;
+    const hint = form.querySelector('[data-role="card-hint"]');
+    form.dataset.roles = '';
+    if (!pid) { hint.textContent = ''; return; }
+    const p = (o.procedures || []).find(x => x.id === pid);
+    const card = (o.cards || []).find(c => c.procedure_id === pid && c.surgeon_id === form.elements['surgeon_id'].value);
+    form.elements['procedure'].value = p.name;
+    form.elements['duration_mins'].value = card ? card.duration : p.duration;
+    form.querySelectorAll('input[name="cap"]').forEach(x => { x.checked = p.caps.includes(x.value); });
+    form.querySelectorAll('input[name="eq"]').forEach(x => { x.checked = card ? card.equipment.includes(x.value) : false; });
+    form.elements['icu'].checked = p.icu;
+    form.elements['infection_risk'].value = p.infection;
+    if (card) form.dataset.roles = JSON.stringify(card.roles);
+    hint.textContent = card
+      ? `ค่าจาก preference card: ${card.duration} นาที (±${card.stddev ?? '?'}), ทีม ${Object.entries(card.roles).map(([r, n]) => n + ' ' + r).join(', ')}`
+      : 'ศัลยแพทย์คนนี้ยังไม่มี preference card สำหรับหัตถการนี้ ใช้เวลามาตรฐานของหัตถการและทีมมาตรฐาน';
   }
 
   function readCase(form, urgency) {
@@ -299,17 +344,26 @@
       requires_icu_post_op: f.get('icu') === 'on',
       infection_risk: f.get('infection_risk'),
       robotic_certified_scrub: f.get('robotic') === 'on',
+      patient_name: (f.get('patient_name') || '').trim() || null,
+      procedure_id: f.get('procedure_id') || null,
+      required_staff_roles: form.dataset.roles ? JSON.parse(form.dataset.roles) : null,
     };
   }
 
   // ---------------------------------------------------------------- render
   function render() {
     const s = STATE.schedule;
+    const db = STATE.mode === 'supabase';
+    $('#mode').textContent = db ? 'Supabase' : 'ข้อมูลจำลอง';
+    $('#date').hidden = !db;
+    if (db) $('#date').value = STATE.date;
+    $('#reset').hidden = db;
     $('#day').textContent = STATE.planning_day + (s.now_min ? ' · เวลาปัจจุบันของตาราง ' + hhmm(s.now_min) : '');
+    renderBanners();
     $('#stats').innerHTML = `
       <span class="chip ok">จองแล้ว ${s.bookings.length} เคส</span>
       <span class="chip ${s.unscheduled.length ? 'bad' : ''}">ยังไม่ได้จัด ${s.unscheduled.length}</span>
-      <span class="chip">solver ${esc(s.status)}</span>`;
+      <span class="chip">${s.status === 'LOADED' ? 'ข้อมูลจาก Supabase' : 'solver ' + esc(s.status)}</span>`;
     renderGantt();
     renderUnscheduled();
     renderOverrunOptions();
@@ -354,13 +408,38 @@
     box.innerHTML = `
       <h3>${esc(b.case_id)} · ${esc(b.procedure)}</h3>
       <dl>
-        <dt>ผู้ป่วย</dt><dd>${esc(b.patient_hn)} · ${esc(b.urgency)}${b.frozen ? ' · เริ่มแล้ว (ล็อก)' : ''}</dd>
+        <dt>ผู้ป่วย</dt><dd>${esc(b.patient_hn)}${b.patient_name ? ' · ' + esc(b.patient_name) : ''} · ${esc(b.urgency)}${b.frozen ? ' · เริ่มแล้ว (ล็อก)' : ''}</dd>
         <dt>ห้อง / เวลา</dt><dd>${esc(b.or_id)} ${esc(b.start)}-${esc(b.end)} (ห้องพร้อมใหม่ ${esc(b.cleanup_end)})</dd>
         <dt>ทีม</dt><dd>${b.team.map(t => esc(t.name)).join(', ')}</dd>
         <dt>เครื่องมือ</dt><dd>${b.equipment.map(e => esc(e.unit_id) + ' (กลับจาก CSSD ' + hhmm(e.back_from_cssd_min) + ')').join(', ') || '-'}</dd>
         <dt>เตียงพักฟื้น</dt><dd>${b.bed_id ? esc(b.bed_id) + ' ' + hhmm(b.recovery_start_min) + '-' + hhmm(b.recovery_end_min) : '-'}</dd>
       </dl>
       ${b.reasoning.length ? '<ul class="why">' + b.reasoning.map(r => '<li>' + esc(r) + '</li>').join('') + '</ul>' : ''}`;
+  }
+
+  function renderBanners() {
+    const parts = [];
+    if (STATE.empty) {
+      parts.push(`<div class="banner warn"><b>ฐานข้อมูลยังไม่มีห้องผ่าตัดหรือบุคลากร</b><br>
+        ใส่ข้อมูลของโรงพยาบาลใน Supabase หรือกดปุ่มด้านล่างเพื่อใส่ข้อมูลตัวอย่าง (ชื่อสมมติทั้งหมด) และจองเคสตัวอย่างของวันนี้
+        <br><button class="btn primary" type="button" id="seed">ใส่ข้อมูลตัวอย่าง</button></div>`);
+    }
+    if (STATE.rls_off && STATE.rls_off.length) {
+      parts.push(`<div class="banner bad"><b>ยังไม่ได้เปิด Row Level Security</b> บนตาราง ${esc(STATE.rls_off.join(', '))}
+        ข้อมูลผู้ป่วยอาจถูกอ่านผ่าน Supabase API ด้วย anon key ได้ ให้รันไฟล์ supabase/migrations/20261101000000_security_and_integrity.sql ใน SQL Editor</div>`);
+    }
+    if (STATE.warnings && STATE.warnings.length) {
+      parts.push(`<div class="banner warn"><b>ข้อมูลในฐานข้อมูลมีจุดขัดกัน ${STATE.warnings.length} รายการ</b> (ระบบจะไม่เพิ่มจุดขัดกันใหม่)
+        <ul>${STATE.warnings.slice(0, 5).map(w => '<li>' + esc(w) + '</li>').join('')}</ul></div>`);
+    }
+    $('#banners').innerHTML = parts.join('');
+    const seed = $('#seed');
+    if (seed) seed.addEventListener('click', () => busy(seed, async () => {
+      const data = await api('/api/seed-demo', {});
+      STATE = data.state;
+      buildForms();
+      render();
+    }));
   }
 
   function renderUnscheduled() {
@@ -380,7 +459,7 @@
   function renderActivity() {
     $('#activity').innerHTML = STATE.activity.map(a => `
       <div class="activity-item">
-        <div class="kind">${esc(a.kind)}</div>
+        <div class="kind">${esc(a.kind)}${a.created_at ? ' · ' + esc(new Date(a.created_at).toLocaleString('th-TH')) : ''}</div>
         <div>${esc(a.title)}</div>
         ${a.changes.length ? '<ul class="changes">' + a.changes.map(c => '<li>' + esc(c.case_id) + ': ' + esc(c.details.join('; ')) + '</li>').join('') + '</ul>' : ''}
         ${a.notifications.length ? '<div class="hint">แจ้งเตือน ' + a.notifications.length + ' ข้อความ: ' + esc([...new Set(a.notifications.map(n => n.name))].join(', ')) + '</div>' : ''}
@@ -479,24 +558,47 @@
     });
   });
 
-  (async () => {
-    try {
-      STATE = await api('/api/state');
-      $('[data-case="book"]').innerHTML = caseFields('book');
-      $('[data-case="er"]').innerHTML = caseFields('er');
-      const er = $('#form-er');
-      const anan = STATE.options.surgeons.find(s => /on-call/i.test(s.name));
-      if (anan) er.querySelector('select[name="surgeon_id"]').value = anan.id;
-      er.querySelector('input[value="MAJOR_GENERAL_TRAY"]')?.click();
-      $('#form-book input[value="LAPAROSCOPY_TRAY"]')?.click();
-      const now = STATE.schedule.now_min ? hhmm(STATE.schedule.now_min) : nowText();
-      er.querySelector('input[name="now"]').value = now;
-      $('#form-over input[name="now"]').value = now;
-      render();
-    } catch (e) {
-      toast('โหลดข้อมูลไม่สำเร็จ: ' + e.message);
+  function buildForms() {
+    $('[data-case="book"]').innerHTML = caseFields('book');
+    $('[data-case="er"]').innerHTML = caseFields('er');
+    const book = $('#form-book'), er = $('#form-er');
+    const oncall = STATE.options.surgeons.find(s => /on-call|เวร/i.test(s.name));
+    if (oncall) er.elements['surgeon_id'].value = oncall.id;
+    const procs = STATE.options.procedures || [];
+    const cards = STATE.options.cards || [];
+    // Start each form on a surgeon + procedure pair that has a preference card.
+    const pick = (form, test) => {
+      const card = cards.find(c => test((procs.find(x => x.id === c.procedure_id) || {}).name || ''));
+      if (!card || !form.elements['procedure_id']) return false;
+      form.elements['surgeon_id'].value = card.surgeon_id;
+      form.elements['procedure_id'].value = card.procedure_id;
+      applyDefaults(form);
+      return true;
+    };
+    if (!pick(er, n => /emergency/i.test(n))) er.querySelector('input[value="MAJOR_GENERAL_TRAY"]')?.click();
+    if (!pick(book, n => /cholecystectomy/i.test(n)) && !pick(book, n => !/emergency/i.test(n))) {
+      book.querySelector('input[value="LAPAROSCOPY_TRAY"]')?.click();
     }
-  })();
+    [book, er].forEach(form => ['surgeon_id', 'procedure_id'].forEach(name =>
+      form.elements[name]?.addEventListener('change', () => applyDefaults(form))));
+    const now = STATE.schedule.now_min && STATE.schedule.now_min < 24 * 60 ? hhmm(STATE.schedule.now_min) : nowText();
+    er.elements['now'].value = now;
+    $('#form-over').elements['now'].value = now;
+  }
+
+  async function loadDay(day) {
+    const path = day ? '/api/state?date=' + day : '/api/state';
+    STATE = await api(path);
+    highlight = new Set(); selected = null;
+    ['#result-book', '#result-er', '#result-over'].forEach(id => { $(id).innerHTML = ''; });
+    buildForms();
+    render();
+  }
+
+  $('#date').addEventListener('change', e => { if (e.target.value) loadDay(e.target.value).catch(err => toast(err.message)); });
+  $('#reload').addEventListener('click', e => busy(e.target, () => loadDay(STATE && STATE.date)));
+
+  loadDay(null).catch(e => toast('โหลดข้อมูลไม่สำเร็จ: ' + e.message));
 </script>
 </body>
 </html>

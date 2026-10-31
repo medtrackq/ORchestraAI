@@ -854,10 +854,15 @@ class _ModelBuilder:
 
     def add_resource_constraints(self) -> None:
         m = self.model
-        for groups in (self.room_ivs, self.staff_ivs, self.unit_ivs, self.bed_ivs):
-            for intervals in groups.values():
-                if len(intervals) > 1:
-                    m.add_no_overlap(intervals)
+        opt = self.opt
+        lookups = ((self.room_ivs, opt._room_by_id), (self.staff_ivs, {}),
+                   (self.unit_ivs, opt._unit_by_id), (self.bed_ivs, opt._bed_by_id))
+        for groups, lookup in lookups:
+            for key, intervals in groups.items():
+                blocked = getattr(lookup.get(key), "blocked", ())
+                fixed = [m.new_fixed_size_interval_var(a, b - a, f"blocked[{key},{a}]") for a, b in blocked]
+                if len(intervals) + len(fixed) > 1:
+                    m.add_no_overlap(intervals + fixed)
         for sid, items in self.staff_load.items():
             person = self.opt._staff_by_id[sid]
             cap = max(0, person.remaining_minutes - self.frozen_load[sid])

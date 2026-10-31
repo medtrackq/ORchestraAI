@@ -14,6 +14,10 @@ services:
         value: orchestra
       - key: APP_PASSWORD
         generateValue: true  # shown under Environment in the Render dashboard
+      - key: DATABASE_URL
+        sync: false  # Supabase "Session pooler" connection string; empty = demo mode
+      - key: APP_TIMEZONE
+        value: Asia/Bangkok
       - key: SOLVER_WORKERS
         value: "1"  # the free plan has a fraction of one CPU
       - key: SOLVER_TIME_LIMIT
