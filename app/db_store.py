@@ -18,7 +18,7 @@ from orchestra_engine import ORchestraOptimizer, ScheduleResult, fmt, hm, valida
 from orchestra_engine.demo import elective_day
 
 from . import seed
-from .db import ConflictError, Database, World, case_code
+from .db import ConflictError, Database, DatabaseUnavailable, World, case_code
 from .store import (Activity, StoreError, actor_name, build_case, check_own_case, equipment_rows, parse_time,
                     ready_minute)
 
@@ -41,6 +41,8 @@ class DatabaseStore:
                 if write:
                     self.db.lock(conn)
                 yield conn
+        except DatabaseUnavailable as exc:
+            raise StoreError(f"เชื่อมต่อฐานข้อมูลไม่ได้: {exc}") from exc
         except ConflictError as exc:
             raise StoreError(f"ตารางในฐานข้อมูลเปลี่ยนระหว่างคำนวณ กรุณาลองใหม่ ({exc})") from exc
         except psycopg.OperationalError as exc:

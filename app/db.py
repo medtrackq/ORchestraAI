@@ -11,6 +11,7 @@ database UUIDs.
 """
 from __future__ import annotations
 
+import logging
 import uuid
 from collections import Counter
 from contextlib import contextmanager
@@ -45,8 +46,49 @@ TABLES = (
 )
 
 
+log = logging.getLogger("orchestra.db")
+
+
 class ConflictError(Exception):
     """The database changed while the schedule was being computed."""
+
+
+class DatabaseUnavailable(Exception):
+    """Could not open a connection; the message says what to fix in DATABASE_URL."""
+
+
+def check_url(url: str) -> str | None:
+    """Catch the usual copy-paste mistakes before the driver reports something misleading."""
+    if "[YOUR-PASSWORD]" in url or "[YOUR_PASSWORD]" in url:
+        return "ยังไม่ได้แทน [YOUR-PASSWORD] ใน DATABASE_URL ด้วยรหัสผ่านฐานข้อมูลจริง"
+    if url.startswith(("postgres://", "postgresql://")):
+        authority = url.split("://", 1)[1].split("/", 1)[0]
+        if authority.count("@") > 1 or "#" in authority or " " in authority:
+            return "รหัสผ่านใน DATABASE_URL มีอักขระพิเศษ (@ # หรือเว้นวรรค) ต้อง URL-encode หรือตั้งรหัสใหม่ที่มีแต่ตัวอักษรกับตัวเลข"
+    return None
+
+
+def explain_connection_error(exc: Exception) -> str:
+    """Turn a driver error into a fix the owner can make (never echoes secrets)."""
+    low = str(exc).lower()
+    if "password authentication failed" in low:
+        return "รหัสผ่านใน DATABASE_URL ไม่ถูกต้อง (แทน [YOUR-PASSWORD] ด้วยรหัสฐานข้อมูลจริงแล้วหรือยัง?)"
+    if "tenant or user not found" in low:
+        return ("ชื่อผู้ใช้ใน DATABASE_URL ไม่ตรงกับโปรเจกต์ Supabase "
+                "(แบบ Session pooler ต้องเป็น postgres.<project-ref>) หรือโปรเจกต์ถูก pause อยู่")
+    if any(s in low for s in ("network is unreachable", "cannot assign requested address",
+                              "could not translate host", "name or service not known", "nodename nor servname",
+                              "no address associated")):
+        return ("ต่อเซิร์ฟเวอร์ฐานข้อมูลไม่ได้ ให้ใช้ connection string แบบ Session pooler "
+                "(host ลงท้าย pooler.supabase.com) ไม่ใช่ Direct connection")
+    if "timeout" in low or "timed out" in low:
+        return "เชื่อมต่อฐานข้อมูลไม่ทันเวลา ลองใหม่ หรือเช็กว่าโปรเจกต์ Supabase ไม่ได้ถูก pause"
+    if any(s in low for s in ("invalid dsn", "invalid connection option", "missing \"=\"", "invalid uri",
+                              "invalid port", "invalid integer value")):
+        return "รูปแบบ DATABASE_URL ไม่ถูกต้อง (อักขระพิเศษในรหัสผ่าน เช่น @ # / ต้อง URL-encode)"
+    if "connection refused" in low:
+        return "เซิร์ฟเวอร์ฐานข้อมูลปฏิเสธการเชื่อมต่อ (เช็ก host และ port ใน DATABASE_URL)"
+    return "เชื่อมต่อฐานข้อมูลไม่ได้ (ดูรายละเอียดใน Render → Logs)"
 
 
 @dataclass
@@ -130,7 +172,16 @@ class Database:
         local = any(h in self.url for h in ("localhost", "127.0.0.1", "/var/run", "host=/"))
         if "sslmode=" not in self.url and not local:
             kwargs["sslmode"] = "require"
-        with psycopg.connect(self.url, **kwargs) as conn:
+        problem = check_url(self.url)
+        if problem:
+            log.error("DATABASE_URL rejected before connecting: %s", problem)
+            raise DatabaseUnavailable(problem)
+        try:
+            conn = psycopg.connect(self.url, **kwargs)
+        except psycopg.Error as exc:
+            log.error("database connection failed: %s", exc)  # libpq never includes the password
+            raise DatabaseUnavailable(explain_connection_error(exc)) from exc
+        with conn:
             yield conn
 
     def today(self) -> date:

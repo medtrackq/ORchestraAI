@@ -19,6 +19,7 @@ import secrets
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 
 ROLES = {
@@ -55,6 +56,14 @@ class AuthError(Exception):
 
 class TooManyAttempts(AuthError):
     pass
+
+
+class ServiceUnavailable(AuthError):
+    """The account store (database) cannot be reached right now."""
+
+
+DB_DOWN = ("ระบบเชื่อมต่อฐานข้อมูลไม่ได้ชั่วคราว ผู้ดูแลระบบ: เข้าด้วยบัญชีหลัก (APP_USERNAME) "
+           "เพื่อดูสาเหตุ หรือดู Render → Logs")
 
 
 NO_TABLE = "ยังไม่มีตาราง app_users ให้รัน supabase/migrations/20261102000000_user_accounts.sql ใน SQL Editor"
@@ -263,13 +272,27 @@ class DbUserStore:
     def __init__(self, database) -> None:
         self.db = database
 
+    @contextmanager
+    def _connect(self):
+        from .db import DatabaseUnavailable
+
+        try:
+            with self.db.connect() as conn:
+                yield conn
+        except DatabaseUnavailable as exc:
+            raise ServiceUnavailable(DB_DOWN) from exc
+
     def _query(self, sql: str, params=(), *, missing=None):
         """Run a query; if migration 003 is missing return ``missing`` (or explain)."""
         import psycopg
 
+        from .db import DatabaseUnavailable
+
         try:
             with self.db.connect() as conn:
                 return list(conn.execute(sql, params))
+        except DatabaseUnavailable as exc:
+            raise ServiceUnavailable(DB_DOWN) from exc
         except psycopg.errors.UndefinedTable as exc:
             if missing is not None:
                 return missing
@@ -315,7 +338,7 @@ class DbUserStore:
         import psycopg
 
         try:
-            with self.db.connect() as conn:
+            with self._connect() as conn:
                 row = conn.execute(
                     f"""INSERT INTO app_users (username, display_name, role, staff_id, password_hash)
                         VALUES (%s, %s, %s, %s, %s) RETURNING {self.COLS}""",
@@ -336,7 +359,7 @@ class DbUserStore:
             raise AuthError("ไม่พบผู้ใช้")
         merged = {**asdict(current), **{k: v for k, v in changes.items() if v is not None or k == "staff_id"}}
         _validate(merged["role"], merged["display_name"], merged["staff_id"])
-        with self.db.connect() as conn:
+        with self._connect() as conn:
             row = conn.execute(
                 f"""UPDATE app_users SET display_name = %s, role = %s, staff_id = %s, is_active = %s,
                         session_version = session_version + 1
@@ -352,7 +375,7 @@ class DbUserStore:
         if user is None:
             raise AuthError("ไม่พบผู้ใช้")
         check_new_password(password, user.username)
-        with self.db.connect() as conn:
+        with self._connect() as conn:
             conn.execute(
                 """UPDATE app_users SET password_hash = %s, must_change_password = %s,
                        session_version = session_version + 1 WHERE user_id = %s""",
@@ -360,7 +383,7 @@ class DbUserStore:
             )
 
     def touch_login(self, user_id: str) -> None:
-        with self.db.connect() as conn:
+        with self._connect() as conn:
             conn.execute("UPDATE app_users SET last_login_at = NOW() WHERE user_id = %s", (uuid.UUID(user_id),))
 
 
@@ -407,7 +430,10 @@ class Accounts:
         if payload["uid"] == ENV_ADMIN_ID:
             user = env_admin()
         else:
-            user = self.store.get(payload["uid"])
+            try:
+                user = self.store.get(payload["uid"])
+            except ServiceUnavailable:
+                return None  # database down: treat as signed out; login explains
         if user is None or not user.is_active or user.session_version != payload.get("sv"):
             return None
         return user
