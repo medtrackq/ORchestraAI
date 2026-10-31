@@ -57,14 +57,65 @@ class DatabaseUnavailable(Exception):
     """Could not open a connection; the message says what to fix in DATABASE_URL."""
 
 
+# Query parameters libpq understands; others (e.g. Prisma's pgbouncer=true) are dropped.
+_LIBPQ_PARAMS = {
+    "sslmode", "sslrootcert", "sslcert", "sslkey", "channel_binding", "gssencmode", "connect_timeout",
+    "application_name", "options", "target_session_attrs", "keepalives", "keepalives_idle", "user", "password",
+    "dbname", "host", "port",
+}
+
+
+def normalize_url(raw: str) -> str:
+    """Undo the usual paste accidents: `DATABASE_URL=` / `export` prefixes, quotes,
+    spaces or new lines, a `jdbc:` prefix and ORM-only query parameters."""
+    url = (raw or "").strip()
+    if url.lower().startswith("export "):
+        url = url[7:].strip()
+    if url.upper().startswith("DATABASE_URL="):
+        url = url.split("=", 1)[1].strip()
+    if len(url) >= 2 and url[0] == url[-1] and url[0] in "\"'`":
+        url = url[1:-1].strip()
+    if url.startswith("jdbc:"):
+        url = url[5:]
+    if url.startswith(("postgres://", "postgresql://")):
+        url = "".join(url.split())  # no spaces or line breaks belong in a URI (key=value form keeps them)
+        query_at = url.find("?", url.rfind("@") + 1)
+        if query_at != -1:
+            kept = [p for p in url[query_at + 1:].split("&") if p.split("=", 1)[0] in _LIBPQ_PARAMS]
+            url = url[:query_at] + ("?" + "&".join(kept) if kept else "")
+    return url
+
+
+def _bad_percent(text: str) -> bool:
+    """True if a % is not followed by two hex digits (a raw % in a password)."""
+    i = text.find("%")
+    while i != -1:
+        code = text[i + 1:i + 3]
+        if len(code) < 2 or any(c not in "0123456789abcdefABCDEF" for c in code):
+            return True
+        i = text.find("%", i + 3)
+    return False
+
+
 def check_url(url: str) -> str | None:
     """Catch the usual copy-paste mistakes before the driver reports something misleading."""
     if "[YOUR-PASSWORD]" in url or "[YOUR_PASSWORD]" in url:
         return "ยังไม่ได้แทน [YOUR-PASSWORD] ใน DATABASE_URL ด้วยรหัสผ่านฐานข้อมูลจริง"
-    if url.startswith(("postgres://", "postgresql://")):
-        authority = url.split("://", 1)[1].split("/", 1)[0]
-        if authority.count("@") > 1 or "#" in authority or " " in authority:
-            return "รหัสผ่านใน DATABASE_URL มีอักขระพิเศษ (@ # หรือเว้นวรรค) ต้อง URL-encode หรือตั้งรหัสใหม่ที่มีแต่ตัวอักษรกับตัวเลข"
+    if not url.startswith(("postgres://", "postgresql://")):
+        try:  # libpq key=value form ("host=... dbname=...") is valid too
+            if psycopg.conninfo.conninfo_to_dict(url).get("host"):
+                return None
+        except psycopg.ProgrammingError:
+            pass
+        return ("DATABASE_URL ต้องเป็นข้อความแบบ URI ที่ขึ้นต้นด้วย postgresql:// "
+                "(ใน Supabase → Connect เลือก Session pooler แบบ URI ไม่ใช่ PSQL, JDBC หรือ .NET)")
+    rest = url.split("://", 1)[1]
+    if "@" not in rest:
+        return "DATABASE_URL ไม่มีชื่อผู้ใช้และรหัสผ่าน (ต้องมีรูปแบบ postgresql://ชื่อผู้ใช้:รหัสผ่าน@host:5432/postgres)"
+    userinfo = rest[:rest.rfind("@")]
+    if any(ch in userinfo for ch in "/?#[] @") or _bad_percent(userinfo):
+        return ("รหัสผ่านใน DATABASE_URL มีอักขระพิเศษ (เช่น @ # / ? % หรือเว้นวรรค) "
+                "ให้ตั้งรหัสฐานข้อมูลใหม่ที่มีแต่ตัวอักษรภาษาอังกฤษกับตัวเลข")
     return None
 
 
@@ -83,9 +134,11 @@ def explain_connection_error(exc: Exception) -> str:
                 "(host ลงท้าย pooler.supabase.com) ไม่ใช่ Direct connection")
     if "timeout" in low or "timed out" in low:
         return "เชื่อมต่อฐานข้อมูลไม่ทันเวลา ลองใหม่ หรือเช็กว่าโปรเจกต์ Supabase ไม่ได้ถูก pause"
-    if any(s in low for s in ("invalid dsn", "invalid connection option", "missing \"=\"", "invalid uri",
-                              "invalid port", "invalid integer value")):
-        return "รูปแบบ DATABASE_URL ไม่ถูกต้อง (อักขระพิเศษในรหัสผ่าน เช่น @ # / ต้อง URL-encode)"
+    if any(s in low for s in ("invalid connection option", "missing \"=\"")):
+        return "DATABASE_URL ต้องเป็นข้อความแบบ URI ที่ขึ้นต้นด้วย postgresql:// อย่างเดียว"
+    if any(s in low for s in ("invalid dsn", "invalid uri", "invalid port", "invalid integer value",
+                              "percent-encoded")):
+        return "รูปแบบ DATABASE_URL ไม่ถูกต้อง (รหัสผ่านควรมีแต่ตัวอักษรภาษาอังกฤษกับตัวเลข)"
     if "connection refused" in low:
         return "เซิร์ฟเวอร์ฐานข้อมูลปฏิเสธการเชื่อมต่อ (เช็ก host และ port ใน DATABASE_URL)"
     return "เชื่อมต่อฐานข้อมูลไม่ได้ (ดูรายละเอียดใน Render → Logs)"
@@ -162,7 +215,7 @@ def case_code(request_id: uuid.UUID, urgency: str, taken: set[str]) -> str:
 
 class Database:
     def __init__(self, url: str, tz: str = "Asia/Bangkok") -> None:
-        self.url = url
+        self.url = normalize_url(url)
         self.tz = ZoneInfo(tz)
 
     @contextmanager
