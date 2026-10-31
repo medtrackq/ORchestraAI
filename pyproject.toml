@@ -1,0 +1,20 @@
+[project]
+name = "orchestra-engine"
+version = "0.1.0"
+description = "ORchestraAI: multi-agent operating room scheduling engine (OR-Tools CP-SAT)"
+requires-python = ">=3.10"
+dependencies = ["ortools>=9.10"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["orchestra_engine"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
