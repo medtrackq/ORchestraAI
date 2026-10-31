@@ -23,7 +23,13 @@ CREATE TABLE IF NOT EXISTS public.app_users (
 );
 ALTER TABLE public.app_users ENABLE ROW LEVEL SECURITY;
 
--- Audit: who triggered each scheduler change.
-ALTER TABLE public.orchestra_activity ADD COLUMN IF NOT EXISTS actor VARCHAR(150);
+-- Audit: who triggered each scheduler change. The activity table comes from
+-- migration 002; if 002 has not been run yet, 002 creates it with this column.
+DO $$
+BEGIN
+  IF to_regclass('public.orchestra_activity') IS NOT NULL THEN
+    ALTER TABLE public.orchestra_activity ADD COLUMN IF NOT EXISTS actor VARCHAR(150);
+  END IF;
+END $$;
 
 COMMIT;

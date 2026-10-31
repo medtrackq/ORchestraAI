@@ -82,7 +82,8 @@ CREATE TABLE IF NOT EXISTS public.orchestra_activity (
     title         TEXT NOT NULL,
     agent_log     JSONB NOT NULL DEFAULT '[]',
     changes       JSONB NOT NULL DEFAULT '[]',
-    notifications JSONB NOT NULL DEFAULT '[]'
+    notifications JSONB NOT NULL DEFAULT '[]',
+    actor         VARCHAR(150)            -- who triggered the change (see migration 003)
 );
 CREATE INDEX IF NOT EXISTS orchestra_activity_date_idx ON public.orchestra_activity (planning_date, created_at DESC);
 ALTER TABLE public.orchestra_activity ENABLE ROW LEVEL SECURITY;
