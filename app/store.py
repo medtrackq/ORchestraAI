@@ -10,6 +10,7 @@ from __future__ import annotations
 import threading
 from collections import Counter
 from dataclasses import dataclass, field
+from datetime import date
 
 from orchestra_engine import (
     ScheduleResult,
@@ -37,6 +38,12 @@ EQUIPMENT_STATUSES = ("AVAILABLE", "IN_USE", "STERILIZING", "MAINTENANCE")
 
 def actor_name(actor: dict | None) -> str | None:
     return None if actor is None else f"{actor.get('name')} ({actor.get('role')})"
+
+
+def check_team(actor: dict | None, staff_ids) -> None:
+    """Surgeons and clinical staff may record times only for cases they are on."""
+    if actor and actor.get("role") in ("surgeon", "staff") and actor.get("staff_id") not in staff_ids:
+        raise Forbidden("บันทึกเวลาได้เฉพาะเคสที่คุณอยู่ในทีม")
 
 
 def check_own_case(actor: dict | None, surgeon_id: str) -> None:
@@ -136,6 +143,14 @@ class ScheduleStore:
             self.hospital: Hospital = build_hospital()
             self.opt = self.hospital.optimizer(time_limit_s=self.time_limit_s, num_workers=self.workers)
             self.result: ScheduleResult = self.opt.solve_schedule(elective_day(), "Elective day", verbose=False)
+            from orchestra_engine.intake import HistoryRecord, synthetic_history
+
+            from .seed import demo_catalog
+
+            self.procedures, self.cards = demo_catalog()
+            self.history = [HistoryRecord(r["surgeon_id"], r["procedure_id"], r["actual"])
+                            for r in synthetic_history(self.cards)]
+            self.actuals: dict[str, list[int | None]] = {}  # case_id -> [start, end] minutes
             self._ids = Counter()
             self.activity: list[Activity] = [Activity(
                 "reset", "โหลดข้อมูลตัวอย่าง",
@@ -159,11 +174,17 @@ class ScheduleStore:
             "equipment_types": [{"type": t, "units": n} for t, n in sorted(usable.items())],
             "capabilities": caps,
             "bed_types": sorted({b.bed_type for b in h.beds}),
+            "procedures": self.procedures,
+            "cards": self.cards,
         }
 
     def state(self, day: str | None = None) -> dict:
         schedule = self.result.to_dict()
         bookings = schedule["bookings"]
+        for b in bookings:
+            start, end = self.actuals.get(b["case_id"], [None, None])
+            b["actual_start"] = fmt(start) if start is not None else None
+            b["actual_end"] = fmt(end) if end is not None else None
         start = min([hm("08:00"), *[b["start_min"] for b in bookings]]) // 60 * 60
         now = self.result.now_min
         end = -(-max([hm("18:00"), *[b["cleanup_end_min"] for b in bookings],
@@ -195,6 +216,48 @@ class ScheduleStore:
         if errors:  # never store a schedule with a conflict
             raise StoreError("ตารางที่คำนวณได้ไม่ผ่านการตรวจ: " + "; ".join(errors[:3]))
         self.result = result
+
+    # ------------------------------------------------------------- intake
+
+    def intake_context(self, day: str | None = None):
+        from orchestra_engine.intake import HistoryRecord
+
+        from .intake_service import IntakeContext
+
+        by_name = {p["name"]: p["id"] for p in self.procedures}
+        recorded = []
+        for cid, (start, end) in self.actuals.items():
+            case, a = self.result.cases.get(cid), self.result.assignments.get(cid)
+            if case and a and start is not None and end is not None and case.procedure in by_name:
+                recorded.append(HistoryRecord(a.staff_ids[0], by_name[case.procedure], end - start))
+        surgeons = [{"id": s.staff_id, "name": s.name} for s in self.hospital.staff
+                    if s.role == StaffRole.SURGEON and s.is_active]
+        return IntakeContext(date.today(), self.procedures, surgeons, self.cards, self.history + recorded)
+
+    def record_actual(self, case_id: str, start_text: str | None, end_text: str | None, *,
+                      day: str | None = None, actor: dict | None = None) -> dict:
+        if not start_text and not end_text:
+            raise StoreError("กรุณาใส่เวลาเริ่มหรือเวลาเสร็จ")
+        with self._lock:
+            a = self.result.assignments.get(case_id)
+            if a is None:
+                raise StoreError(f"ไม่พบเคส {case_id} ในตาราง")
+            check_team(actor, a.staff_ids)
+            times = self.actuals.setdefault(case_id, [None, None])
+            if start_text:
+                times[0] = parse_time(start_text)
+            if end_text:
+                times[1] = parse_time(end_text)
+            if times[1] is not None and times[0] is None:
+                raise StoreError("บันทึกเวลาเริ่มผ่าตัดก่อน")
+            if times[1] is not None and times[1] <= times[0]:
+                times[1] += 24 * 60  # finished after midnight
+            planned = a.end_min - a.start_min
+            minutes = times[1] - times[0] if times[1] is not None else None
+            title = f"{case_id} เวลาจริง " + (f"{minutes} นาที (วางแผน {planned})" if minutes else
+                                               f"เริ่ม {fmt(times[0])}")
+            self.activity.append(Activity("actual", title, [], actor=actor_name(actor)))
+            return {"case_id": case_id, "actual_minutes": minutes, "planned_minutes": planned}
 
     def people(self) -> list[dict]:
         return [{"id": s.staff_id, "name": s.name, "role": s.role} for s in self.hospital.staff]

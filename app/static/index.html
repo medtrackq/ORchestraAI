@@ -95,7 +95,7 @@
   .tab.er[aria-selected="true"] { color: var(--emergency); }
   form { display: grid; gap: 10px; }
   label { display: grid; gap: 4px; font-size: .82rem; color: var(--muted); }
-  input[type="text"], input[type="number"], input[type="time"], select {
+  input[type="text"], input[type="number"], input[type="time"], select, textarea {
     width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); color: var(--text); }
   .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
   fieldset { border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px 10px; margin: 0; min-width: 0; }
@@ -147,6 +147,18 @@
   .secret { font: .9rem ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--warn-soft); color: var(--warn); padding: 8px 10px; border-radius: 8px; overflow-wrap: anywhere; }
   dialog { border: 1px solid var(--border); border-radius: 14px; background: var(--surface); color: var(--text); padding: 20px; width: min(380px, calc(100% - 32px)); }
   dialog::backdrop { background: rgba(15,23,42,.5); }
+  .intake { border: 1px dashed var(--accent); border-radius: 12px; padding: 12px; margin-bottom: 14px; display: grid; gap: 8px; background: var(--accent-soft); }
+  .intake textarea { resize: vertical; min-height: 64px; font: inherit; }
+  .intake-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .intake-actions .hint { flex: 1 1 160px; }
+  .prediction { border-radius: 10px; background: var(--surface-2); border: 1px solid var(--border); padding: 8px 10px; font-size: .8rem; }
+  .prediction b { color: var(--accent); }
+  .prediction ul { margin: 4px 0 0; padding-left: 18px; color: var(--muted); }
+  .triage { display: inline-block; padding: 2px 10px; border-radius: 99px; font-size: .75rem; font-weight: 600; color: #fff; }
+  .triage.ELECTIVE { background: var(--elective); } .triage.URGENT { background: var(--urgent); color: #1f1300; } .triage.EMERGENCY { background: var(--emergency); }
+  .mic-on { background: var(--emergency) !important; color: #fff !important; border-color: var(--emergency) !important; }
+  .actual-form { display: flex; gap: 8px; flex-wrap: wrap; align-items: end; margin-top: 8px; }
+  .actual-form label { flex: 1 1 110px; }
   [hidden] { display: none !important; }
 
   @media (max-width: 1100px) { .layout { grid-template-columns: minmax(0, 1fr); } }
@@ -205,6 +217,18 @@
       <button class="tab" role="tab" aria-selected="false" data-tab="log" data-perm="view">กิจกรรม</button>
     </div>
 
+      <div class="intake" id="intake-box" hidden>
+        <label for="intake-text"><b>Intake &amp; Triage Agent</b> · พิมพ์หรือพูดคำขอผ่าตัด (ไม่ต้องใส่ชื่อผู้ป่วย)</label>
+        <textarea id="intake-text" rows="3" maxlength="2000"
+          placeholder="เช่น หมอ Napat ขอผ่าตัดถุงน้ำดีส่องกล้อง HN 123456 พรุ่งนี้ 9 โมง เคสซับซ้อน มีพังผืด"></textarea>
+        <div class="intake-actions">
+          <button class="btn" type="button" id="intake-mic" hidden
+            title="ใช้ระบบแปลงเสียงของเบราว์เซอร์ (Chrome ส่งเสียงไปแปลงที่ Google)">🎙️ พูด</button>
+          <button class="btn primary" type="button" id="intake-parse">วิเคราะห์คำขอ</button>
+          <span class="hint" id="intake-mode"></span>
+        </div>
+        <div id="intake-result"></div>
+      </div>
     <section data-panel="book">
       <form id="form-book">
         <p class="hint">กรอกคำขอ แล้วให้ Agent ทั้ง 3 ตรวจเวลาที่ต้องการ ถ้าไม่ว่าง ระบบจะเสนอช่วงถัดไปที่พร้อมครบ</p>
@@ -359,7 +383,13 @@
         <label>HN ผู้ป่วย<input type="text" name="patient_hn" value="${esc(defaults.hn)}" required maxlength="50"></label>
         <label>ชื่อผู้ป่วย${db ? '' : ' (ไม่บังคับ)'}<input type="text" name="patient_name" maxlength="150" ${db ? 'required' : ''}></label>
       </div>
-      <label>ระยะเวลาผ่าตัด (นาที)<input type="number" name="duration_mins" value="${defaults.dur}" min="15" max="720" step="5" required></label>
+      <div class="row2">
+        <label>ความซับซ้อนของเคส
+          <select name="complexity"><option value="simple">ง่าย</option><option value="standard" selected>ปกติ</option><option value="complex">ซับซ้อน</option></select>
+        </label>
+        <label>ระยะเวลาผ่าตัด (นาที)<input type="number" name="duration_mins" value="${defaults.dur}" min="15" max="720" step="5" required></label>
+      </div>
+      <div class="prediction" data-role="prediction" hidden></div>
       <fieldset><legend>ห้องต้องมี</legend><div class="checks">${caps}</div></fieldset>
       <fieldset><legend>เครื่องมือ (ชุดละ 1)</legend><div class="checks">${eq}</div></fieldset>
       <div class="row2">
@@ -389,9 +419,32 @@
     form.elements['icu'].checked = p.icu;
     form.elements['infection_risk'].value = p.infection;
     if (card) form.dataset.roles = JSON.stringify(card.roles);
+    delete form.dataset.durationTouched;
+    updatePrediction(form);
     hint.textContent = card
       ? `ค่าจาก preference card: ${card.duration} นาที (±${card.stddev ?? '?'}), ทีม ${Object.entries(card.roles).map(([r, n]) => n + ' ' + r).join(', ')}`
       : 'ศัลยแพทย์คนนี้ยังไม่มี preference card สำหรับหัตถการนี้ ใช้เวลามาตรฐานของหัตถการและทีมมาตรฐาน';
+  }
+
+  // Intake & Triage Agent: forecast from the surgeon's real history (+ complexity).
+  async function updatePrediction(form) {
+    const box = form.querySelector('[data-role="prediction"]');
+    const pid = form.elements['procedure_id']?.value, sid = form.elements['surgeon_id']?.value;
+    if (!pid || !sid || !can('book')) { box.hidden = true; return; }
+    const seq = (form._predSeq = (form._predSeq || 0) + 1);
+    try {
+      const { prediction } = await api('/api/intake/predict', { surgeon_id: sid, procedure_id: pid, complexity: form.elements['complexity'].value });
+      if (seq !== form._predSeq) return;  // a newer request is on its way
+      showPrediction(box, prediction);
+      if (prediction && !form.dataset.durationTouched) form.elements['duration_mins'].value = prediction.recommended_mins;
+    } catch (e) { box.hidden = true; }
+  }
+
+  function showPrediction(box, p) {
+    if (!p) { box.hidden = true; return; }
+    box.hidden = false;
+    box.innerHTML = `พยากรณ์เวลาผ่าตัด <b>${p.expected_mins} นาที</b> · แนะนำจอง <b>${p.recommended_mins} นาที</b>
+      (ช่วงปกติ ${p.low_mins}-${p.high_mins})<ul>${p.explanation.map(x => '<li>' + esc(x) + '</li>').join('')}</ul>`;
   }
 
   function readCase(form, urgency) {
@@ -481,7 +534,32 @@
         <dt>เครื่องมือ</dt><dd>${b.equipment.map(e => esc(e.unit_id) + ' (กลับจาก CSSD ' + hhmm(e.back_from_cssd_min) + ')').join(', ') || '-'}</dd>
         <dt>เตียงพักฟื้น</dt><dd>${b.bed_id ? esc(b.bed_id) + ' ' + hhmm(b.recovery_start_min) + '-' + hhmm(b.recovery_end_min) : '-'}</dd>
       </dl>
-      ${b.reasoning.length ? '<ul class="why">' + b.reasoning.map(r => '<li>' + esc(r) + '</li>').join('') + '</ul>' : ''}`;
+      ${b.reasoning.length ? '<ul class="why">' + b.reasoning.map(r => '<li>' + esc(r) + '</li>').join('') + '</ul>' : ''}
+      ${actualTimes(b)}`;
+    const form = box.querySelector('.actual-form');
+    if (form) form.addEventListener('submit', e => {
+      e.preventDefault();
+      const f = new FormData(form);
+      busy(form.querySelector('button'), async () => {
+        const data = await api('/api/cases/' + encodeURIComponent(b.case_id) + '/actual',
+          { start: f.get('start') || null, end: f.get('end') || null });
+        STATE = data.state; render();
+        const r = data.result;
+        toast(r.actual_minutes ? `บันทึกแล้ว: ใช้จริง ${r.actual_minutes} นาที (วางแผน ${r.planned_minutes}) ระบบจะใช้เรียนรู้` : 'บันทึกเวลาเริ่มแล้ว', true);
+      });
+    });
+  }
+
+  function actualTimes(b) {
+    const recorded = b.actual_start ? `เริ่ม ${esc(b.actual_start)}${b.actual_end ? ' · เสร็จ ' + esc(b.actual_end) : ' · ยังไม่เสร็จ'}` : 'ยังไม่บันทึก';
+    const mine = STATE.me.staff_id && b.team.some(t => t.staff_id === STATE.me.staff_id);
+    const allowed = can('record_times') && (['admin', 'scheduler'].includes(STATE.me.role) || mine);
+    return `<dl style="margin-top:8px"><dt>เวลาผ่าตัดจริง</dt><dd>${recorded}</dd></dl>` + (allowed ? `
+      <form class="actual-form">
+        <label>เริ่มจริง<input type="time" name="start" value="${esc(b.actual_start || '')}"></label>
+        <label>เสร็จจริง<input type="time" name="end" value="${esc(b.actual_end || '')}"></label>
+        <button class="btn primary" type="submit">บันทึกเวลาจริง</button>
+      </form>` : '');
   }
 
   function applyTabs() {
@@ -491,6 +569,8 @@
     if (!current || current.hidden) selectTab(tabs.find(t => !t.hidden).dataset.tab);
     const log = tabs.find(t => t.dataset.tab === 'log');
     log.textContent = can('all_notifications') ? 'กิจกรรม' : 'แจ้งเตือนของฉัน';
+    const active = tabs.find(t => t.getAttribute('aria-selected') === 'true');
+    $('#intake-box').hidden = !(can('book') && active && ['book', 'er'].includes(active.dataset.tab));
   }
 
   function selectTab(name) {
@@ -499,6 +579,7 @@
     if (already) return;  // no reload: it would wipe what the user is typing
     document.querySelectorAll('.tab').forEach(t => t.setAttribute('aria-selected', String(t.dataset.tab === name)));
     document.querySelectorAll('[data-panel]').forEach(p => { p.hidden = p.dataset.panel !== name; });
+    $('#intake-box').hidden = !(can('book') && ['book', 'er'].includes(name));  // intake serves both forms
     if (name === 'equip') loadEquipment().catch(e => toast(e.message));
     if (name === 'users') loadUsers().catch(e => toast(e.message));
   }
@@ -525,6 +606,7 @@
       STATE = data.state;
       buildForms();
       render();
+      loadIntakeInfo().catch(() => {});
     }));
   }
 
@@ -662,8 +744,11 @@
     if (!pick(book, n => /cholecystectomy/i.test(n)) && !pick(book, n => !/emergency/i.test(n))) {
       book.querySelector('input[value="LAPAROSCOPY_TRAY"]')?.click();
     }
-    [book, er].forEach(form => ['surgeon_id', 'procedure_id'].forEach(name =>
-      form.elements[name]?.addEventListener('change', () => applyDefaults(form))));
+    [book, er].forEach(form => {
+      ['surgeon_id', 'procedure_id'].forEach(name => form.elements[name]?.addEventListener('change', () => applyDefaults(form)));
+      form.elements['complexity'].addEventListener('change', () => { delete form.dataset.durationTouched; updatePrediction(form); });
+      form.elements['duration_mins'].addEventListener('input', () => { form.dataset.durationTouched = '1'; });
+    });
     const now = STATE.schedule.now_min && STATE.schedule.now_min < 24 * 60 ? hhmm(STATE.schedule.now_min) : nowText();
     er.elements['now'].value = now;
     $('#form-over').elements['now'].value = now;
@@ -790,6 +875,96 @@
     });
   });
 
+  // ------------------------------------------------------------ intake agent
+  const URGENCY_TH = { ELECTIVE: 'Elective (นัดล่วงหน้า)', URGENT: 'Urgent (ด่วน)', EMERGENCY: 'Emergency (ฉุกเฉิน)' };
+
+  async function loadIntakeInfo() {
+    const box = $('#intake-mode');
+    if (!can('book')) return;
+    const info = await api('/api/intake/info');
+    box.innerHTML = (info.llm_enabled ? `ใช้ Claude (${esc(info.model)}) + กฎความปลอดภัย` : 'ใช้ตัวแยกคำแบบกฎ (ตั้ง ANTHROPIC_API_KEY เพื่อใช้ Claude)')
+      + ` · ประวัติเวลาผ่าตัดจริง ${info.history_count} เคส`
+      + (info.history_count === 0 && can('seed') && STATE.mode === 'supabase'
+        ? ' <button class="btn" type="button" id="seed-history">สร้างประวัติตัวอย่าง</button>' : '');
+    $('#seed-history')?.addEventListener('click', e => busy(e.target, async () => {
+      const r = await api('/api/intake/seed-history', {});
+      toast(`สร้างประวัติตัวอย่าง ${r.history} เคสแล้ว`, true);
+      await loadIntakeInfo();
+    }));
+  }
+
+  function fillForm(form, f) {
+    const pick = (name, value) => {
+      const el = form.elements[name];
+      if (el && value && [...(el.options || [])].some(o => o.value === value)) el.value = value;
+    };
+    pick('surgeon_id', f.surgeon_id);
+    if (f.procedure_id && form.elements['procedure_id']) {
+      pick('procedure_id', f.procedure_id);
+      applyDefaults(form);
+    } else if (f.procedure) {
+      form.elements['procedure'].value = f.procedure;
+    }
+    if (f.patient_hn) form.elements['patient_hn'].value = f.patient_hn;
+    pick('complexity', f.complexity);
+    if (f.required_capabilities) form.querySelectorAll('input[name="cap"]').forEach(x => { x.checked = f.required_capabilities.includes(x.value); });
+    if (f.required_equipment_types) form.querySelectorAll('input[name="eq"]').forEach(x => { x.checked = f.required_equipment_types.includes(x.value); });
+    if (f.required_staff_roles) form.dataset.roles = JSON.stringify(f.required_staff_roles);
+    form.elements['icu'].checked = !!f.requires_icu_post_op;
+    pick('infection_risk', f.infection_risk);
+    if (f.duration_mins) {
+      form.elements['duration_mins'].value = f.duration_mins;
+      if (f.duration_source === 'ระบุในคำขอ') form.dataset.durationTouched = '1';
+    }
+    updatePrediction(form);
+  }
+
+  async function runIntake() {
+    const text = $('#intake-text').value.trim();
+    if (!text) { toast('พิมพ์หรือพูดคำขอก่อน'); return; }
+    const data = await api('/api/intake/parse', { text });
+    const f = data.fields;
+    const notes = [...data.warnings];
+    if (f.date && STATE.mode === 'supabase' && f.date !== STATE.date) await loadDay(f.date);
+    else if (f.date && STATE.mode !== 'supabase') notes.push('โหมดข้อมูลจำลองมีวันเดียว จึงไม่เปลี่ยนวันที่');
+    const emergency = f.urgency === 'EMERGENCY';
+    const form = emergency ? $('#form-er') : $('#form-book');
+    fillForm(form, f);
+    if (!emergency) {
+      form.elements['urgency'].value = f.urgency === 'URGENT' ? 'URGENT' : 'ELECTIVE';
+      if (f.start) form.elements['start'].value = f.start;
+    }
+    $('#intake-result').innerHTML = `
+      <div><span class="triage ${esc(f.urgency)}">${esc(URGENCY_TH[f.urgency] || f.urgency)}</span>
+        <span class="hint">${esc(f.urgency_reason || '')} · อ่านโดย ${data.source === 'claude' ? 'Claude' : 'ตัวแยกคำแบบกฎ'}</span></div>
+      <p class="hint" style="margin-top:6px">${esc([f.procedure, f.date, f.start, f.duration_mins ? f.duration_mins + ' นาที (' + f.duration_source + ')' : ''].filter(Boolean).join(' · '))}</p>
+      ${notes.length ? '<ul class="changes">' + notes.map(n => '<li>' + esc(n) + '</li>').join('') + '</ul>' : ''}
+      ${emergency ? '<p class="hint"><b>เคสฉุกเฉิน:</b> กรอกข้อมูลในแท็บ "ฉุกเฉิน" ให้แล้ว ตรวจสอบแล้วกด "แทรกเคสฉุกเฉิน"</p>' : '<p class="hint">กรอกฟอร์มด้านล่างให้แล้ว ตรวจสอบ ใส่ชื่อผู้ป่วย แล้วกด "ตรวจสอบช่วงเวลา"</p>'}`;
+    if (emergency) selectTab('er');
+  }
+
+  $('#intake-parse').addEventListener('click', e => busy(e.target, runIntake));
+
+  // Voice input through the browser's speech recognition (Thai), when available.
+  const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (Recognition) {
+    const mic = $('#intake-mic');
+    let recognizer = null;
+    mic.hidden = false;
+    mic.addEventListener('click', () => {
+      if (recognizer) { recognizer.stop(); return; }
+      const base = $('#intake-text').value ? $('#intake-text').value.trimEnd() + ' ' : '';
+      recognizer = new Recognition();
+      recognizer.lang = 'th-TH';
+      recognizer.interimResults = true;
+      recognizer.onresult = e => { $('#intake-text').value = base + [...e.results].map(r => r[0].transcript).join(''); };
+      recognizer.onerror = e => toast('แปลงเสียงไม่สำเร็จ: ' + e.error);
+      recognizer.onend = () => { recognizer = null; mic.classList.remove('mic-on'); mic.textContent = '🎙️ พูด'; };
+      recognizer.start();
+      mic.classList.add('mic-on'); mic.textContent = '⏹ หยุด';
+    });
+  }
+
   async function loadDay(day) {
     const path = day ? '/api/state?date=' + day : '/api/state';
     STATE = await api(path);
@@ -797,6 +972,7 @@
     ['#result-book', '#result-er', '#result-over'].forEach(id => { $(id).innerHTML = ''; });
     buildForms();
     render();
+    loadIntakeInfo().catch(() => {});
   }
 
   $('#date').addEventListener('change', e => { if (e.target.value) loadDay(e.target.value).catch(err => toast(err.message)); });

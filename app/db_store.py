@@ -14,13 +14,16 @@ from datetime import date
 
 import psycopg
 
+from datetime import timedelta
+
 from orchestra_engine import ORchestraOptimizer, ScheduleResult, fmt, hm, validate_schedule
 from orchestra_engine.demo import elective_day
 
 from . import seed
 from .db import ConflictError, Database, DatabaseUnavailable, World, case_code
-from .store import (Activity, StoreError, actor_name, build_case, check_own_case, equipment_rows, parse_time,
-                    ready_minute)
+from .intake_service import IntakeContext
+from .store import (Activity, StoreError, actor_name, build_case, check_own_case, check_team, equipment_rows,
+                    parse_time, ready_minute)
 
 
 class DatabaseStore:
@@ -110,6 +113,10 @@ class DatabaseStore:
     def _state(self, world: World, activity: list[dict]) -> dict:
         schedule = world.result.to_dict()
         bookings = schedule["bookings"]
+        for b in bookings:
+            row = world.bookings.get(b["case_id"], {})
+            for key, col in (("actual_start", "actual_start_time"), ("actual_end", "actual_end_time")):
+                b[key] = fmt(world.minute(row[col])) if row.get(col) else None
         start = min([hm("08:00"), *[b["start_min"] for b in bookings]]) // 60 * 60
         now = world.now_min
         end = -(-max([hm("18:00"), *[b["cleanup_end_min"] for b in bookings],
@@ -172,6 +179,58 @@ class DatabaseStore:
             self.db.log_activity(conn, after, record)
             unit = next(u for u in after.hospital.equipments if u.unit_id == serial)
             return {"unit": equipment_rows([unit])[0], "warnings": problems}
+
+    # ------------------------------------------------------------- intake
+
+    def intake_context(self, day: str | None = None) -> IntakeContext:
+        with self._transaction(write=False) as conn:
+            world = self.db.load(conn, self._day(day))
+            history = self.db.history(conn)
+        surgeons = [{"id": s.staff_id, "name": s.name} for s in world.hospital.staff
+                    if s.role == "SURGEON" and s.is_active]
+        return IntakeContext(world.day, world.procedures, surgeons, world.cards, history)
+
+    def record_actual(self, case_id: str, start_text: str | None, end_text: str | None, *,
+                      day: str | None = None, actor: dict | None = None) -> dict:
+        """Actual start / end of a case: the history the duration forecast learns from."""
+        if not start_text and not end_text:
+            raise StoreError("กรุณาใส่เวลาเริ่มหรือเวลาเสร็จ")
+        with self._transaction(write=True) as conn:
+            world = self.db.load(conn, self._day(day))
+            a = world.result.assignments.get(case_id)
+            if a is None:
+                raise StoreError(f"ไม่พบเคส {case_id} ในวันที่ {world.day}")
+            check_team(actor, a.staff_ids)
+            row = world.bookings[case_id]
+            start = world.ts(parse_time(start_text)) if start_text else row.get("actual_start_time")
+            end = world.ts(parse_time(end_text)) if end_text else row.get("actual_end_time")
+            if end is not None and start is None:
+                raise StoreError("บันทึกเวลาเริ่มผ่าตัดก่อน")
+            if end is not None and end <= start:
+                end += timedelta(days=1)  # finished after midnight
+            conn.execute(
+                "UPDATE scheduled_surgeries SET actual_start_time = %s, actual_end_time = %s WHERE schedule_id = %s",
+                (start, end, row["schedule_id"]),
+            )
+            planned = a.end_min - a.start_min
+            minutes = round((end - start).total_seconds() / 60) if end is not None else None
+            title = f"{case_id} เวลาจริง " + (f"{minutes} นาที (วางแผน {planned})" if minutes else
+                                               f"เริ่ม {fmt(world.minute(start))}")
+            record = self._record(conn, world, Activity("actual", title, [], actor=actor_name(actor)))
+            self.db.log_activity(conn, world, record)
+            return {"case_id": case_id, "actual_minutes": minutes, "planned_minutes": planned}
+
+    def seed_history(self) -> dict:
+        today = self.db.today()
+        with self._transaction(write=True) as conn:
+            if seed.has_history(conn):
+                raise StoreError("ฐานข้อมูลมีเวลาผ่าตัดจริงอยู่แล้ว จึงไม่สร้างประวัติตัวอย่าง")
+            world = self.db.load(conn, today)
+            count = seed.seed_history(conn, world)
+            record = self._record(conn, world, Activity(
+                "seed", f"สร้างประวัติเวลาผ่าตัดตัวอย่าง {count} เคส (40 วันย้อนหลัง)", []))
+            self.db.log_activity(conn, world, record)
+        return {"history": count}
 
     # -------------------------------------------------------------- writes
 
@@ -269,7 +328,8 @@ class DatabaseStore:
                 requests[code] = {"request_id": request_id, "patient_name": f"ผู้ป่วยตัวอย่าง {number}",
                                   "procedure_id": ids["procedures"][c.procedure], "raw_text": c.procedure}
             result = self._optimizer(world).solve_schedule(cases, "Demo day", verbose=False)
+            history = seed.seed_history(conn, world)  # past cases with actual times for the forecast
             activity = Activity("seed", f"ใส่ข้อมูลตัวอย่างและจอง {len(result.assignments)} เคสของวันนี้",
                                 [f"[Master Orchestrator] demo day: {len(result.assignments)} cases, status {result.status}"])
             self.db.save(conn, world, result, requests, activity=self._record(conn, world, activity))
-        return {"booked": len(result.assignments), "date": today.isoformat()}
+        return {"booked": len(result.assignments), "history": history, "date": today.isoformat()}

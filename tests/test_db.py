@@ -75,7 +75,7 @@ def test_seed_loads_a_clean_day(store, db_url):
     state = store.state()
     assert len(state["schedule"]["bookings"]) == 10
     assert state["warnings"] == [] and state["rls_off"] == [] and not state["empty"]
-    assert _rows(db_url, "SELECT count(*) FROM scheduled_surgeries")[0][0] == 10
+    assert _rows(db_url, "SELECT count(*) FROM scheduled_surgeries WHERE actual_start_time IS NULL")[0][0] == 10
     from app.db_store import DatabaseStore
     from app.store import StoreError
 
@@ -88,10 +88,13 @@ def test_booking_is_saved_and_reloaded(store, db_url):
     state = store.state(day)
     assert state["schedule"]["bookings"] == []
     data = _request(state, "Dr.Napat", "Laparoscopic cholecystectomy", "HN-T1")
+    requests_before = _rows(db_url, "SELECT count(*) FROM surgery_requests")[0][0]
     preview = store.slot_check(data, "09:00", commit=False, day=day)
-    assert preview["booked"] is False and _rows(db_url, "SELECT count(*) FROM surgery_requests")[0][0] == 10
+    assert preview["booked"] is False
+    assert _rows(db_url, "SELECT count(*) FROM surgery_requests")[0][0] == requests_before  # preview writes nothing
     booked = store.slot_check(data, "09:00", commit=True, day=day)
     assert booked["booked"]
+    assert _rows(db_url, "SELECT count(*) FROM surgery_requests")[0][0] == requests_before + 1
 
     from app.db_store import DatabaseStore
 
@@ -166,7 +169,7 @@ def test_row_level_security_hides_patients_from_the_public_api_role(store, db_ur
         conn.execute("DO $$ BEGIN CREATE ROLE anon NOLOGIN; EXCEPTION WHEN duplicate_object THEN NULL; END $$")
         conn.execute("GRANT USAGE ON SCHEMA public TO anon")
         conn.execute("GRANT SELECT ON ALL TABLES IN SCHEMA public TO anon")
-        assert conn.execute("SELECT count(*) FROM surgery_requests").fetchone()[0] == 10
+        assert conn.execute("SELECT count(*) FROM surgery_requests").fetchone()[0] > 10
         conn.execute("SET ROLE anon")
         assert conn.execute("SELECT count(*) FROM surgery_requests").fetchone()[0] == 0
         assert conn.execute("SELECT count(*) FROM staff").fetchone()[0] == 0
@@ -223,3 +226,26 @@ def test_owner_login_still_works_before_migration_003(store, db_url):
     assert accounts.store.by_username("anyone") is None
     with pytest.raises(AuthError, match="20261102000000_user_accounts.sql"):
         accounts.store.list()
+
+
+def test_actual_times_and_history_live_in_supabase(store, db_url):
+    from app.store import StoreError
+
+    seeded = len(store.intake_context().history)
+    assert seeded > 0  # seeding adds invented past cases with actual times
+    assert _rows(db_url, "SELECT count(*) FROM surgery_requests WHERE patient_hn LIKE 'HIST-%%'")[0][0] == seeded
+    with pytest.raises(StoreError):
+        store.seed_history()  # refuses once real or demo history exists
+
+    case = store.state()["schedule"]["bookings"][0]
+    scheduler = {"name": "Nurse A", "username": "a", "role": "scheduler", "staff_id": None}
+    result = store.record_actual(case["case_id"], "08:00", "09:40", actor=scheduler)
+    assert result["actual_minutes"] == 100
+    booking = next(b for b in store.state()["schedule"]["bookings"] if b["case_id"] == case["case_id"])
+    assert (booking["actual_start"], booking["actual_end"]) == ("08:00", "09:40")
+    assert len(store.intake_context().history) == seeded + 1
+    assert _rows(db_url, "SELECT count(*) FROM orchestra_activity WHERE kind = 'actual'")[0][0] == 1
+
+    outsider = {"name": "X", "username": "x", "role": "staff", "staff_id": "00000000-0000-0000-0000-000000000000"}
+    with pytest.raises(StoreError):
+        store.record_actual(case["case_id"], "08:00", None, actor=outsider)

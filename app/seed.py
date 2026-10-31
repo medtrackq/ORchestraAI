@@ -7,6 +7,7 @@ are invented.
 """
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -15,7 +16,10 @@ import psycopg
 from psycopg.types.json import Jsonb
 
 from orchestra_engine.demo import build_hospital, elective_day
+from orchestra_engine.intake import synthetic_history
 from orchestra_engine.models import DEFAULT_TEAM, InfectionRisk
+
+HISTORY_TAG = "synthetic history (demo)"
 
 HEAVY = {"ROBOT_DA_VINCI", "C_ARM"}
 EMERGENCY_PROCEDURES = [
@@ -122,3 +126,79 @@ def seed_resources(conn: psycopg.Connection, tz: ZoneInfo, today: date) -> dict:
         card(surgeon, pid, minutes, dict(DEFAULT_TEAM), equipment)
 
     return {"staff": staff_ids, "procedures": procedure_ids}
+
+
+def demo_catalog() -> tuple[list[dict], list[dict]]:
+    """Procedures and preference cards of the demo hospital (demo / memory mode)."""
+    procedures: dict[str, dict] = {}
+    cards: dict[tuple[str, str], dict] = {}
+
+    def procedure(name, minutes, caps, icu, infection) -> str:
+        pid = "P-" + re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+        procedures.setdefault(pid, {"id": pid, "name": name, "code": None, "duration": minutes,
+                                    "caps": sorted(caps), "icu": icu, "infection": infection})
+        return pid
+
+    for c in elective_day():
+        pid = procedure(c.procedure, c.duration_mins, c.required_capabilities, c.requires_icu_post_op,
+                        c.infection_risk.value)
+        cards.setdefault((c.surgeon_id, pid), {
+            "surgeon_id": c.surgeon_id, "procedure_id": pid, "duration": c.duration_mins, "stddev": 15,
+            "roles": dict(c.required_staff_roles), "equipment": list(c.required_equipment_types), "notes": None})
+    for name, surgeon, minutes, equipment, infection, icu in EMERGENCY_PROCEDURES:
+        pid = procedure(name, minutes, [], icu, infection)
+        cards.setdefault((surgeon, pid), {
+            "surgeon_id": surgeon, "procedure_id": pid, "duration": minutes, "stddev": 15,
+            "roles": dict(DEFAULT_TEAM), "equipment": list(equipment), "notes": None})
+    return list(procedures.values()), list(cards.values())
+
+
+def has_history(conn: psycopg.Connection) -> bool:
+    return conn.execute(
+        "SELECT EXISTS (SELECT 1 FROM scheduled_surgeries WHERE actual_end_time IS NOT NULL) AS e"
+    ).fetchone()["e"]
+
+
+def seed_history(conn: psycopg.Connection, world, *, days: int = 40) -> int:
+    """Insert invented past cases with actual times so the duration forecast has
+    something to learn from. Rows are tagged and use HN "HIST-...". Returns the count."""
+    procs = {p["id"]: p for p in world.procedures}
+    rooms = world.hospital.rooms
+    if not rooms:
+        return 0
+    tz = world.start.tzinfo
+    next_free: dict[tuple[date, str], int] = {}
+    count = 0
+    for rec in synthetic_history(world.cards, days=days):
+        proc = procs.get(rec["procedure_id"])
+        if proc is None:
+            continue
+        room = next((r for r in rooms if r.supports(frozenset(proc["caps"]))), None)
+        if room is None:
+            continue
+        day = world.day - timedelta(days=rec["days_ago"])
+        start = next_free.get((day, room.or_id), 8 * 60)
+        end, clean = start + rec["planned"], start + rec["planned"] + room.base_turnover_mins
+        if clean > 20 * 60:
+            continue
+        next_free[(day, room.or_id)] = clean + max(0, rec["actual"] - rec["planned"])
+        midnight = datetime(day.year, day.month, day.day, tzinfo=tz)
+        at = lambda m: midnight + timedelta(minutes=m)  # noqa: E731
+        count += 1
+        request_id = uuid.uuid4()
+        conn.execute(
+            """INSERT INTO surgery_requests (request_id, patient_hn, patient_name, primary_surgeon_id, procedure_id,
+                   urgency_level, raw_nlp_input, ai_predicted_duration_mins, preferred_date_start,
+                   preferred_date_end, status)
+               VALUES (%s, %s, %s, %s, %s, 'ELECTIVE', %s, %s, %s, %s, 'SCHEDULED')""",
+            (request_id, f"HIST-{count:04d}", "ประวัติตัวอย่าง", uuid.UUID(rec["surgeon_id"]),
+             uuid.UUID(rec["procedure_id"]), HISTORY_TAG, rec["planned"], day, day),
+        )
+        conn.execute(
+            """INSERT INTO scheduled_surgeries (request_id, or_id, start_time, end_time, cleanup_end_time,
+                   actual_start_time, actual_end_time, ai_reasoning_log, status)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'COMPLETED')""",
+            (request_id, world.room_ids[room.or_id], at(start), at(end), at(clean), at(start),
+             at(start + rec["actual"]), HISTORY_TAG),
+        )
+    return count
