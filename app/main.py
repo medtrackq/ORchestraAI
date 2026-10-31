@@ -11,6 +11,8 @@ Environment:
     APP_PASSWORD       owner admin password; also signs sessions. Without it (and
                        without DATABASE_URL) the app is open for local development.
     SESSION_SECRET     optional explicit key for signing session cookies
+    ANTHROPIC_API_KEY  optional: Intake Agent reads free text with Claude (else keyword rules)
+    INTAKE_MODEL       Claude model for intake (default claude-opus-5-5)
     SOLVER_WORKERS     CP-SAT worker threads (default 2)
     SOLVER_TIME_LIMIT  seconds per solve (default 10)
 """
@@ -28,6 +30,7 @@ from pydantic import BaseModel, Field
 
 from .auth import (COOKIE, ROLES, SESSION_HOURS, Accounts, AuthError, DbUserStore, MemoryUserStore,
                    ServiceUnavailable, TooManyAttempts, User, can)
+from .intake_service import IntakeService
 from .store import Forbidden, ScheduleStore, StoreError
 
 ROOT = Path(__file__).resolve().parent
@@ -47,6 +50,7 @@ else:
     store = ScheduleStore(**_solver)
     accounts = Accounts(MemoryUserStore())
 
+intake = IntakeService()  # Claude pass when ANTHROPIC_API_KEY is set, keyword rules otherwise
 app = FastAPI(title="ORchestraAI", docs_url="/api/docs", redoc_url=None, openapi_url="/api/openapi.json")
 
 PUBLIC = {"/login", "/api/login", "/api/health"}
@@ -366,6 +370,62 @@ def update_equipment(unit_id: str, body: EquipmentIn, request: Request, date: st
     user = _user(request, "equipment")
     result = _run(store.update_equipment, unit_id, body.status, body.ready_at, day=date, actor=_actor(user))
     return {"result": result, "units": _run(store.equipment, date), "state": _state(user, date)}
+
+
+# ----------------------------------------------------------- intake agent
+
+class IntakeIn(BaseModel):
+    text: str = Field(min_length=3, max_length=2000)
+
+
+class PredictIn(BaseModel):
+    surgeon_id: str
+    procedure_id: str
+    complexity: Literal["simple", "standard", "complex"] = "standard"
+
+
+class ActualIn(BaseModel):
+    start: str | None = Field(default=None, pattern=TIME)
+    end: str | None = Field(default=None, pattern=TIME)
+
+
+@app.get("/api/intake/info")
+def intake_info(request: Request, date: str | None = None) -> dict:
+    _user(request)
+    return intake.info(_run(store.intake_context, date))
+
+
+@app.post("/api/intake/parse")
+def intake_parse(body: IntakeIn, request: Request, date: str | None = None) -> dict:
+    """Intake & Triage Agent: request text -> form fields, urgency and duration forecast."""
+    user = _user(request, "book")
+    ctx = _run(store.intake_context, date)
+    only = user.staff_id if user.role == "surgeon" else None
+    return _run(intake.parse, ctx, body.text, only_surgeon=only)
+
+
+@app.post("/api/intake/predict")
+def intake_predict(body: PredictIn, request: Request, date: str | None = None) -> dict:
+    _user(request, "book")
+    ctx = _run(store.intake_context, date)
+    return {"prediction": _run(intake.predict, ctx, body.surgeon_id, body.procedure_id, body.complexity)}
+
+
+@app.post("/api/cases/{case_id}/actual")
+def record_actual(case_id: str, body: ActualIn, request: Request, date: str | None = None) -> dict:
+    """Record when a case really started / finished; the forecast learns from it."""
+    user = _user(request, "record_times")
+    result = _run(store.record_actual, case_id, body.start, body.end, day=date, actor=_actor(user))
+    return {"result": result, "state": _state(user, date)}
+
+
+@app.post("/api/intake/seed-history")
+def seed_history(request: Request) -> dict:
+    """Supabase mode, admin: invented past cases with actual times (only if none are recorded)."""
+    _user(request, "seed")
+    if store.mode != "supabase":
+        raise HTTPException(status_code=400, detail="ใช้ได้เฉพาะเมื่อเชื่อม Supabase")
+    return _run(store.seed_history)
 
 
 @app.post("/api/reset")

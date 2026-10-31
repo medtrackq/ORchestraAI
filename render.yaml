@@ -18,6 +18,8 @@ services:
         generateValue: true  # signs login cookies
       - key: DATABASE_URL
         sync: false  # Supabase "Session pooler" connection string; empty = demo mode
+      - key: ANTHROPIC_API_KEY
+        sync: false  # optional: Intake Agent reads free text with Claude; empty = keyword rules
       - key: APP_TIMEZONE
         value: Asia/Bangkok
       - key: SOLVER_WORKERS
