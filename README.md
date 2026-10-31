@@ -12,12 +12,14 @@
 | `orchestra_engine/models.py` | `OperatingRoom`, `StaffMember`, `EquipmentUnit`, `RecoveryBed`, `SurgeryCase` |
 | `orchestra_engine/optimizer.py` | `ORchestraOptimizer` — ตรวจทรัพยากร (agents) + โมเดล CP-SAT + reschedule + `check_slot` |
 | `orchestra_engine/agents.py` | Staffing / Equipment & CSSD / OR Facility Agent สแกน ณ เวลาที่ขอ (`SlotCheck`) |
+| `orchestra_engine/fatigue.py` | Staffing Agent: เกณฑ์ความเหนื่อยล้า (ชม./วัน, ชม./7 วัน, พักหลังเคสดึก) และคะแนน 0-100% |
 | `orchestra_engine/flow.py` | สร้างข้อมูลจริงให้หน้า Flow (`python -m orchestra_engine.flow`) |
 | `app/` | เว็บแอป FastAPI (หน้าเว็บ `app/static/index.html` + API) สำหรับ Render |
 | `app/db.py`, `app/db_store.py`, `app/seed.py` | โหมด Supabase: อ่าน/เขียนตาราง, lock + ตรวจก่อนบันทึก, ข้อมูลตัวอย่าง |
 | `supabase/migrations/20261101000000_security_and_integrity.sql` | RLS ทุกตาราง, exclusion constraint ใหม่, ตาราง activity |
 | `app/auth.py`, `app/static/login.html` | บัญชีผู้ใช้ บทบาท สิทธิ์ session และหน้าเข้าสู่ระบบ |
 | `supabase/migrations/20261102000000_user_accounts.sql` | ตาราง `app_users` + ผู้ทำรายการใน activity |
+| `supabase/migrations/20261103000000_staff_fatigue_and_skills.sql` | เกณฑ์ชั่วโมงต่อคน + ทักษะที่หัตถการต้องการ |
 | `orchestra_engine/intake.py`, `app/intake_service.py`, `app/intake_llm.py` | Intake & Triage Agent: อ่านคำขอ, คัดแยก, พยากรณ์เวลา, Claude (ไม่บังคับ) |
 | `render.yaml` | Render Blueprint (web service ฟรี + รหัสผ่านอัตโนมัติ) |
 | `web/orchestra-flow.html` | หน้า interactive 5 ขั้น (ปรับจาก ORchestraAIFlow.html) แสดงผลจาก engine จริง |
@@ -72,20 +74,32 @@ repo มี `render.yaml` (Render Blueprint) สำหรับ deploy เว็
 - **บันทึกเวลาจริง:** คลิกเคสในตาราง → *บันทึกเวลาจริง* (admin, ผู้จัดตาราง หรือคนในทีมของเคสนั้น) → เก็บใน `actual_start_time` / `actual_end_time` และระบบเรียนรู้ทันที
 - **ข้อมูลตัวอย่าง:** มีประวัติ 40 วันย้อนหลัง (HN `HIST-…`) · ฐานข้อมูลที่ใส่ข้อมูลตัวอย่างไว้ก่อนหน้านี้ admin กด **สร้างประวัติตัวอย่าง** ได้ (เฉพาะเมื่อยังไม่มีเวลาจริงเลย)
 
+### Staffing Agent: ตารางเวร ทักษะ และความเหนื่อยล้า
+
+แท็บ **บุคลากร** แสดงทุกคน (ผู้จัดตาราง/admin) หรือเฉพาะตัวเอง (ศัลยแพทย์/พยาบาลที่ผูกบัญชีแล้ว): เวรวันนี้ ทักษะ ชั่วโมงผ่าตัดวันนี้ / 7 วัน คะแนนความเหนื่อยล้า และเวลาที่ต้องพักถึง
+
+- **ชั่วโมงทำงานนับจากเคสจริง:** เวลาในห้องผ่าตัดของเคสที่จองไว้ (ใช้เวลาผ่าตัดจริงถ้าบันทึกแล้ว) ย้อนหลัง 7 วันรวมวันนี้ · ยังไม่นับเวรนอกห้องผ่าตัด · คอลัมน์ `staff.current_weekly_hours` ไม่ถูกใช้แล้ว
+- **เกณฑ์ (ค่าตั้งต้น ปรับรายคนได้ในตาราง `staff`):** ไม่เกิน `max_hours_per_week` (48) ชม. ใน 7 วัน · ไม่เกิน `max_hours_per_day` (10) ชม./วัน · พัก `min_rest_hours` (8) ชม. หลังเคสที่จบหลัง 22:00 หรือก่อน 06:00 ทั้งก่อนเคสถัดไปในวันเดียวกันและก่อนเคสของวันรุ่งขึ้น
+- **เคสปกติ (Elective/Urgent) ห้ามเกินเกณฑ์** · **เคสฉุกเฉินเกินได้** (นโยบาย A): solver เลือกคนที่ยังไม่เกินก่อนเสมอ ถ้าไม่มีจริง ๆ จึงใช้คนที่เกิน แล้วขึ้นกล่องแดงว่าใครเกินเท่าไร บันทึกใน Agent log (`FATIGUE OVERRIDE`) และแสดงในรายละเอียดเคสกับแท็บบุคลากร
+- **คะแนนความเหนื่อยล้า** = ค่าที่สูงกว่าระหว่าง (ชม. 7 วัน ÷ เกณฑ์สัปดาห์) กับ (ชม. วันนี้ ÷ เกณฑ์วัน): ต่ำกว่า 70% ปกติ · 70-89% เริ่มล้า · 90-100% ใกล้เกณฑ์ · เกิน 100% เกินเกณฑ์
+- **กระจายงาน:** solver เลือกคนที่งานสะสมน้อยกว่า และคิดต้นทุนเพิ่มเมื่อคนเดียวผ่าตัดเกิน 4 ชม./วัน (ทีมที่เข้าขากันยังได้รับความสำคัญก่อน)
+- **ทักษะต่อหัตถการ:** `procedures.required_staff_skills` เช่น `{"SCRUB_NURSE": ["ROBOTIC_CERTIFIED"]}` เลือกหัตถการแล้วฟอร์มติ๊กทักษะให้ (แก้ได้) · ถ้าไม่มีใครมีทักษะนั้นระบบบอกชัดเจน · migration 004 ใส่ทักษะพยาบาลหุ่นยนต์ให้หัตถการที่ใช้ห้อง `ROBOTIC_READY`
+
 ### เชื่อม Supabase
 
 1. Supabase → **SQL Editor** → รันทีละไฟล์ตามลำดับ (รันซ้ำได้):
    - `supabase/migrations/20261101000000_security_and_integrity.sql` (Row Level Security ทุกตาราง, เคสที่ยกเลิกไม่บล็อกห้อง, ห้ามจองเตียงพักฟื้นซ้อน, ตาราง `orchestra_activity`)
    - `supabase/migrations/20261102000000_user_accounts.sql` (ตารางบัญชีผู้ใช้ `app_users`)
+   - `supabase/migrations/20261103000000_staff_fatigue_and_skills.sql` (เกณฑ์ชั่วโมง/การพักต่อคน และทักษะที่หัตถการต้องการ · ถ้ายังไม่รัน ระบบใช้ 10 ชม./วัน และพัก 8 ชม. กับทุกคน)
 2. Supabase → **Connect** → คัดลอก connection string แบบ **Session pooler** (Render ต่อแบบ direct ไม่ได้เพราะเป็น IPv6) แล้วแทน `[YOUR-PASSWORD]` ด้วยรหัสผ่านฐานข้อมูล (อักขระพิเศษต้อง URL-encode)
 3. Render → service `orchestra-ai` → **Environment** → เพิ่ม `DATABASE_URL` = connection string นั้น → Save (Render deploy ใหม่เอง)
 4. เปิดเว็บ ป้าย **Supabase** จะขึ้นข้างชื่อ ถ้าฐานข้อมูลยังว่าง กด **ใส่ข้อมูลตัวอย่าง** ได้ (ใช้ได้เฉพาะตอนที่ยังไม่มีห้องหรือบุคลากร)
 
 การทำงานในโหมด Supabase: ทุกคำขออ่านข้อมูลของวันนั้นจากฐานข้อมูลสด · การเขียนทำในทรานแซกชันเดียวภายใต้ advisory lock · ผลจาก engine ต้องผ่าน `validate_schedule` โดยไม่เพิ่มจุดขัดกันใหม่ · exclusion constraint ในฐานข้อมูลเป็นด่านสุดท้าย (ถ้ามีคนเขียนซ้อนจะได้ข้อความให้ลองใหม่ ไม่ใช่จองซ้อน) · ห้อง/เครื่องมือ/เตียงที่ถูกใช้โดยเคสของวันอื่น (เช่นเตียง ICU ข้ามวัน) ถูกนับด้วย
 
-ค่าที่ schema ยังไม่มีและใช้ค่า default: เวลาเปิด-ปิดห้อง, skill ที่ต้องใช้ต่อ role (มีช่อง "พยาบาล Robotic" ในฟอร์ม) · `current_weekly_hours` ถือเป็นชั่วโมงที่ทำไปแล้วก่อนวันที่วางแผน
+ค่าที่ schema ยังไม่มีและใช้ค่า default: เวลาเปิด-ปิดห้อง · ชั่วโมงทำงานคำนวณจากเคสที่จองในฐานข้อมูล (ไม่อ่าน `current_weekly_hours`)
 
-ทดสอบกับ PostgreSQL จริง (สร้างฐานข้อมูลใหม่ต่อเทสต์และรันทั้งสอง migration):
+ทดสอบกับ PostgreSQL จริง (สร้างฐานข้อมูลใหม่ต่อเทสต์และรันทุก migration):
 
 ```bash
 TEST_DATABASE_URL=postgresql://postgres@127.0.0.1:5432/postgres .venv/bin/python -m pytest -q
@@ -152,9 +166,9 @@ Intake แบบ NLP/เสียงและการพยากรณ์เ�
 
 ## เงื่อนไขที่โมเดลบังคับ
 
-**Hard:** ห้องไม่ซ้อน (รวมเวลาทำความสะอาด base/infectious) · บุคลากรไม่ซ้อน · เครื่องมือไม่ซ้อน (รวมเวลาอบ CSSD และ `available_at`) · เตียง PACU/ICU ไม่ซ้อน · อยู่ในกะ (`staff_schedules`) · ไม่เกิน `max_hours_per_week` · ห้องมี capability ตรง · ทีมมี role/skill ครบ · ทันเส้นตาย (deadline)
+**Hard:** ห้องไม่ซ้อน (รวมเวลาทำความสะอาด base/infectious) · บุคลากรไม่ซ้อน · เครื่องมือไม่ซ้อน (รวมเวลาอบ CSSD และ `available_at`) · เตียง PACU/ICU ไม่ซ้อน · อยู่ในกะ (`staff_schedules`) · เกณฑ์ความเหนื่อยล้า: ชม./7 วัน, ชม./วัน, พักหลังเคสดึก (เคสฉุกเฉินเกินได้โดยมีต้นทุนสูงและแจ้งเตือน) · ห้องมี capability ตรง · ทีมมี role/skill ครบ · ทันเส้นตาย (deadline)
 
-**Soft:** ลำดับความสำคัญ EMERGENCY > URGENT > ELECTIVE · ตรงเวลาที่แพทย์ต้องการ · จัดเคสเครื่องมือคล้ายกันติดกัน · ทีมที่เข้าขากัน (`team_synergy`) · ตอน reschedule เปลี่ยนเวลา/ห้อง/คน/เครื่องมือน้อยที่สุด
+**Soft:** ลำดับความสำคัญ EMERGENCY > URGENT > ELECTIVE · ตรงเวลาที่แพทย์ต้องการ · จัดเคสเครื่องมือคล้ายกันติดกัน · ทีมที่เข้าขากัน (`team_synergy`) · กระจายงานให้คนที่เหนื่อยน้อยกว่า · ตอน reschedule เปลี่ยนเวลา/ห้อง/คน/เครื่องมือน้อยที่สุด
 
 เคสที่จัดไม่ได้จะถูกรายงานพร้อมเหตุผล (เช่น ไม่มีห้อง HYBRID, พยาบาล ROBOTIC_CERTIFIED ไม่พอ, ไม่มีช่วงว่าง) และทุกเคสที่จัดได้มีบันทึก "why" ว่ารออะไร ใช้เขียนลง `ai_reasoning_log` ได้
 
@@ -163,14 +177,14 @@ Intake แบบ NLP/เสียงและการพยากรณ์เ�
 | ตาราง | Engine |
 |---|---|
 | `operating_rooms` | `OperatingRoom` (`room_type` นับเป็น capability ด้วย) |
-| `staff` + `staff_schedules` (REGULAR/ON_CALL ที่ `is_available`) | `StaffMember.shifts` |
+| `staff` + `staff_schedules` (REGULAR/ON_CALL ที่ `is_available`) | `StaffMember.shifts`, เกณฑ์ `max_hours_per_week/day`, `min_rest_hours` |
 | `equipment_units` + `equipment_types` | `EquipmentUnit` (`sterilization_duration_mins`, `available_at`) |
 | `recovery_beds` | `RecoveryBed` |
 | `surgery_requests` + `procedures` + `surgeon_preference_cards` | `SurgeryCase` |
 | `team_synergy` | `team_synergy={(surgeon_id, staff_id): score}` |
 | `scheduled_surgeries` + `resource_allocations` | `Assignment` (`cleanup_end_min`, `equipment_ready_min`) |
 
-ค่าที่ schema ยังไม่มีคอลัมน์และ engine ใช้ค่า default: เวลาอยู่เตียงพักฟื้น (PACU 60 นาที / ICU 24 ชม.), เวลาเปิด-ปิดห้อง, skill ที่ต้องใช้ต่อ role
+ค่าที่ schema ยังไม่มีคอลัมน์และ engine ใช้ค่า default: เวลาอยู่เตียงพักฟื้น (PACU 60 นาที / ICU 24 ชม.), เวลาเปิด-ปิดห้อง
 
 ### Supabase CLI
 

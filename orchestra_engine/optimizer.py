@@ -9,10 +9,13 @@ Flow for every solve:
 2. ``_ModelBuilder`` turns the plans into one CP-SAT model:
    hard constraints = no overlap per room (incl. turnover), per person, per
    equipment unit (incl. sterilisation) and per recovery bed, shifts, room
-   hours, weekly-hour caps, capabilities, release times and deadlines;
+   hours, capabilities, skills, release times, deadlines and the fatigue
+   limits (weekly and daily hours, rest after a late-night case; see
+   ``fatigue``), which EMERGENCY cases may break at a high cost;
    soft constraints = priority by urgency, surgeon's preferred start,
-   grouping cases with similar equipment, team synergy and, when
-   rescheduling, keeping changes to the previous schedule small.
+   grouping cases with similar equipment, team synergy, spreading work to
+   the least tired staff and, when rescheduling, keeping changes to the
+   previous schedule small.
 3. The solution is decoded into ``Assignment`` rows with a short explanation
    of what each case waited for.
 
@@ -32,6 +35,7 @@ from ortools.sat.python import cp_model
 from .agents import EQUIPMENT as EQUIPMENT_AGENT
 from .agents import FACILITY, Busy, SlotCheck, scan_slot
 from .agents import STAFFING as STAFFING_AGENT
+from .fatigue import day_minutes, fatigue_issues, late_windows, load_percent
 from .models import EquipmentUnit, OperatingRoom, RecoveryBed, StaffMember, SurgeryCase, Urgency
 from .results import Assignment, Notification, ScheduleChange, ScheduleResult
 from .timeutil import MINUTES_PER_DAY, fmt
@@ -57,6 +61,11 @@ class Weights:
     equipment_change: int = 5  # swapping identical units/beds still means a call
     bed_change: int = 5
     synergy_per_point: int = 10  # bonus per synergy_score point (0-5)
+    fatigue_spread: int = 40  # cost of picking someone at 100% fatigue (0% = free)
+    day_spread_after_mins: int = 240  # beyond this much OR time in a day ...
+    day_spread_per_quarter: int = 2  # ... each extra 15 min on one person costs this (spreads the day)
+    fatigue_override: int = 2000  # an EMERGENCY case breaks one person's fatigue limit
+    fatigue_over_per_min: int = 10  # per minute over a weekly / daily hour limit
 
 
 @dataclass
@@ -193,6 +202,11 @@ class ORchestraOptimizer:
             print(result.report(), end="\n\n")
         return result
 
+    def new_fatigue(self, before: ScheduleResult, after: ScheduleResult) -> list:
+        """Fatigue issues in ``after`` that ``before`` did not have."""
+        known = {i.key for i in self.fatigue(before.assignments, before.cases)}
+        return [i for i in self.fatigue(after.assignments, after.cases) if i.key not in known]
+
     def insert_emergency(
         self,
         current: ScheduleResult,
@@ -293,6 +307,7 @@ class ORchestraOptimizer:
         }
         reasons = result.unscheduled.get(case.case_id)
         result.cases = {**current.cases, case.case_id: case}
+        result.fatigue = self.fatigue(result.assignments, result.cases)
         result.unscheduled = dict(current.unscheduled)
         if reasons:
             result.unscheduled[case.case_id] = reasons
@@ -312,6 +327,9 @@ class ORchestraOptimizer:
                 log.append(f"[{FACILITY}] reserved {placed.bed_id} from {fmt(placed.recovery_start_min)}")
             team = ", ".join(self._staff_by_id[s].name for s in placed.staff_ids)
             log.append(f"[{STAFFING_AGENT}] notified team: {team}")
+            for issue in result.fatigue:
+                if issue.case_id == case.case_id and issue.override:
+                    log.append(f"[{STAFFING_AGENT}] FATIGUE OVERRIDE: {issue.detail()}")
         check = SlotCheck(case, start_min, verdicts, result, log)
         if verbose:
             print(f"=== {title} ===\n{check.report()}", end="\n\n")
@@ -348,23 +366,41 @@ class ORchestraOptimizer:
             need = ", ".join(sorted(case.required_capabilities)) or "any"
             reasons.append(f"Facility: no usable room with [{need}] open long enough for {dur} min")
 
-        # Staffing agent: shifts, skills, weekly-hour cap.
+        # Staffing agent: shifts, skills and fatigue limits. EMERGENCY cases
+        # may break fatigue limits (at a cost in the solver), normal cases not.
+        emergency = case.urgency is Urgency.EMERGENCY
+
+        def shift_fit(person: StaffMember) -> list[tuple[int, int]]:
+            spans = person.shifts
+            if not emergency and person.rest_until > 0:  # resting after another day's late case
+                spans = tuple((max(a, person.rest_until), b) for a, b in spans if b > person.rest_until)
+            return [w for w in spans if fits(*w)]
+
+        def over_limit(person: StaffMember) -> str | None:
+            if emergency:
+                return None
+            if person.remaining_minutes < dur:
+                return f"would exceed {person.max_weekly_hours:g} h in 7 days ({person.remaining_minutes} min left)"
+            if person.daily_cap_minutes < dur:
+                return f"case is longer than the {person.max_daily_hours:g} h daily limit"
+            return None
+
         windows: dict[str, list[tuple[int, int]]] = {}
         surgeon = self._staff_by_id.get(case.surgeon_id)
         if surgeon is None or not surgeon.is_active:
             reasons.append(f"Staffing: surgeon {case.surgeon_id} not found or inactive")
         else:
-            fit = [w for w in surgeon.shifts if fits(*w)]
+            fit, limit = shift_fit(surgeon), over_limit(surgeon)
             if not fit:
+                resting = not emergency and surgeon.rest_until > earliest and [w for w in surgeon.shifts if fits(*w)]
                 reasons.append(
+                    f"Staffing: {surgeon.name} rests until {fmt(surgeon.rest_until)} after a late case"
+                    if resting else
                     f"Staffing: {surgeon.name} has no shift that fits {dur} min "
                     f"between {fmt(earliest)} and {fmt(latest_end)}"
                 )
-            elif surgeon.remaining_minutes < dur:
-                reasons.append(
-                    f"Staffing: {surgeon.name} would exceed {surgeon.max_weekly_hours:g} h/week "
-                    f"({surgeon.remaining_minutes} min left)"
-                )
+            elif limit:
+                reasons.append(f"Staffing: {surgeon.name} {limit}")
             else:
                 windows[surgeon.staff_id] = fit
         team: dict[str, tuple[int, list[StaffMember]]] = {}
@@ -372,21 +408,28 @@ class ORchestraOptimizer:
             if count == 0:
                 continue
             skills = case.required_staff_skills.get(role, frozenset())
+            skilled = [
+                p for p in self.staff
+                if p.staff_id != case.surgeon_id and p.is_active and p.role == role and skills <= p.skills
+            ]
             candidates = []
-            for person in self.staff:
-                if person.staff_id == case.surgeon_id or not person.is_active or person.role != role:
-                    continue
-                if not skills <= person.skills or person.remaining_minutes < dur:
-                    continue
-                fit = [w for w in person.shifts if fits(*w)]
-                if fit:
+            for person in skilled:
+                fit = shift_fit(person)
+                if fit and not over_limit(person):
                     candidates.append(person)
                     windows[person.staff_id] = fit
             if len(candidates) < count:
                 label = role + (f" with {', '.join(sorted(skills))}" if skills else "")
-                reasons.append(
-                    f"Staffing: need {count} {label} on shift with weekly hours left, found {len(candidates)}"
-                )
+                if len(skilled) < count:
+                    reasons.append(
+                        f"Staffing: need {count} {label}, only {len(skilled)} active staff "
+                        + ("have the skill" if skills else "in this role")
+                    )
+                else:
+                    reasons.append(
+                        f"Staffing: need {count} {label} on shift, rested and within the daily/7-day hour "
+                        f"limits, found {len(candidates)} of {len(skilled)}"
+                    )
             team[role] = (count, candidates)
 
         # Equipment & CSSD agent: unit status and when it is back from CSSD.
@@ -483,7 +526,7 @@ class ORchestraOptimizer:
             else:
                 plans[cid] = plan
 
-        builder = _ModelBuilder(self, previous, weights or self.weights)
+        builder = _ModelBuilder(self, previous, weights or self.weights, frozen)
         for cid, plan in plans.items():
             builder.add_case(plan)
         builder.add_resource_constraints()
@@ -527,7 +570,12 @@ class ORchestraOptimizer:
             staff_names={s.staff_id: s.name for s in self.staff},
             wall_time_s=time.perf_counter() - t0,
             now_min=now_min,
+            fatigue=self.fatigue(assignments, case_by_id),
         )
+
+    def fatigue(self, assignments: Mapping[str, Assignment], cases: Mapping[str, SurgeryCase]) -> list:
+        """Fatigue-limit breaks in ``assignments`` (EMERGENCY overrides and history)."""
+        return fatigue_issues(assignments, cases, self.staff, horizon_mins=self.horizon_mins)
 
     def _extract(self, solver: cp_model.CpSolver, plan: _Plan, v: _Vars) -> Assignment:
         case = plan.case
@@ -690,7 +738,13 @@ class ORchestraOptimizer:
 class _ModelBuilder:
     """Accumulates CP-SAT variables, intervals and objective terms."""
 
-    def __init__(self, opt: ORchestraOptimizer, previous: Mapping[str, Assignment], weights: Weights) -> None:
+    def __init__(
+        self,
+        opt: ORchestraOptimizer,
+        previous: Mapping[str, Assignment],
+        weights: Weights,
+        frozen: Mapping[str, Assignment] | None = None,
+    ) -> None:
         self.opt = opt
         self.previous = previous  # schedule being revised (empty on a fresh solve)
         self.weights = weights
@@ -702,8 +756,24 @@ class _ModelBuilder:
         self.unit_ivs: dict[str, list] = defaultdict(list)
         self.bed_ivs: dict[str, list] = defaultdict(list)
         self.room_members: dict[str, list] = defaultdict(list)
-        self.staff_load: dict[str, list[tuple[int, cp_model.IntVar]]] = defaultdict(list)
+        # Fatigue: (minutes, assigned literal, emergency override literal or None) per person.
+        self.week_load: dict[str, list[tuple[int, cp_model.IntVar, cp_model.IntVar | None]]] = defaultdict(list)
+        self.day_load: dict[str, list[tuple[int, cp_model.IntVar, cp_model.IntVar | None]]] = defaultdict(list)
         self.frozen_load: dict[str, int] = defaultdict(int)
+        self.frozen_day_load: dict[str, int] = defaultdict(int)
+        self.rest_work: dict[str, list] = defaultdict(list)  # case time that must not fall in a rest period
+        self.rest_items: dict[str, list] = defaultdict(list)  # rest periods after late-night cases
+        self._late_cache: dict[str, cp_model.IntVar] = {}  # case ends at night
+        # Load already fixed before this solve, to prefer the least tired person.
+        base_week: dict[str, int] = defaultdict(int)
+        base_day: dict[str, int] = defaultdict(int)
+        for a in (frozen or {}).values():
+            for sid in a.staff_ids:
+                base_week[sid] += a.end_min - a.start_min
+                base_day[sid] += day_minutes(a.start_min, a.end_min, opt.horizon_mins)
+        self.load_pct = {
+            s.staff_id: load_percent(s, base_week[s.staff_id], base_day[s.staff_id]) for s in opt.staff
+        }
 
     def add_case(self, p: _Plan) -> None:
         m = self.model
@@ -740,16 +810,31 @@ class _ModelBuilder:
                 staff[person.staff_id] = y
                 lits.append(y)
             m.add(sum(lits) == count * scheduled)
+        emergency = case.urgency is Urgency.EMERGENCY
         for sid, lit in staff.items():
-            self.staff_ivs[sid].append(
-                m.new_optional_fixed_size_interval_var(start, dur, lit, f"staff_iv[{cid},{sid}]")
-            )
+            iv = m.new_optional_fixed_size_interval_var(start, dur, lit, f"staff_iv[{cid},{sid}]")
+            self.staff_ivs[sid].append(iv)
             if p.windows is not None:
                 self._add_shift(p, start, lit, sid, p.windows[sid])
+            over = None
             if p.frozen:
                 self.frozen_load[sid] += dur
+                self.frozen_day_load[sid] += day_minutes(p.earliest, p.earliest + dur, horizon)
             else:
-                self.staff_load[sid].append((dur, lit))
+                if emergency:
+                    # The emergency may break this person's fatigue limits, at a cost.
+                    over = m.new_bool_var(f"fatigue_over[{cid},{sid}]")
+                    strict = m.new_bool_var(f"rested[{cid},{sid}]")  # lit and not over
+                    m.add_implication(over, lit)
+                    m.add_implication(strict, lit)
+                    m.add_implication(strict, ~over)
+                    m.add_bool_or([~lit, over, strict])
+                    self.objective.append(self.weights.fatigue_override * over)
+                    iv = m.new_optional_fixed_size_interval_var(start, dur, strict, f"rested_iv[{cid},{sid}]")
+                self.rest_work[sid].append(iv)
+                self.week_load[sid].append((dur, lit, over))
+                self.day_load[sid].append((dur, lit, over))
+            self._add_rest(p, start, sid, lit, over)
 
         # Equipment: unit is busy for the case plus its CSSD reprocessing.
         units = {}
@@ -785,6 +870,54 @@ class _ModelBuilder:
 
         self.vars[cid] = _Vars(start, scheduled, rooms, staff, units, beds)
         self._add_objective(p, self.vars[cid])
+
+    def _add_rest(self, p: _Plan, start, sid: str, lit, over) -> None:
+        """Rest period after the case if it ends late at night (see ``fatigue``)."""
+        person = self.opt._staff_by_id.get(sid)
+        if person is None or person.rest_minutes <= 0:
+            return
+        m, cid, dur, rest = self.model, p.case.case_id, p.duration, person.rest_minutes
+        lo, hi = p.earliest + dur, p.latest_start + dur
+        night = late_windows(lo, hi)
+        if not night:
+            return
+        end = start + dur
+        if night == [(lo, hi)]:
+            present = lit  # always ends at night
+        else:
+            late = self._late_var(p, start, night)
+            present = m.new_bool_var(f"rest[{cid},{sid}]")
+            m.add_implication(present, lit)
+            m.add_implication(present, late)
+            m.add_bool_or([~lit, ~late, present])
+        self.rest_items[sid].append(
+            m.new_optional_fixed_size_interval_var(end, rest, present, f"rest_iv[{cid},{sid}]")
+        )
+        nxt = person.next_booking_min
+        if nxt is not None and not p.frozen and hi + rest > nxt:
+            m.add(end + rest <= nxt).only_enforce_if([present] + ([~over] if over is not None else []))
+
+    def _late_var(self, p: _Plan, start, night):
+        cid = p.case.case_id
+        if cid not in self._late_cache:
+            late = self.model.new_bool_var(f"late[{cid}]")
+            self._constrain_late(p, start + p.duration, late, night)
+            self._late_cache[cid] = late
+        return self._late_cache[cid]
+
+    def _constrain_late(self, p: _Plan, end, late, night) -> None:
+        lo, hi = p.earliest + p.duration, p.latest_start + p.duration
+        day, cur = [], lo
+        for a, b in night:
+            if a > cur:
+                day.append([cur, a - 1])
+            cur = b + 1
+        if cur <= hi:
+            day.append([cur, hi])
+        m = self.model
+        at_night = cp_model.Domain.from_intervals([[a, b] for a, b in night])
+        m.add_linear_expression_in_domain(end, at_night).only_enforce_if(late)
+        m.add_linear_expression_in_domain(end, cp_model.Domain.from_intervals(day)).only_enforce_if(~late)
 
     def _add_shift(self, p: _Plan, start, lit, sid: str, windows: list[tuple[int, int]]) -> None:
         dur = p.duration
@@ -833,9 +966,14 @@ class _ModelBuilder:
             self.objective.append(w.preferred_start_dev_per_min * dev)
 
         for sid, lit in v.staff.items():
-            score = self.opt.team_synergy.get((p.surgeon_id, sid)) if sid != p.surgeon_id else None
+            if sid == p.surgeon_id:
+                continue
+            score = self.opt.team_synergy.get((p.surgeon_id, sid))
             if score:
                 self.objective.append(-round(w.synergy_per_point * score) * lit)
+            tired = round(w.fatigue_spread * self.load_pct.get(sid, 0) / 100)
+            if tired:
+                self.objective.append(tired * lit)  # spread work to the least tired
 
         if base is not None:
             shift = m.new_int_var(0, bound + abs(base.start_min), f"moved[{case.case_id}]")
@@ -863,11 +1001,45 @@ class _ModelBuilder:
                 fixed = [m.new_fixed_size_interval_var(a, b - a, f"blocked[{key},{a}]") for a, b in blocked]
                 if len(intervals) + len(fixed) > 1:
                     m.add_no_overlap(intervals + fixed)
-        for sid, items in self.staff_load.items():
+        for sid, items in self.week_load.items():
             person = self.opt._staff_by_id[sid]
-            cap = max(0, person.remaining_minutes - self.frozen_load[sid])
-            if sum(d for d, _ in items) > cap:
-                m.add(sum(d * lit for d, lit in items) <= cap)
+            self._cap(f"week[{sid}]", items, max(0, person.remaining_minutes - self.frozen_load[sid]))
+        w = self.weights
+        for sid, items in self.day_load.items():
+            person = self.opt._staff_by_id[sid]
+            self._cap(f"day[{sid}]", items, max(0, person.daily_cap_minutes - self.frozen_day_load[sid]))
+            # Spread the day: long days on one person cost more than the same work shared.
+            base, most = self.frozen_day_load[sid], sum(d for d, _, _ in items)
+            if w.day_spread_per_quarter and base + most > w.day_spread_after_mins:
+                quarters = m.new_int_var(0, -(-(base + most - w.day_spread_after_mins) // 15), f"long_day[{sid}]")
+                m.add(15 * quarters >= base + sum(d * lit for d, lit, _ in items) - w.day_spread_after_mins)
+                self.objective.append(w.day_spread_per_quarter * quarters)
+        # Rest: no (non-overriding) case time inside a rest period. Rest periods
+        # may overlap each other, so: case time demand k, rest demand 1, capacity k.
+        for sid, work in self.rest_work.items():
+            person = self.opt._staff_by_id[sid]
+            rests = list(self.rest_items.get(sid, []))
+            if person.rest_until > 0 and person.rest_minutes > 0:
+                rests.append(m.new_fixed_size_interval_var(
+                    person.rest_until - person.rest_minutes, person.rest_minutes, f"rest_before[{sid}]"))
+            if rests:
+                k = len(rests)
+                m.add_cumulative(work + rests, [k] * len(work) + [1] * k, k)
+
+    def _cap(self, name: str, items, cap: int) -> None:
+        """Sum of assigned minutes <= cap; emergency overrides may go over, at a cost."""
+        if sum(d for d, _, _ in items) <= cap:
+            return
+        m = self.model
+        load = sum(d * lit for d, lit, _ in items)
+        flex = [(d, over) for d, _, over in items if over is not None]
+        if not flex:
+            m.add(load <= cap)
+            return
+        extra = m.new_int_var(0, sum(d for d, _ in flex), f"over_{name}")
+        m.add(extra <= sum(d * over for d, over in flex))
+        m.add(load <= cap + extra)
+        self.objective.append(self.weights.fatigue_over_per_min * extra)
 
     def add_setup_grouping(self) -> None:
         """Per room, order cases with a circuit and charge for set-up switches."""

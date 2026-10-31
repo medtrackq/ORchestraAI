@@ -157,6 +157,14 @@
   .triage { display: inline-block; padding: 2px 10px; border-radius: 99px; font-size: .75rem; font-weight: 600; color: #fff; }
   .triage.ELECTIVE { background: var(--elective); } .triage.URGENT { background: var(--urgent); color: #1f1300; } .triage.EMERGENCY { background: var(--emergency); }
   .mic-on { background: var(--emergency) !important; color: #fff !important; border-color: var(--emergency) !important; }
+  .meter { height: 6px; background: var(--track); border: 1px solid var(--border); border-radius: 99px; overflow: hidden; }
+  .meter i { display: block; height: 100%; background: var(--ok); }
+  .meter i.lv-tired { background: var(--warn); } .meter i.lv-high, .meter i.lv-over { background: var(--bad); }
+  ul.fatigue { margin: 0; padding-left: 18px; color: var(--bad); font-size: .78rem; }
+  .fatigue-box { border: 1px solid var(--bad); background: var(--bad-soft); color: var(--bad); border-radius: 10px; padding: 10px 12px; margin: 10px 0; font-size: .82rem; }
+  .fatigue-box ul { margin: 6px 0 0; padding-left: 18px; }
+  .staff-tools { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
+  .staff-tools select { flex: 0 1 220px; }
   .actual-form { display: flex; gap: 8px; flex-wrap: wrap; align-items: end; margin-top: 8px; }
   .actual-form label { flex: 1 1 110px; }
   [hidden] { display: none !important; }
@@ -212,6 +220,7 @@
       <button class="tab" role="tab" aria-selected="true" data-tab="book" data-perm="book">จองผ่าตัด</button>
       <button class="tab er" role="tab" aria-selected="false" data-tab="er" data-perm="emergency">ฉุกเฉิน</button>
       <button class="tab" role="tab" aria-selected="false" data-tab="over" data-perm="overrun">เกินเวลา</button>
+      <button class="tab" role="tab" aria-selected="false" data-tab="staff" data-perm="staff_view">บุคลากร</button>
       <button class="tab" role="tab" aria-selected="false" data-tab="equip" data-perm="equipment">เครื่องมือ</button>
       <button class="tab" role="tab" aria-selected="false" data-tab="users" data-perm="users">ผู้ใช้</button>
       <button class="tab" role="tab" aria-selected="false" data-tab="log" data-perm="view">กิจกรรม</button>
@@ -265,6 +274,17 @@
         <button class="btn primary" type="submit">คำนวณผลกระทบ</button>
       </form>
       <div class="result" id="result-over"></div>
+    </section>
+
+    <section data-panel="staff" hidden>
+      <p class="hint">Staffing Agent: ชั่วโมงผ่าตัดวันนี้ / 7 วัน และคะแนนความเหนื่อยล้า (0-100%) คิดจากเคสที่จองและเวลาผ่าตัดจริง
+        เกณฑ์: ไม่เกิน 10 ชม./วัน, 48 ชม./7 วัน และพัก 8 ชม. หลังเคสที่จบดึก (หลัง 22:00 ถึง 06:00)
+        เคสปกติห้ามเกินเกณฑ์ เคสฉุกเฉินเกินได้แต่ระบบจะเตือนสีแดง</p>
+      <div class="staff-tools">
+        <select id="staff-role" aria-label="กรองตามบทบาท"><option value="">ทุกบทบาท</option></select>
+        <label style="display:flex;flex-direction:row;align-items:center;gap:6px;color:var(--text)"><input type="checkbox" id="staff-busy">เฉพาะคนที่มีเคสวันนี้</label>
+      </div>
+      <div id="staff-list" class="rows"></div>
     </section>
 
     <section data-panel="equip" hidden>
@@ -329,6 +349,31 @@
     ? path + (path.includes('?') ? '&' : '?') + 'date=' + STATE.date : path);
 
   const can = perm => !!(STATE && STATE.me && STATE.me.permissions.includes(perm));
+  const hours = m => (m / 60).toFixed(1).replace(/\.0$/, '');
+  const timeText = m => hhmm(m) + (m >= 24 * 60 ? ' (พรุ่งนี้)' : m < 0 ? ' (เมื่อวาน)' : '');
+
+  // Staffing Agent fatigue issue -> Thai sentence.
+  function fatigueText(i) {
+    const tag = i.override ? 'ฉุกเฉินเกินเกณฑ์ · ' : i.locked ? 'เกิดขึ้นแล้ว · ' : 'ผิดเกณฑ์ · ';
+    const text = {
+      weekly: `${i.name}: ผ่าตัดรวม 7 วัน ${hours(i.actual_mins)} ชม. เกินเกณฑ์ ${hours(i.limit_mins)} ชม. (+${i.minutes} นาที, เคส ${i.case_id})`,
+      daily: `${i.name}: ผ่าตัดวันนี้ ${hours(i.actual_mins)} ชม. เกินเกณฑ์ ${hours(i.limit_mins)} ชม. (+${i.minutes} นาที, เคส ${i.case_id})`,
+      rest: `${i.name}: เริ่มเคส ${i.case_id} ก่อนพักครบ ${hours(i.limit_mins)} ชม. หลังเคสดึก${i.after_case ? ' ' + i.after_case : 'ของวันก่อน'} (ได้พัก ${hours(i.actual_mins)} ชม. ควรพักถึง ${timeText(i.until)})`,
+      next_day: `${i.name}: เคส ${i.case_id} จบดึก พักได้ ${hours(i.actual_mins)} ชม. ก่อนเคสถัดไป ${timeText(i.until)} (ต้องพัก ${hours(i.limit_mins)} ชม.)`,
+    }[i.kind] || i.detail;
+    return tag + text;
+  }
+
+  function fatigueBox(issues, title) {
+    if (!issues || !issues.length) return '';
+    return `<div class="fatigue-box"><b>⚠ ${esc(title)}</b><ul>${issues.map(i => '<li>' + esc(fatigueText(i)) + '</li>').join('')}</ul></div>`;
+  }
+
+  // Team names, with each person's fatigue score when this account may see it.
+  function teamText(team) {
+    const score = Object.fromEntries((STATE.staff || []).map(p => [p.staff_id, p]));
+    return team.map(t => esc(t.name) + (score[t.staff_id] ? ` <small>(${score[t.staff_id].score}%)</small>` : '')).join(', ');
+  }
 
   async function api(path, body, method) {
     const res = await fetch(withDate(path), body === undefined ? {} : {
@@ -392,18 +437,41 @@
       <div class="prediction" data-role="prediction" hidden></div>
       <fieldset><legend>ห้องต้องมี</legend><div class="checks">${caps}</div></fieldset>
       <fieldset><legend>เครื่องมือ (ชุดละ 1)</legend><div class="checks">${eq}</div></fieldset>
+      <fieldset data-role="skills" hidden></fieldset>
       <div class="row2">
         <label>ความเสี่ยงติดเชื้อ
           <select name="infection_risk"><option>CLEAN</option><option>CONTAMINATED</option><option ${kind === 'er' ? 'selected' : ''}>DIRTY</option></select>
         </label>
         <fieldset><legend>อื่น ๆ</legend><div class="checks">
           <label><input type="checkbox" name="icu" ${kind === 'er' ? 'checked' : ''}>ต้องการ ICU</label>
-          <label><input type="checkbox" name="robotic">พยาบาล Robotic</label>
         </div></fieldset>
       </div>`;
   }
 
-  // Intake defaults: procedure (room, ICU, infection) + surgeon preference card (time, team, equipment).
+  // Staffing Agent: skills each team role must have (from the procedure; editable).
+  const ROLE_TH = { SURGEON: 'ศัลยแพทย์', ANESTHESIOLOGIST: 'วิสัญญีแพทย์', SCRUB_NURSE: 'พยาบาลส่งเครื่องมือ', CIRCULATING_NURSE: 'พยาบาลช่วยรอบนอก' };
+  const SKILL_TH = {
+    ROBOTIC_CERTIFIED: 'ผ่าตัดหุ่นยนต์', PEDIATRIC_ANESTHESIA: 'ดมยาเด็ก', PEDIATRIC_CARE: 'ดูแลผู้ป่วยเด็ก',
+    CARDIAC_ANESTHESIA: 'ดมยาผ่าตัดหัวใจ', CARDIAC: 'ผ่าตัดหัวใจ', NEURO: 'ประสาทศัลยกรรม', TRAUMA: 'อุบัติเหตุ',
+    OBSTETRIC_ANESTHESIA: 'ดมยาสูติกรรม', TRANSPLANT: 'ปลูกถ่ายอวัยวะ', LASER_SAFETY: 'ความปลอดภัยเลเซอร์',
+  };
+  const skillName = sk => SKILL_TH[sk] || sk;
+
+  function renderSkills(form, need) {
+    const box = form.querySelector('[data-role="skills"]');
+    const have = Object.fromEntries(Object.entries(STATE.options.skills || {}).filter(([role]) => role !== 'SURGEON'));
+    const roles = [...new Set([...Object.keys(have), ...Object.keys(need)])];
+    box.hidden = !roles.length;
+    box.innerHTML = '<legend>ทักษะที่ทีมต้องมี</legend>' + roles.map(role => {
+      const list = [...new Set([...(have[role] || []), ...(need[role] || [])])].sort();
+      return `<div class="checks"><span class="hint">${esc(role === 'SURGEON' ? 'ศัลยแพทย์ผู้ช่วย' : ROLE_TH[role] || role)}:</span>${list.map(sk => {
+        const nobody = !(have[role] || []).includes(sk);
+        return `<label><input type="checkbox" name="skill" value="${esc(role + ':' + sk)}" ${(need[role] || []).includes(sk) ? 'checked' : ''}>${esc(skillName(sk))}${nobody ? ' <small>(ยังไม่มีใครมี)</small>' : ''}</label>`;
+      }).join('')}</div>`;
+    }).join('');
+  }
+
+  // Intake defaults: procedure (room, ICU, infection, skills) + surgeon preference card (time, team, equipment).
   function applyDefaults(form) {
     const o = STATE.options;
     const pid = form.elements['procedure_id']?.value;
@@ -418,6 +486,7 @@
     form.querySelectorAll('input[name="eq"]').forEach(x => { x.checked = card ? card.equipment.includes(x.value) : false; });
     form.elements['icu'].checked = p.icu;
     form.elements['infection_risk'].value = p.infection;
+    renderSkills(form, p.skills || {});
     if (card) form.dataset.roles = JSON.stringify(card.roles);
     delete form.dataset.durationTouched;
     updatePrediction(form);
@@ -449,6 +518,8 @@
 
   function readCase(form, urgency) {
     const f = new FormData(form);
+    const skills = {};
+    f.getAll('skill').forEach(v => { const [role, sk] = v.split(':'); (skills[role] ||= []).push(sk); });
     return {
       procedure: f.get('procedure').trim(),
       patient_hn: f.get('patient_hn').trim(),
@@ -459,7 +530,7 @@
       required_equipment_types: f.getAll('eq'),
       requires_icu_post_op: f.get('icu') === 'on',
       infection_risk: f.get('infection_risk'),
-      robotic_certified_scrub: f.get('robotic') === 'on',
+      required_staff_skills: skills,
       patient_name: (f.get('patient_name') || '').trim() || null,
       procedure_id: f.get('procedure_id') || null,
       required_staff_roles: form.dataset.roles ? JSON.parse(form.dataset.roles) : null,
@@ -487,6 +558,7 @@
     renderUnscheduled();
     renderOverrunOptions();
     renderActivity();
+    renderStaff();
     if (selected) showDetail(selected);
   }
 
@@ -530,11 +602,12 @@
       <dl>
         <dt>ผู้ป่วย</dt><dd>${esc(b.patient_hn)}${b.patient_name ? ' · ' + esc(b.patient_name) : ''} · ${esc(b.urgency)}${b.frozen ? ' · เริ่มแล้ว (ล็อก)' : ''}</dd>
         <dt>ห้อง / เวลา</dt><dd>${esc(b.or_id)} ${esc(b.start)}-${esc(b.end)} (ห้องพร้อมใหม่ ${esc(b.cleanup_end)})</dd>
-        <dt>ทีม</dt><dd>${b.team.map(t => esc(t.name)).join(', ')}</dd>
+        <dt>ทีม</dt><dd>${teamText(b.team)}</dd>
         <dt>เครื่องมือ</dt><dd>${b.equipment.map(e => esc(e.unit_id) + ' (กลับจาก CSSD ' + hhmm(e.back_from_cssd_min) + ')').join(', ') || '-'}</dd>
         <dt>เตียงพักฟื้น</dt><dd>${b.bed_id ? esc(b.bed_id) + ' ' + hhmm(b.recovery_start_min) + '-' + hhmm(b.recovery_end_min) : '-'}</dd>
       </dl>
       ${b.reasoning.length ? '<ul class="why">' + b.reasoning.map(r => '<li>' + esc(r) + '</li>').join('') + '</ul>' : ''}
+      ${fatigueBox((STATE.fatigue || []).filter(i => i.case_id === b.case_id), 'เกณฑ์ความเหนื่อยล้าของทีมในเคสนี้')}
       ${actualTimes(b)}`;
     const form = box.querySelector('.actual-form');
     if (form) form.addEventListener('submit', e => {
@@ -644,16 +717,17 @@
     const placed = r.result.bookings.find(b => b.case_id === r.case_id);
     let proposal;
     if (r.booked) {
-      proposal = `<div class="proposal">✅ จองแล้ว: <b>${esc(placed.case_id)}</b> ห้อง ${esc(placed.or_id)} ${esc(placed.start)}-${esc(placed.end)}<br>ทีม: ${placed.team.map(t => esc(t.name)).join(', ')}</div>`;
+      proposal = `<div class="proposal">✅ จองแล้ว: <b>${esc(placed.case_id)}</b> ห้อง ${esc(placed.or_id)} ${esc(placed.start)}-${esc(placed.end)}<br>ทีม: ${teamText(placed.team)}</div>`;
     } else if (placed) {
       proposal = `<div class="proposal">${r.ok ? 'ว่างตามเวลาที่ขอ' : 'เวลาที่ขอไม่ว่าง ช่วงแรกที่ทุก Agent ผ่าน'}: <b>${esc(placed.or_id)} ${esc(placed.start)}-${esc(placed.end)}</b><br>
-        ทีม: ${placed.team.map(t => esc(t.name)).join(', ')}${placed.bed_id ? '<br>เตียง: ' + esc(placed.bed_id) : ''}
+        ทีม: ${teamText(placed.team)}${placed.bed_id ? '<br>เตียง: ' + esc(placed.bed_id) : ''}
         <div style="margin-top:10px"><button class="btn primary" type="button" id="confirm-book">ยืนยันจอง ${esc(placed.start)}</button></div></div>`;
     } else {
       const reasons = (r.result.unscheduled.find(u => u.case_id === r.case_id) || { reasons: [] }).reasons;
       proposal = `<div class="proposal none">ไม่มีช่วงเวลาที่จองได้วันนี้: ${esc(reasons.join('; '))}</div>`;
     }
-    $('#result-book').innerHTML = `<h3>ผลตรวจ ${esc(r.requested_start)}</h3>${verdicts}${proposal}
+    const tired = (r.result.fatigue || []).filter(i => i.case_id === r.case_id);
+    $('#result-book').innerHTML = `<h3>ผลตรวจ ${esc(r.requested_start)}</h3>${verdicts}${proposal}${fatigueBox(tired, 'ทีมเกินเกณฑ์ความเหนื่อยล้า')}
       <details><summary>Negotiation log</summary><pre class="log">${esc(r.log.join('\n'))}</pre></details>`;
     const confirm = $('#confirm-book');
     if (confirm) confirm.addEventListener('click', () => busy(confirm, async () => {
@@ -671,6 +745,7 @@
     $(target).innerHTML = `<h3>${esc(title)}</h3>
       ${r.changes.length ? '<ul class="changes">' + r.changes.map(c => '<li><b>' + esc(c.case_id) + '</b>: ' + esc(c.details.join('; ')) + '</li>').join('') + '</ul>' : '<p class="hint">ไม่มีเคสอื่นได้รับผลกระทบ</p>'}
       ${r.unscheduled.length ? '<div class="proposal none">' + r.unscheduled.map(u => esc(u.case_id) + ': ' + esc(u.reasons.join('; '))).join('<br>') + '</div>' : ''}
+      ${fatigueBox(r.fatigue, 'ใช้บุคลากรเกินเกณฑ์ความเหนื่อยล้า (อนุญาตเพราะเป็นเคสฉุกเฉิน) ควรหาคนสลับหรือให้พักชดเชย')}
       <p class="hint">แจ้งเตือน ${r.notifications.length} ข้อความถึง ${people.length} คน${people.length ? ': ' + esc(people.join(', ')) : ''}</p>
       ${r.log.length ? '<details><summary>Agent log</summary><pre class="log">' + esc(r.log.join('\n')) + '</pre></details>' : ''}`;
   }
@@ -727,6 +802,7 @@
     $('[data-case="book"]').innerHTML = caseFields('book');
     $('[data-case="er"]').innerHTML = caseFields('er');
     const book = $('#form-book'), er = $('#form-er');
+    [book, er].forEach(form => renderSkills(form, {}));
     const oncall = STATE.options.surgeons.find(s => /on-call|เวร/i.test(s.name));
     if (oncall && STATE.me.role !== 'surgeon') er.elements['surgeon_id'].value = oncall.id;
     const procs = STATE.options.procedures || [];
@@ -753,6 +829,35 @@
     er.elements['now'].value = now;
     $('#form-over').elements['now'].value = now;
   }
+
+  // ------------------------------------------------------------ staffing (fatigue)
+  const LEVEL = { ok: ['ok', 'ปกติ'], tired: ['warn', 'เริ่มล้า'], high: ['bad', 'ใกล้เกณฑ์'], over: ['bad', 'เกินเกณฑ์'] };
+
+  function renderStaff() {
+    const list = STATE.staff || [];
+    const roleSelect = $('#staff-role');
+    const roles = [...new Set(list.map(p => p.role))];
+    if (roleSelect.options.length !== roles.length + 1) {
+      const keep = roleSelect.value;
+      roleSelect.innerHTML = '<option value="">ทุกบทบาท</option>' + roles.map(r => `<option value="${esc(r)}">${esc(ROLE_TH[r] || r)}</option>`).join('');
+      roleSelect.value = roles.includes(keep) ? keep : '';
+    }
+    const role = roleSelect.value, busyOnly = $('#staff-busy').checked;
+    const shown = list.filter(p => (!role || p.role === role) && (!busyOnly || p.cases.length))
+      .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
+    $('#staff-list').innerHTML = shown.map(p => {
+      const [cls, label] = LEVEL[p.level] || LEVEL.ok;
+      return `<div class="row-item">
+        <div class="title"><b>${esc(p.name)}</b><span class="badge ${cls}">${label} ${p.score}%</span></div>
+        <small class="hint">${esc(ROLE_TH[p.role] || p.role)}${p.skills.length ? ' · ทักษะ: ' + esc(p.skills.map(skillName).join(', ')) : ''} · เวรวันนี้ ${esc(p.shifts.join(', ') || 'ไม่มี')}${p.active ? '' : ' · ปิดใช้งาน'}</small>
+        <div class="meter" role="img" aria-label="ความเหนื่อยล้า ${p.score}%"><i class="lv-${esc(p.level)}" style="width:${Math.min(100, p.score)}%"></i></div>
+        <small>วันนี้ผ่าตัด ${hours(p.today_mins)}/${hours(p.daily_cap_mins)} ชม. · 7 วัน ${hours(p.week_mins)}/${hours(p.weekly_cap_mins)} ชม.${p.rest_until ? ' · <b>พักถึง ' + esc(timeText(p.rest_until)) + '</b>' : ''}${p.cases.length ? ' · เคส ' + esc(p.cases.join(', ')) : ''}</small>
+        ${p.issues.length ? '<ul class="fatigue">' + p.issues.map(i => '<li>' + esc(fatigueText(i)) + '</li>').join('') + '</ul>' : ''}
+      </div>`;
+    }).join('') || `<p class="hint">${list.length ? 'ไม่มีบุคลากรตามตัวกรอง' : 'ไม่มีข้อมูลบุคลากรที่บัญชีนี้ดูได้ (ให้ผู้ดูแลผูกบัญชีกับรายชื่อบุคลากร)'}</p>`;
+  }
+  $('#staff-role').addEventListener('change', renderStaff);
+  $('#staff-busy').addEventListener('change', renderStaff);
 
   // ------------------------------------------------------------ equipment (CSSD)
   const STATUS = { AVAILABLE: 'พร้อมใช้', IN_USE: 'กำลังใช้', STERILIZING: 'กำลังอบที่ CSSD', MAINTENANCE: 'ซ่อมบำรุง' };
@@ -910,6 +1015,7 @@
     if (f.required_capabilities) form.querySelectorAll('input[name="cap"]').forEach(x => { x.checked = f.required_capabilities.includes(x.value); });
     if (f.required_equipment_types) form.querySelectorAll('input[name="eq"]').forEach(x => { x.checked = f.required_equipment_types.includes(x.value); });
     if (f.required_staff_roles) form.dataset.roles = JSON.stringify(f.required_staff_roles);
+    if (f.required_staff_skills) renderSkills(form, f.required_staff_skills);
     form.elements['icu'].checked = !!f.requires_icu_post_op;
     pick('infection_risk', f.infection_risk);
     if (f.duration_mins) {

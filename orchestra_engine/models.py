@@ -102,6 +102,11 @@ class StaffMember:
 
     ``shifts`` holds only the windows the person can work (REGULAR / ON_CALL
     with ``is_available``); LEAVE rows are left out by the data layer.
+
+    Fatigue (see ``fatigue``): ``current_weekly_hours`` is operating-room time
+    already worked in the 7-day window before this horizon; ``rest_until``
+    is the earliest start after a late-night case before the horizon and
+    ``next_booking_min`` the first booked start after it.
     """
 
     staff_id: str
@@ -113,6 +118,10 @@ class StaffMember:
     max_weekly_hours: float = 48
     current_weekly_hours: float = 0
     is_active: bool = True
+    max_daily_hours: float = 10
+    rest_hours: float = 8
+    rest_until: int = 0
+    next_booking_min: int | None = None
 
     def __post_init__(self) -> None:
         self.skills = frozenset(self.skills)
@@ -120,11 +129,29 @@ class StaffMember:
         for start, end in self.shifts:
             if end <= start:
                 raise ValueError(f"{self.staff_id}: shift end must be after start")
+        if self.max_daily_hours <= 0 or self.max_weekly_hours <= 0 or self.rest_hours < 0:
+            raise ValueError(f"{self.staff_id}: hour limits must be positive")
+
+    @property
+    def weekly_cap_minutes(self) -> int:
+        return int(round(self.max_weekly_hours * 60))
+
+    @property
+    def weekly_used_minutes(self) -> int:
+        return int(round(self.current_weekly_hours * 60))
+
+    @property
+    def daily_cap_minutes(self) -> int:
+        return int(round(self.max_daily_hours * 60))
+
+    @property
+    def rest_minutes(self) -> int:
+        return int(round(self.rest_hours * 60))
 
     @property
     def remaining_minutes(self) -> int:
         """Minutes left before hitting ``max_weekly_hours`` (fatigue guard)."""
-        return max(0, int(round((self.max_weekly_hours - self.current_weekly_hours) * 60)))
+        return max(0, self.weekly_cap_minutes - self.weekly_used_minutes)
 
 
 @dataclass

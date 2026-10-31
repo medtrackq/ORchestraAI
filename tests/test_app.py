@@ -224,3 +224,38 @@ def test_reset_restores_demo_day(owner):
 def test_pages_are_served(owner):
     assert "ORchestraAI" in owner.get("/").text
     assert 'id="flow-data"' in owner.get("/flow").text
+
+
+# ------------------------------------------------------------- staffing agent
+
+def test_staff_fatigue_view_is_shaped_per_role(owner):
+    state = owner.get("/api/state").json()
+    assert len(state["staff"]) == len(store.hospital.staff)
+    person = next(p for p in state["staff"] if p["staff_id"] == "ANE-2")
+    assert person["week_mins"] >= 45 * 60 and person["daily_cap_mins"] == 600 and 0 <= person["score"] <= 100
+    assert state["options"]["skills"]["SCRUB_NURSE"] == ["ROBOTIC_CERTIFIED"]
+
+    nurse = make_user(owner, "malee", "staff", "SCR-1")
+    mine = nurse.get("/api/state").json()
+    assert [p["staff_id"] for p in mine["staff"]] == ["SCR-1"]  # only their own hours
+    assert "staff_view" in mine["me"]["permissions"] and "staff_all" not in mine["me"]["permissions"]
+    cssd = make_user(owner, "cssd1", "cssd")
+    assert cssd.get("/api/state").json()["staff"] == []
+
+
+def test_required_skills_reach_the_engine(owner):
+    case = _case(surgeon_id="SUR-ONCALL", required_staff_skills={"ANESTHESIOLOGIST": ["PEDIATRIC_ANESTHESIA"]})
+    r = owner.post("/api/slot-check", json={"case": case, "start": "16:00"}).json()
+    placed = next(b for b in r["result"]["bookings"] if b["case_id"] == r["case_id"])
+    assert "ANE-3" in [t["staff_id"] for t in placed["team"]]  # the only paediatric anaesthetist
+
+    body = {"case": _case(required_staff_skills={"SCRUB_NURSE": ["CARDIAC"]}), "start": "10:00"}
+    r = owner.post("/api/slot-check", json=body).json()
+    staffing = next(v for v in r["verdicts"] if v["agent"] == "Staffing Agent")
+    assert any(i["note"] == "nobody has this skill" for i in staffing["items"])
+    assert not any(b["case_id"] == r["case_id"] for b in r["result"]["bookings"])
+
+    bad = {"case": _case(required_staff_skills={"SCRUB_NURSE": ["drop table"]}), "start": "10:00"}
+    assert owner.post("/api/slot-check", json=bad).status_code == 400
+    bad = {"case": _case(required_staff_skills={"JANITOR": ["MOP"]}), "start": "10:00"}
+    assert owner.post("/api/slot-check", json=bad).status_code == 400

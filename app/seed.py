@@ -98,13 +98,20 @@ def seed_resources(conn: psycopg.Connection, tz: ZoneInfo, today: date) -> dict:
         )
 
     procedure_ids: dict[str, uuid.UUID] = {}
+    with_skills = _has_column(conn, "procedures", "required_staff_skills")
 
-    def procedure(name, minutes, caps, icu, infection) -> uuid.UUID:
+    def procedure(name, minutes, caps, icu, infection, skills=None) -> uuid.UUID:
         if name not in procedure_ids:
+            cols = ["name", "default_duration_mins", "required_room_capabilities", "requires_icu_post_op",
+                    "infection_risk_level"]
+            values = [name, minutes, Jsonb(sorted(caps)), icu, infection]
+            if with_skills:
+                cols.append("required_staff_skills")
+                values.append(Jsonb(skills or {}))
             procedure_ids[name] = conn.execute(
-                """INSERT INTO procedures (name, default_duration_mins, required_room_capabilities,
-                       requires_icu_post_op, infection_risk_level) VALUES (%s, %s, %s, %s, %s) RETURNING procedure_id""",
-                (name, minutes, Jsonb(sorted(caps)), icu, infection),
+                f"INSERT INTO procedures ({', '.join(cols)}) VALUES ({', '.join(['%s'] * len(cols))}) "
+                "RETURNING procedure_id",
+                values,
             ).fetchone()["procedure_id"]
         return procedure_ids[name]
 
@@ -119,7 +126,7 @@ def seed_resources(conn: psycopg.Connection, tz: ZoneInfo, today: date) -> dict:
 
     for c in elective_day():
         pid = procedure(c.procedure, c.duration_mins, c.required_capabilities, c.requires_icu_post_op,
-                        c.infection_risk.value)
+                        c.infection_risk.value, _case_skills(c))
         card(c.surgeon_id, pid, c.duration_mins, c.required_staff_roles, list(c.required_equipment_types))
     for name, surgeon, minutes, equipment, infection, icu in EMERGENCY_PROCEDURES:
         pid = procedure(name, minutes, [], icu, InfectionRisk(infection).value)
@@ -128,20 +135,33 @@ def seed_resources(conn: psycopg.Connection, tz: ZoneInfo, today: date) -> dict:
     return {"staff": staff_ids, "procedures": procedure_ids}
 
 
+def _has_column(conn: psycopg.Connection, table: str, column: str) -> bool:
+    return conn.execute(
+        """SELECT EXISTS (SELECT 1 FROM information_schema.columns
+                          WHERE table_schema = 'public' AND table_name = %s AND column_name = %s) AS e""",
+        (table, column),
+    ).fetchone()["e"]
+
+
+def _case_skills(case) -> dict[str, list[str]]:
+    return {role: sorted(skills) for role, skills in case.required_staff_skills.items() if skills}
+
+
 def demo_catalog() -> tuple[list[dict], list[dict]]:
     """Procedures and preference cards of the demo hospital (demo / memory mode)."""
     procedures: dict[str, dict] = {}
     cards: dict[tuple[str, str], dict] = {}
 
-    def procedure(name, minutes, caps, icu, infection) -> str:
+    def procedure(name, minutes, caps, icu, infection, skills=None) -> str:
         pid = "P-" + re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
         procedures.setdefault(pid, {"id": pid, "name": name, "code": None, "duration": minutes,
-                                    "caps": sorted(caps), "icu": icu, "infection": infection})
+                                    "caps": sorted(caps), "icu": icu, "infection": infection,
+                                    "skills": skills or {}})
         return pid
 
     for c in elective_day():
         pid = procedure(c.procedure, c.duration_mins, c.required_capabilities, c.requires_icu_post_op,
-                        c.infection_risk.value)
+                        c.infection_risk.value, _case_skills(c))
         cards.setdefault((c.surgeon_id, pid), {
             "surgeon_id": c.surgeon_id, "procedure_id": pid, "duration": c.duration_mins, "stddev": 15,
             "roles": dict(c.required_staff_roles), "equipment": list(c.required_equipment_types), "notes": None})

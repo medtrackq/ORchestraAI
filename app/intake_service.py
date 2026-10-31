@@ -24,7 +24,7 @@ class IntakeContext:
     """What the agent may pick from on the planning day."""
 
     today: date
-    procedures: list[dict]  # id, name, duration, caps, icu, infection
+    procedures: list[dict]  # id, name, duration, caps, icu, infection, skills
     surgeons: list[dict]  # id, name
     cards: list[dict]  # surgeon_id, procedure_id, duration, stddev, roles, equipment
     history: list[HistoryRecord] = field(default_factory=list)
@@ -80,6 +80,7 @@ class IntakeService:
         if proc:
             fields["procedure"] = proc["name"]
             fields["required_capabilities"] = list(proc.get("caps") or [])
+            fields["required_staff_skills"] = dict(proc.get("skills") or {})
             fields["requires_icu_post_op"] = bool(fields.get("requires_icu_post_op")) or bool(proc.get("icu"))
             if _INFECTION.get(proc.get("infection") or "CLEAN", 0) > _INFECTION.get(fields.get("infection_risk"), 0):
                 fields["infection_risk"] = proc["infection"]

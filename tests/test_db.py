@@ -1,7 +1,7 @@
 """Supabase mode against a real PostgreSQL server.
 
 Runs only when TEST_DATABASE_URL points at a PostgreSQL server where the user
-may create databases (each test gets a fresh database with both migrations):
+may create databases (each test gets a fresh database with every migration):
 
     TEST_DATABASE_URL=postgresql://postgres@127.0.0.1:54329/postgres pytest tests/test_db.py
 """
@@ -249,3 +249,72 @@ def test_actual_times_and_history_live_in_supabase(store, db_url):
     outsider = {"name": "X", "username": "x", "role": "staff", "staff_id": "00000000-0000-0000-0000-000000000000"}
     with pytest.raises(StoreError):
         store.record_actual(case["case_id"], "08:00", None, actor=outsider)
+
+
+def test_fatigue_hours_and_skills_come_from_the_database(store, db_url):
+    today, tomorrow = store.state(), _tomorrow(store)
+    worked: dict[str, int] = {}
+    for b in today["schedule"]["bookings"]:
+        for t in b["team"]:
+            worked[t["staff_id"]] = worked.get(t["staff_id"], 0) + b["end_min"] - b["start_min"]
+    staff = {p["staff_id"]: p for p in store.state(tomorrow)["staff"]}
+    for sid, minutes in worked.items():
+        assert staff[sid]["week_mins"] == minutes and staff[sid]["today_mins"] == 0  # yesterday counts, today empty
+    assert all(p["daily_cap_mins"] == 600 and p["rest_mins"] == 480 for p in staff.values())
+
+    robotic = next(p for p in today["options"]["procedures"] if p["name"].startswith("Robotic"))
+    assert robotic["skills"] == {"SCRUB_NURSE": ["ROBOTIC_CERTIFIED"]}
+    assert today["options"]["skills"]["SCRUB_NURSE"] == ["ROBOTIC_CERTIFIED"]
+    # Migration 004 restores the robotic-nurse rule on robotic procedures that have none.
+    with psycopg.connect(db_url, autocommit=True) as conn:
+        conn.execute("UPDATE procedures SET required_staff_skills = '{}'::jsonb")
+        conn.execute((MIGRATIONS / "20261103000000_staff_fatigue_and_skills.sql").read_text())
+    names = {r[0] for r in _rows(db_url, "SELECT name FROM procedures WHERE required_staff_skills <> '{}'::jsonb")}
+    assert names == {p["name"] for p in today["options"]["procedures"] if "ROBOTIC_READY" in p["caps"]}
+
+
+def test_late_case_needs_rest_before_the_next_day_booking(store, db_url):
+    day1 = _tomorrow(store)
+    day2 = (store.db.today() + timedelta(days=2)).isoformat()
+    state = store.state(day2)
+    morning = _request(state, "Dr.Anan", "Emergency appendectomy (open)", "HN-M", urgency="URGENT")
+    assert store.slot_check(morning, "08:00", commit=True, day=day2)["booked"]
+    anan = morning["surgeon_id"]
+    with psycopg.connect(db_url, autocommit=True) as conn:
+        conn.execute("UPDATE staff SET min_rest_hours = 10 WHERE staff_id = %s", (anan,))
+
+    late = _request(store.state(day1), "Dr.Anan", "Emergency appendectomy (open)", "HN-L", duration_mins=60)
+    check = store.slot_check(late, "22:30", commit=False, day=day1)  # ends 23:30, 8.5 h before 08:00
+    staffing = next(v for v in check["verdicts"] if v["agent"] == "Staffing Agent")
+    assert not staffing["ok"] and "less than 10 h rest" in staffing["items"][0]["note"]
+    assert not any(b["case_id"] == check["case_id"] for b in check["result"]["bookings"])
+
+    result = store.emergency(late, "22:30", day=day1)  # an emergency may, with a warning
+    issue = next(i for i in result["fatigue"] if i["staff_id"] == anan)
+    assert issue["kind"] == "next_day" and issue["override"] and issue["minutes"] == 90
+    assert any("FATIGUE OVERRIDE" in line for line in result["log"])
+    saved = store.state(day1)
+    assert saved["warnings"] == []  # an emergency override is not a conflict
+    assert any(i["staff_id"] == anan and i["override"] for i in saved["fatigue"])
+    next_day = store.state(day2)
+    rested = {p["staff_id"]: p for p in next_day["staff"]}
+    assert rested[anan]["rest_until"] == 23 * 60 + 30 + 10 * 60 - 24 * 60  # 09:30 on day 2
+    # Day 2 now shows that the 08:00 case starts inside that rest, for the scheduler to fix.
+    assert any(w.startswith("fatigue rest:") and "09:30" in w for w in next_day["warnings"])
+
+
+def test_app_works_before_migration_004(db_url):
+    """Deployed code may run before the fatigue/skills migration: defaults are used."""
+    from app.db_store import DatabaseStore
+
+    with psycopg.connect(db_url, autocommit=True) as conn:
+        conn.execute("ALTER TABLE staff DROP COLUMN max_hours_per_day, DROP COLUMN min_rest_hours")
+        conn.execute("ALTER TABLE procedures DROP COLUMN required_staff_skills")
+    store = DatabaseStore(db_url, workers=2, time_limit_s=10)
+    store.seed_demo()
+    state = store.state()
+    assert len(state["schedule"]["bookings"]) == 10 and state["warnings"] == []
+    assert all(p["daily_cap_mins"] == 600 and p["rest_mins"] == 480 for p in state["staff"])
+    day = _tomorrow(store)
+    data = _request(store.state(day), "Dr.Napat", "Laparoscopic cholecystectomy", "HN-OLD")
+    assert store.slot_check(data, "09:00", commit=True, day=day)["booked"]

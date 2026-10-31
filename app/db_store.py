@@ -23,7 +23,7 @@ from . import seed
 from .db import ConflictError, Database, DatabaseUnavailable, World, case_code
 from .intake_service import IntakeContext
 from .store import (Activity, StoreError, actor_name, build_case, check_own_case, check_team, equipment_rows,
-                    parse_time, ready_minute)
+                    fatigue_log, fatigue_view, parse_time, ready_minute, staff_skills)
 
 
 class DatabaseStore:
@@ -143,8 +143,10 @@ class DatabaseStore:
                 "bed_types": sorted({b.bed_type for b in h.beds}),
                 "procedures": world.procedures,
                 "cards": world.cards,
+                "skills": staff_skills(h),
             },
             "activity": activity,
+            **fatigue_view(h, world.result),
             "warnings": self._problems(world, world.result),
             "rls_off": world.rls_off,
             "activity_table": world.has_activity,
@@ -301,15 +303,17 @@ class DatabaseStore:
         if not after.is_feasible:
             raise StoreError(f"คำนวณไม่สำเร็จ ({after.status})")
         self._guard(world, after)
+        tired = self._optimizer(world).new_fatigue(world.result, after)
         data = after.to_dict()
         log = [f"[Master Orchestrator] {c['case_id']}: {'; '.join(c['details'])}" for c in data["changes"]]
         log += [f"[Master Orchestrator] NOT SCHEDULED {u['case_id']}: {'; '.join(u['reasons'])}"
                 for u in data["unscheduled"]]
+        log += fatigue_log(tired)
         activity = Activity(kind, title, log, data["changes"], data["notifications"],
                             [c["case_id"] for c in data["changes"]] or [case_id], actor_name(actor))
         self.db.save(conn, world, after, new_requests, activity=self._record(conn, world, activity))
         return {"changes": data["changes"], "notifications": data["notifications"],
-                "unscheduled": data["unscheduled"], "log": log}
+                "unscheduled": data["unscheduled"], "log": log, "fatigue": [i.to_dict() for i in tired]}
 
     def seed_demo(self) -> dict:
         """Fill an empty database with the synthetic demo hospital and book today's demo cases."""
