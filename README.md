@@ -13,10 +13,30 @@
 | `orchestra_engine/optimizer.py` | `ORchestraOptimizer` — ตรวจทรัพยากร (agents) + โมเดล CP-SAT + reschedule + `check_slot` |
 | `orchestra_engine/agents.py` | Staffing / Equipment & CSSD / OR Facility Agent สแกน ณ เวลาที่ขอ (`SlotCheck`) |
 | `orchestra_engine/flow.py` | สร้างข้อมูลจริงให้หน้า Flow (`python -m orchestra_engine.flow`) |
+| `app/` | เว็บแอป FastAPI (หน้าเว็บ `app/static/index.html` + API) สำหรับ Render |
+| `render.yaml` | Render Blueprint (web service ฟรี + รหัสผ่านอัตโนมัติ) |
 | `web/orchestra-flow.html` | หน้า interactive 5 ขั้น (ปรับจาก ORchestraAIFlow.html) แสดงผลจาก engine จริง |
 | `orchestra_engine/validation.py` | ตัวตรวจ Hard Constraint อิสระ (ไม่ใช้โค้ด solver) |
 | `orchestra_engine/demo.py` | โรงพยาบาลจำลอง + 4 สถานการณ์ (ข้อมูลสมมติทั้งหมด) |
 | `tests/` | pytest ครอบคลุมทุก Hard Constraint และ Ripple Effect |
+
+## เข้าใช้งานผ่านเว็บ (Render)
+
+repo มี `render.yaml` (Render Blueprint) สำหรับ deploy เว็บแอป `app/` เป็น service เดียว (หน้าเว็บ + API)
+
+1. Render Dashboard → **New → Blueprint** → เลือก repo `medtrackq/ORchestraAI` (branch `main`) → **Apply**
+2. รอ build เสร็จ (ครั้งแรกประมาณ 3-5 นาที) แล้วเปิด URL ของ service `orchestra-ai` (เช่น `https://orchestra-ai.onrender.com`)
+3. ล็อกอิน: ชื่อผู้ใช้ `orchestra` รหัสผ่านดูได้ที่ service → **Environment** → `APP_PASSWORD` (Render สุ่มให้ เปลี่ยนเองได้)
+
+หน้าเว็บ: ตารางทุกห้อง · จองผ่าตัด (Agent ตรวจเวลา + เสนอช่วงใหม่) · แทรกเคสฉุกเฉิน · ผ่าตัดเกินเวลา · ประวัติกิจกรรม/แจ้งเตือน · `/flow` หน้า Flow สาธิต · `/api/docs` เอกสาร API
+
+ข้อจำกัดตอนนี้: ใช้ข้อมูลจำลองในหน่วยความจำ (รีเซ็ตเมื่อ service restart) และ plan ฟรีของ Render จะหลับเมื่อไม่มีคนใช้ 15 นาที เปิดครั้งแรกหลังจากนั้นรอประมาณ 1 นาที การเชื่อม Supabase จะมาแทนในรอบถัดไป
+
+รันเว็บบนเครื่อง:
+
+```bash
+.venv/bin/pip install -e ".[dev]" && APP_PASSWORD=changeme .venv/bin/uvicorn app.main:app --reload
+```
 
 ## ติดตั้งและรัน
 
