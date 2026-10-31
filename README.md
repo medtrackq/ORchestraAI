@@ -10,7 +10,10 @@
 | `supabase/migrations/20261031000000_initial_schema.sql` | Schema PostgreSQL (ตรงกับที่สร้างไว้ใน Supabase) |
 | `.claude/skills/orchestra-ai-scheduler/SKILL.md` | Skill อธิบายสถาปัตยกรรม Agent และเงื่อนไข |
 | `orchestra_engine/models.py` | `OperatingRoom`, `StaffMember`, `EquipmentUnit`, `RecoveryBed`, `SurgeryCase` |
-| `orchestra_engine/optimizer.py` | `ORchestraOptimizer` — ตรวจทรัพยากร (agents) + โมเดล CP-SAT + reschedule |
+| `orchestra_engine/optimizer.py` | `ORchestraOptimizer` — ตรวจทรัพยากร (agents) + โมเดล CP-SAT + reschedule + `check_slot` |
+| `orchestra_engine/agents.py` | Staffing / Equipment & CSSD / OR Facility Agent สแกน ณ เวลาที่ขอ (`SlotCheck`) |
+| `orchestra_engine/flow.py` | สร้างข้อมูลจริงให้หน้า Flow (`python -m orchestra_engine.flow`) |
+| `web/orchestra-flow.html` | หน้า interactive 5 ขั้น (ปรับจาก ORchestraAIFlow.html) แสดงผลจาก engine จริง |
 | `orchestra_engine/validation.py` | ตัวตรวจ Hard Constraint อิสระ (ไม่ใช้โค้ด solver) |
 | `orchestra_engine/demo.py` | โรงพยาบาลจำลอง + 4 สถานการณ์ (ข้อมูลสมมติทั้งหมด) |
 | `tests/` | pytest ครอบคลุมทุก Hard Constraint และ Ripple Effect |
@@ -45,7 +48,26 @@ after = optimizer.insert_emergency(day, cases, [emergency_case], now_min=hm("10:
 after = optimizer.handle_overrun(day, cases, "C04", new_duration_mins=270, now_min=hm("11:00"))
 after.changes        # เคสที่เปลี่ยน (เวลา/ห้อง/ทีม/เครื่องมือ/เตียง)
 after.notifications  # ข้อความแจ้งเตือนรายบุคคล
+
+# ขอเวลาเจาะจง: Agent 3 ตัวสแกนพร้อมกัน ถ้าผ่านหมดล็อกเลย ถ้าไม่ผ่าน CP-SAT หาช่วงถัดไปที่พร้อมครบ
+check = optimizer.check_slot(day, new_case, hm("09:00"))   # เคสที่จองไว้แล้วไม่ถูกขยับ
+check.verdicts       # ผลของแต่ละ Agent + เวลาที่ทรัพยากรของตัวเองพร้อม
+check.assignment     # ช่วงที่ล็อกได้ (หรือ None พร้อมเหตุผลใน check.result.unscheduled)
+check.log            # Negotiation log
+
+day.to_dict(), check.to_dict()   # JSON สำหรับ API / หน้าเว็บ
 ```
+
+## หน้า Flow (`web/orchestra-flow.html`)
+
+เปิดไฟล์ในเบราว์เซอร์ได้เลย (ไม่ต้องมี server) กดปุ่ม 1-5: รับคำขอ → สแกน 3 Agent ที่ 09:00 → Equipment & CSSD ปฏิเสธเพราะชุดเข่าและหุ่นยนต์ยังอบอยู่ → CP-SAT เสนอ 12:30 → ล็อก → เคสฉุกเฉิน 12:15 แทรกและเลื่อนเคสอื่น
+ทุกสถานะ เวลา และบรรทัด log มาจาก engine จริง และผ่านตัวตรวจอิสระก่อนเขียนลงไฟล์ ถ้าแก้ engine หรือสถานการณ์ ให้สร้างข้อมูลใหม่:
+
+```bash
+.venv/bin/python -m orchestra_engine.flow
+```
+
+Intake แบบ NLP/เสียงและการพยากรณ์เวลาจากประวัติยังไม่ได้ทำ ในหน้านี้คำขอเป็นข้อมูลโครงสร้าง
 
 เวลาทั้งหมดเป็น **นาทีนับจากต้น horizon** (0 = 00:00 ของวันที่วางแผน) ใช้ `hm("08:30")` และ `fmt(510)` แปลงไปมา
 

@@ -29,6 +29,9 @@ from typing import Iterable, Mapping
 
 from ortools.sat.python import cp_model
 
+from .agents import EQUIPMENT as EQUIPMENT_AGENT
+from .agents import FACILITY, Busy, SlotCheck, scan_slot
+from .agents import STAFFING as STAFFING_AGENT
 from .models import EquipmentUnit, OperatingRoom, RecoveryBed, StaffMember, SurgeryCase, Urgency
 from .results import Assignment, Notification, ScheduleChange, ScheduleResult
 from .timeutil import MINUTES_PER_DAY, fmt
@@ -225,6 +228,95 @@ class ORchestraOptimizer:
             scenario_name=scenario_name, verbose=verbose,
         )
 
+    def check_slot(
+        self,
+        current: ScheduleResult,
+        case: SurgeryCase,
+        start_min: int,
+        *,
+        scenario_name: str | None = None,
+        verbose: bool = True,
+    ) -> SlotCheck:
+        """Ask for ``case`` at ``start_min`` without moving anything already booked.
+
+        1. Parallel scan: each resource agent checks the requested time.
+        2. All agree: lock the case at that time.
+        3. Otherwise (negotiation): CP-SAT finds the earliest slot at or
+           after the requested time where every agent agrees.
+        """
+        if case.case_id in current.assignments:
+            raise ValueError(f"{case.case_id} is already booked")
+        dur, end = case.duration_mins, start_min + case.duration_mins
+        verdicts = scan_slot(self, case, start_min, Busy.from_assignments(current.assignments))
+        ok = all(v.ok for v in verdicts)
+        name = self._staff_by_id[case.surgeon_id].name if case.surgeon_id in self._staff_by_id else case.surgeon_id
+        log = [
+            f"[Intake -> Master] {case.case_id} {case.procedure} | {name} | {case.urgency.value} | "
+            f"{dur} min | requested {fmt(start_min)}",
+            f"[Master Orchestrator] parallel scan {fmt(start_min)}-{fmt(end)} -> Staffing, Equipment & CSSD, OR Facility",
+        ]
+        for v in verdicts:
+            log.append(f"[{v.agent}] {'OK' if v.ok else 'CONFLICT'}: {v.summary()}")
+
+        booked = [current.cases[cid] for cid in current.assignments]
+        attempts = []
+        if ok:
+            attempts.append(replace(case, release_min=max(case.release_min, start_min),
+                                    preferred_start=None, deadline_min=start_min))
+        else:
+            rejected = ", ".join(v.agent for v in verdicts if not v.ok)
+            hints = ", ".join(
+                f"{v.agent} from {fmt(v.ready_at)}" if v.ready_at is not None else f"{v.agent}: not today"
+                for v in verdicts if not v.ok
+            )
+            log.append(f"[Master Orchestrator] {fmt(start_min)} rejected by {rejected}. Earliest ready: {hints}")
+            log.append("[Master Orchestrator] running CP-SAT for the next slot where all agents agree")
+        attempts.append(replace(case, release_min=max(case.release_min, start_min), preferred_start=None))
+
+        probe_weights = replace(
+            self.weights,
+            elective_start_per_min=100, urgent_wait_per_min=100,
+            emergency_wait_per_min=max(self.weights.emergency_wait_per_min, 100),
+            unscheduled_elective=10**7, unscheduled_urgent=10**7, unscheduled_emergency=10**8,
+        )
+        title = scenario_name or f"Slot check {case.case_id} @ {fmt(start_min)}"
+        for probe in attempts:
+            result = self._solve(
+                [*booked, probe], title, now_min=current.now_min, frozen=dict(current.assignments),
+                previous=current.assignments, weights=probe_weights, lock_beds=True,
+            )
+            if case.case_id in result.assignments:
+                break
+        # Existing bookings are untouched: keep their original records.
+        result.assignments = {
+            cid: current.assignments.get(cid, a) for cid, a in result.assignments.items()
+        }
+        reasons = result.unscheduled.get(case.case_id)
+        result.cases = {**current.cases, case.case_id: case}
+        result.unscheduled = dict(current.unscheduled)
+        if reasons:
+            result.unscheduled[case.case_id] = reasons
+        result.changes, result.notifications = self._diff(current, result, {})
+
+        placed = result.assignments.get(case.case_id)
+        if placed is None:
+            log.append("[Master Orchestrator] no conflict-free slot today: " + "; ".join(result.unscheduled[case.case_id]))
+        else:
+            where = f"{placed.or_id} {fmt(placed.start_min)}-{fmt(placed.end_min)}"
+            log.append(f"[Master Orchestrator] {'locked' if placed.start_min == start_min else 'proposed and locked'} {where}"
+                       + (f" ({'; '.join(placed.reasoning)})" if placed.reasoning else ""))
+            if placed.equipment_unit_ids:
+                ready = ", ".join(f"{u} back {fmt(t)}" for u, t in placed.equipment_ready_min)
+                log.append(f"[{EQUIPMENT_AGENT}] reserved {', '.join(placed.equipment_unit_ids)}; CSSD queue: {ready}")
+            if placed.bed_id:
+                log.append(f"[{FACILITY}] reserved {placed.bed_id} from {fmt(placed.recovery_start_min)}")
+            team = ", ".join(self._staff_by_id[s].name for s in placed.staff_ids)
+            log.append(f"[{STAFFING_AGENT}] notified team: {team}")
+        check = SlotCheck(case, start_min, verdicts, result, log)
+        if verbose:
+            print(f"=== {title} ===\n{check.report()}", end="\n\n")
+        return check
+
     # --------------------------------------------------------------- agents
 
     def _plan_case(self, case: SurgeryCase, now_min: int) -> tuple[_Plan | None, list[str]]:
@@ -324,7 +416,7 @@ class ORchestraOptimizer:
             return None, reasons
         return _Plan(case, earliest, latest_start, rooms, case.surgeon_id, team, windows, units, beds), []
 
-    def _frozen_plan(self, case: SurgeryCase, a: Assignment, now_min: int) -> _Plan:
+    def _frozen_plan(self, case: SurgeryCase, a: Assignment, now_min: int, lock_bed: bool = False) -> _Plan:
         """A case already in progress: same room, start, team and equipment."""
         try:
             room = self._room_by_id[a.or_id]
@@ -341,8 +433,9 @@ class ORchestraOptimizer:
         beds: list[RecoveryBed] = []
         if a.bed_id is not None and self.beds:
             ended_as_planned = a.end_min == a.start_min + case.duration_mins
-            if ended_as_planned and a.recovery_start_min is not None and a.recovery_start_min <= now_min:
-                beds = [self._bed_by_id[a.bed_id]]  # patient is already in the bed
+            in_bed = a.recovery_start_min is not None and a.recovery_start_min <= now_min
+            if lock_bed or (ended_as_planned and in_bed):
+                beds = [self._bed_by_id[a.bed_id]]  # reserved / patient already in the bed
             else:
                 beds = [b for b in self.beds if b.bed_type == case.recovery_bed_type]
         return _Plan(
@@ -368,6 +461,8 @@ class ORchestraOptimizer:
         now_min: int,
         frozen: Mapping[str, Assignment],
         previous: Mapping[str, Assignment],
+        weights: Weights | None = None,
+        lock_beds: bool = False,
     ) -> ScheduleResult:
         t0 = time.perf_counter()
         case_by_id: dict[str, SurgeryCase] = {}
@@ -380,7 +475,7 @@ class ORchestraOptimizer:
         plans: dict[str, _Plan] = {}
         for cid, case in case_by_id.items():
             if cid in frozen:
-                plans[cid] = self._frozen_plan(case, frozen[cid], now_min)
+                plans[cid] = self._frozen_plan(case, frozen[cid], now_min, lock_bed=lock_beds)
                 continue
             plan, reasons = self._plan_case(case, now_min)
             if plan is None:
@@ -388,7 +483,7 @@ class ORchestraOptimizer:
             else:
                 plans[cid] = plan
 
-        builder = _ModelBuilder(self, previous)
+        builder = _ModelBuilder(self, previous, weights or self.weights)
         for cid, plan in plans.items():
             builder.add_case(plan)
         builder.add_resource_constraints()
@@ -471,12 +566,13 @@ class ORchestraOptimizer:
             "and bed load. Postpone to another day"
         )
 
-    def _setup_cost(self, a: SurgeryCase, b: SurgeryCase) -> int:
+    @staticmethod
+    def _setup_cost(a: SurgeryCase, b: SurgeryCase, weights: Weights) -> int:
         pa, pb = a.equipment_profile, b.equipment_profile
         if pa == pb:
             return 0
         overlap = len(pa & pb) / len(pa | pb)
-        return round(self.weights.setup_switch * (1 - overlap))
+        return round(weights.setup_switch * (1 - overlap))
 
     # ------------------------------------------------------------- explain
 
@@ -594,9 +690,10 @@ class ORchestraOptimizer:
 class _ModelBuilder:
     """Accumulates CP-SAT variables, intervals and objective terms."""
 
-    def __init__(self, opt: ORchestraOptimizer, previous: Mapping[str, Assignment]) -> None:
+    def __init__(self, opt: ORchestraOptimizer, previous: Mapping[str, Assignment], weights: Weights) -> None:
         self.opt = opt
         self.previous = previous  # schedule being revised (empty on a fresh solve)
+        self.weights = weights
         self.model = cp_model.CpModel()
         self.objective: list = []
         self.vars: dict[str, _Vars] = {}
@@ -708,7 +805,7 @@ class _ModelBuilder:
         m.add(sum(picks) == lit)
 
     def _add_objective(self, p: _Plan, v: _Vars) -> None:
-        m, w, case = self.model, self.opt.weights, p.case
+        m, w, case = self.model, self.weights, p.case
         base = self.previous.get(case.case_id)
         if base is not None and base.bed_id in v.beds:
             self.objective.append(w.bed_change * (1 - v.beds[base.bed_id]))
@@ -784,7 +881,7 @@ class _ModelBuilder:
                     nxt = m.new_bool_var(f"next[{or_id},{pi.case.case_id}->{pj.case.case_id}]")
                     arcs.append((i, j, nxt))
                     m.add(sj >= si + occ_i).only_enforce_if(nxt)
-                    cost = self.opt._setup_cost(pi.case, pj.case)
+                    cost = self.opt._setup_cost(pi.case, pj.case, self.weights)
                     if cost:
                         self.objective.append(cost * nxt)
             m.add_circuit(arcs)

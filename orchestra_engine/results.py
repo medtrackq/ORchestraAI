@@ -69,6 +69,51 @@ class ScheduleResult:
     def _name(self, staff_id: str) -> str:
         return self.staff_names.get(staff_id, staff_id)
 
+    def to_dict(self) -> dict:
+        """JSON-ready form (minutes plus HH:MM strings) for APIs and the web page."""
+
+        def booking(a: Assignment) -> dict:
+            case = self.cases[a.case_id]
+            return {
+                "case_id": a.case_id,
+                "procedure": case.procedure,
+                "patient_hn": case.patient_hn,
+                "urgency": case.urgency.value,
+                "or_id": a.or_id,
+                "start_min": a.start_min,
+                "end_min": a.end_min,
+                "cleanup_end_min": a.cleanup_end_min,
+                "start": fmt(a.start_min),
+                "end": fmt(a.end_min),
+                "cleanup_end": fmt(a.cleanup_end_min),
+                "team": [{"staff_id": s, "name": self._name(s)} for s in a.staff_ids],
+                "equipment": [{"unit_id": u, "back_from_cssd_min": t} for u, t in a.equipment_ready_min],
+                "bed_id": a.bed_id,
+                "recovery_start_min": a.recovery_start_min,
+                "recovery_end_min": a.recovery_end_min,
+                "frozen": a.frozen,
+                "reasoning": list(a.reasoning),
+            }
+
+        return {
+            "scenario": self.scenario,
+            "status": self.status,
+            "objective": self.objective,
+            "now_min": self.now_min,
+            "wall_time_s": round(self.wall_time_s, 3),
+            "bookings": [booking(a) for a in self.assignments.values()],
+            "unscheduled": [
+                {"case_id": cid, "procedure": self.cases[cid].procedure,
+                 "urgency": self.cases[cid].urgency.value, "reasons": reasons}
+                for cid, reasons in self.unscheduled.items()
+            ],
+            "changes": [{"case_id": c.case_id, "details": c.details} for c in self.changes],
+            "notifications": [
+                {"staff_id": n.staff_id, "name": self._name(n.staff_id), "case_id": n.case_id, "message": n.message}
+                for n in self.notifications
+            ],
+        }
+
     def report(self) -> str:
         total = len(self.cases)
         obj = "-" if self.objective is None else f"{self.objective:.0f}"
