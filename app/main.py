@@ -27,7 +27,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
 from .auth import (COOKIE, ROLES, SESSION_HOURS, Accounts, AuthError, DbUserStore, MemoryUserStore,
-                   TooManyAttempts, User, can)
+                   ServiceUnavailable, TooManyAttempts, User, can)
 from .store import Forbidden, ScheduleStore, StoreError
 
 ROOT = Path(__file__).resolve().parent
@@ -116,6 +116,8 @@ def _run(fn, *args, **kwargs):
         return fn(*args, **kwargs)
     except Forbidden as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ServiceUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except (StoreError, AuthError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -214,6 +216,8 @@ def login(body: LoginIn, request: Request, response: Response) -> dict:
         user, token = accounts.login(body.username, body.password, _address(request))
     except TooManyAttempts as exc:
         raise HTTPException(status_code=429, detail=str(exc)) from exc
+    except ServiceUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except AuthError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
     _set_session(response, request, token)

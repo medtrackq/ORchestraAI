@@ -811,7 +811,9 @@
       return;
     }
     await loadDay(null);
-  })().catch(e => toast('โหลดข้อมูลไม่สำเร็จ: ' + e.message));
+  })().catch(e => {
+    $('#banners').innerHTML = `<div class="banner bad"><b>โหลดข้อมูลไม่สำเร็จ</b><br>${esc(e.message)}</div>`;
+  });
 </script>
 </body>
 </html>
