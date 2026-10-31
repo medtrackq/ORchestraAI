@@ -89,8 +89,8 @@
   .why { margin: 6px 0 0; padding-left: 18px; font-size: .82rem; color: var(--muted); }
 
   /* Panel */
-  .tabs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; background: var(--surface-2); padding: 4px; border-radius: 10px; margin-bottom: 14px; }
-  .tab { border: 0; background: transparent; padding: 8px 4px; border-radius: 7px; cursor: pointer; font-size: .85rem; color: var(--muted); }
+  .tabs { display: flex; flex-wrap: wrap; gap: 4px; background: var(--surface-2); padding: 4px; border-radius: 10px; margin-bottom: 14px; }
+  .tab { flex: 1 1 auto; border: 0; background: transparent; padding: 8px 6px; border-radius: 7px; cursor: pointer; font-size: .85rem; color: var(--muted); }
   .tab[aria-selected="true"] { background: var(--surface); color: var(--text); font-weight: 600; box-shadow: var(--shadow); }
   .tab.er[aria-selected="true"] { color: var(--emergency); }
   form { display: grid; gap: 10px; }
@@ -130,6 +130,23 @@
   #banners:empty { display: none; }
   .mode { font-size: .72rem; padding: 2px 8px; border-radius: 99px; background: var(--accent-soft); color: var(--accent); margin-left: 6px; vertical-align: 2px; }
   .top input[type="date"] { padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); color: var(--text); }
+  .who { display: flex; flex-direction: column; justify-content: center; font-size: .8rem; line-height: 1.25; text-align: right; }
+  .who small { color: var(--muted); }
+  .g-block.mine::after { content: "ของฉัน"; position: absolute; right: 4px; top: 2px; font-size: .6rem; background: rgba(255,255,255,.9); color: #0f172a; padding: 0 4px; border-radius: 4px; }
+  .rows { display: grid; gap: 8px; }
+  .row-item { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; display: grid; gap: 8px; font-size: .84rem; }
+  .row-item .line { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .row-item .line > * { flex: 1 1 120px; min-width: 0; }
+  .row-item .title { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+  .row-item .title small { color: var(--muted); }
+  .row-item .btn { flex: 0 0 auto; padding: 6px 12px; }
+  .badge { font-size: .7rem; padding: 2px 8px; border-radius: 99px; background: var(--surface-2); border: 1px solid var(--border); color: var(--muted); }
+  .badge.ok { background: var(--ok-soft); color: var(--ok); border-color: transparent; }
+  .badge.bad { background: var(--bad-soft); color: var(--bad); border-color: transparent; }
+  .badge.warn { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
+  .secret { font: .9rem ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--warn-soft); color: var(--warn); padding: 8px 10px; border-radius: 8px; overflow-wrap: anywhere; }
+  dialog { border: 1px solid var(--border); border-radius: 14px; background: var(--surface); color: var(--text); padding: 20px; width: min(380px, calc(100% - 32px)); }
+  dialog::backdrop { background: rgba(15,23,42,.5); }
   [hidden] { display: none !important; }
 
   @media (max-width: 1100px) { .layout { grid-template-columns: minmax(0, 1fr); } }
@@ -152,6 +169,9 @@
     <button class="btn" id="reload" type="button">โหลดใหม่</button>
     <a class="btn" href="/flow" target="_blank" rel="noopener">ดู Flow สาธิต</a>
     <button class="btn" id="reset" type="button" hidden>รีเซ็ตข้อมูลตัวอย่าง</button>
+    <span class="who" id="who"></span>
+    <button class="btn" id="change-pass" type="button">เปลี่ยนรหัสผ่าน</button>
+    <button class="btn" id="logout" type="button">ออกจากระบบ</button>
   </nav>
 </header>
 <div id="banners"></div>
@@ -177,10 +197,12 @@
 
   <aside class="card">
     <div class="tabs" role="tablist">
-      <button class="tab" role="tab" aria-selected="true" data-tab="book">จองผ่าตัด</button>
-      <button class="tab er" role="tab" aria-selected="false" data-tab="er">ฉุกเฉิน</button>
-      <button class="tab" role="tab" aria-selected="false" data-tab="over">เกินเวลา</button>
-      <button class="tab" role="tab" aria-selected="false" data-tab="log">กิจกรรม</button>
+      <button class="tab" role="tab" aria-selected="true" data-tab="book" data-perm="book">จองผ่าตัด</button>
+      <button class="tab er" role="tab" aria-selected="false" data-tab="er" data-perm="emergency">ฉุกเฉิน</button>
+      <button class="tab" role="tab" aria-selected="false" data-tab="over" data-perm="overrun">เกินเวลา</button>
+      <button class="tab" role="tab" aria-selected="false" data-tab="equip" data-perm="equipment">เครื่องมือ</button>
+      <button class="tab" role="tab" aria-selected="false" data-tab="users" data-perm="users">ผู้ใช้</button>
+      <button class="tab" role="tab" aria-selected="false" data-tab="log" data-perm="view">กิจกรรม</button>
     </div>
 
     <section data-panel="book">
@@ -221,12 +243,48 @@
       <div class="result" id="result-over"></div>
     </section>
 
+    <section data-panel="equip" hidden>
+      <p class="hint">Equipment &amp; Inventory Agent: อัปเดตสถานะเครื่องมือและเวลาที่อบฆ่าเชื้อเสร็จ ระบบใช้เวลานี้ตอนจัดตาราง</p>
+      <div id="equip-list" class="rows"></div>
+    </section>
+
+    <section data-panel="users" hidden>
+      <form id="form-user">
+        <h3 style="margin-top:0">เพิ่มผู้ใช้</h3>
+        <div class="row2">
+          <label>ชื่อผู้ใช้ (a-z 0-9 . _ -)<input type="text" name="username" required minlength="3" maxlength="80" pattern="[A-Za-z0-9._\-]+"></label>
+          <label>ชื่อที่แสดง<input type="text" name="display_name" required maxlength="150"></label>
+        </div>
+        <div class="row2">
+          <label>บทบาท<select name="role" required></select></label>
+          <label>ผูกกับรายชื่อบุคลากร<select name="staff_id"></select></label>
+        </div>
+        <p class="hint">ระบบสร้างรหัสผ่านชั่วคราวให้ ผู้ใช้ต้องตั้งรหัสใหม่เมื่อเข้าครั้งแรก</p>
+        <button class="btn primary" type="submit">สร้างบัญชี</button>
+      </form>
+      <div id="user-secret"></div>
+      <h3>ผู้ใช้ทั้งหมด</h3>
+      <div id="user-list" class="rows"></div>
+    </section>
+
     <section data-panel="log" hidden>
       <div id="activity"></div>
     </section>
   </aside>
 </main>
 <div id="toast" role="alert"></div>
+<dialog id="pass-dialog">
+  <form id="pass-form">
+    <h3 style="margin-top:0">เปลี่ยนรหัสผ่าน</h3>
+    <label>รหัสผ่านปัจจุบัน<input type="password" name="current_password" autocomplete="current-password" required></label>
+    <label>รหัสผ่านใหม่ (อย่างน้อย 10 ตัวอักษร)<input type="password" name="new_password" autocomplete="new-password" minlength="10" required></label>
+    <label>ยืนยันรหัสผ่านใหม่<input type="password" name="confirm" autocomplete="new-password" minlength="10" required></label>
+    <div class="row2">
+      <button class="btn" type="button" id="pass-cancel">ยกเลิก</button>
+      <button class="btn primary" type="submit">บันทึก</button>
+    </div>
+  </form>
+</dialog>
 
 <script>
   let STATE = null;
@@ -246,10 +304,13 @@
   const withDate = path => (STATE && STATE.date && !path.includes('date=')
     ? path + (path.includes('?') ? '&' : '?') + 'date=' + STATE.date : path);
 
-  async function api(path, body) {
+  const can = perm => !!(STATE && STATE.me && STATE.me.permissions.includes(perm));
+
+  async function api(path, body, method) {
     const res = await fetch(withDate(path), body === undefined ? {} : {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+      method: method || 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
     });
+    if (res.status === 401) { location.href = '/login'; throw new Error('กรุณาเข้าสู่ระบบ'); }
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
       const detail = Array.isArray(data.detail) ? data.detail.map(d => (d.loc || []).slice(-1)[0] + ': ' + d.msg).join(', ') : data.detail;
@@ -258,8 +319,9 @@
     return data;
   }
 
-  function toast(msg) {
+  function toast(msg, ok = false) {
     const el = $('#toast');
+    el.style.background = ok ? 'var(--ok)' : 'var(--bad)';
     el.textContent = msg;
     el.style.display = 'block';
     clearTimeout(toast.t);
@@ -276,7 +338,8 @@
   // ------------------------------------------------------------ case form
   function caseFields(kind) {
     const o = STATE.options;
-    const surgeons = o.surgeons.map(s => `<option value="${esc(s.id)}">${esc(s.name)} (${esc(s.shifts.join(', '))})</option>`).join('');
+    const own = STATE.me.role === 'surgeon';
+    const surgeons = o.surgeons.filter(s => !own || s.id === STATE.me.staff_id).map(s => `<option value="${esc(s.id)}">${esc(s.name)} (${esc(s.shifts.join(', '))})</option>`).join('');
     const caps = o.capabilities.map(c => `<label><input type="checkbox" name="cap" value="${esc(c)}">${esc(c)}</label>`).join('');
     const eq = o.equipment_types.map(e => `<label><input type="checkbox" name="eq" value="${esc(e.type)}">${esc(e.type)} <small>(${e.units})</small></label>`).join('');
     const db = STATE.mode === 'supabase';
@@ -357,7 +420,10 @@
     $('#mode').textContent = db ? 'Supabase' : 'ข้อมูลจำลอง';
     $('#date').hidden = !db;
     if (db) $('#date').value = STATE.date;
-    $('#reset').hidden = db;
+    $('#reset').hidden = db || !can('reset');
+    $('#who').innerHTML = `<span>${esc(STATE.me.display_name)}</span><small>${esc(STATE.me.role_label)}</small>`;
+    $('#change-pass').hidden = STATE.me.user_id === 'env-admin' || STATE.me.user_id === 'dev';
+    applyTabs();
     $('#day').textContent = STATE.planning_day + (s.now_min ? ' · เวลาปัจจุบันของตาราง ' + hhmm(s.now_min) : '');
     renderBanners();
     $('#stats').innerHTML = `
@@ -387,7 +453,8 @@
     const rows = rooms.slice(1).map((_, i) => `<div class="g-row" style="top:${(i + 1) * ROW}px"></div>`).join('');
     const blocks = STATE.schedule.bookings.map(b => {
       const top = rowOf[b.or_id] * ROW + 6;
-      const cls = ['g-block', 'u-' + b.urgency, b.frozen ? 'frozen' : '', highlight.has(b.case_id) ? 'hl' : '', selected === b.case_id ? 'sel' : ''].join(' ');
+      const mine = STATE.me.staff_id && b.team.some(t => t.staff_id === STATE.me.staff_id);
+      const cls = ['g-block', 'u-' + b.urgency, b.frozen ? 'frozen' : '', highlight.has(b.case_id) ? 'hl' : '', selected === b.case_id ? 'sel' : '', mine ? 'mine' : ''].join(' ');
       return `<div class="g-clean" style="left:${pct(b.end_min)};width:${(b.cleanup_end_min - b.end_min) / span * 100}%;top:${top}px"></div>
         <button type="button" class="${cls}" data-case="${esc(b.case_id)}" style="left:${pct(b.start_min)};width:${(b.end_min - b.start_min) / span * 100}%;top:${top}px"
           title="${esc(b.case_id + ' ' + b.procedure + ' ' + b.start + '-' + b.end)}">
@@ -417,9 +484,28 @@
       ${b.reasoning.length ? '<ul class="why">' + b.reasoning.map(r => '<li>' + esc(r) + '</li>').join('') + '</ul>' : ''}`;
   }
 
+  function applyTabs() {
+    const tabs = [...document.querySelectorAll('.tab')];
+    tabs.forEach(t => { t.hidden = !can(t.dataset.perm); });
+    const current = tabs.find(t => t.getAttribute('aria-selected') === 'true');
+    if (!current || current.hidden) selectTab(tabs.find(t => !t.hidden).dataset.tab);
+    const log = tabs.find(t => t.dataset.tab === 'log');
+    log.textContent = can('all_notifications') ? 'กิจกรรม' : 'แจ้งเตือนของฉัน';
+  }
+
+  function selectTab(name) {
+    const already = document.querySelector(`.tab[data-tab="${name}"]`).getAttribute('aria-selected') === 'true'
+      && !document.querySelector(`[data-panel="${name}"]`).hidden;
+    if (already) return;  // no reload: it would wipe what the user is typing
+    document.querySelectorAll('.tab').forEach(t => t.setAttribute('aria-selected', String(t.dataset.tab === name)));
+    document.querySelectorAll('[data-panel]').forEach(p => { p.hidden = p.dataset.panel !== name; });
+    if (name === 'equip') loadEquipment().catch(e => toast(e.message));
+    if (name === 'users') loadUsers().catch(e => toast(e.message));
+  }
+
   function renderBanners() {
     const parts = [];
-    if (STATE.empty) {
+    if (STATE.empty && can('seed')) {
       parts.push(`<div class="banner warn"><b>ฐานข้อมูลยังไม่มีห้องผ่าตัดหรือบุคลากร</b><br>
         ใส่ข้อมูลของโรงพยาบาลใน Supabase หรือกดปุ่มด้านล่างเพื่อใส่ข้อมูลตัวอย่าง (ชื่อสมมติทั้งหมด) และจองเคสตัวอย่างของวันนี้
         <br><button class="btn primary" type="button" id="seed">ใส่ข้อมูลตัวอย่าง</button></div>`);
@@ -459,7 +545,7 @@
   function renderActivity() {
     $('#activity').innerHTML = STATE.activity.map(a => `
       <div class="activity-item">
-        <div class="kind">${esc(a.kind)}${a.created_at ? ' · ' + esc(new Date(a.created_at).toLocaleString('th-TH')) : ''}</div>
+        <div class="kind">${esc(a.kind)}${a.created_at ? ' · ' + esc(new Date(a.created_at).toLocaleString('th-TH')) : ''}${a.actor ? ' · โดย ' + esc(a.actor) : ''}</div>
         <div>${esc(a.title)}</div>
         ${a.changes.length ? '<ul class="changes">' + a.changes.map(c => '<li>' + esc(c.case_id) + ': ' + esc(c.details.join('; ')) + '</li>').join('') + '</ul>' : ''}
         ${a.notifications.length ? '<div class="hint">แจ้งเตือน ' + a.notifications.length + ' ข้อความ: ' + esc([...new Set(a.notifications.map(n => n.name))].join(', ')) + '</div>' : ''}
@@ -508,10 +594,7 @@
   }
 
   // ----------------------------------------------------------------- events
-  document.querySelectorAll('.tab').forEach(tab => tab.addEventListener('click', () => {
-    document.querySelectorAll('.tab').forEach(t => t.setAttribute('aria-selected', String(t === tab)));
-    document.querySelectorAll('[data-panel]').forEach(p => { p.hidden = p.dataset.panel !== tab.dataset.tab; });
-  }));
+  document.querySelectorAll('.tab').forEach(tab => tab.addEventListener('click', () => selectTab(tab.dataset.tab)));
 
   $('#form-book').addEventListener('submit', e => {
     e.preventDefault();
@@ -563,9 +646,9 @@
     $('[data-case="er"]').innerHTML = caseFields('er');
     const book = $('#form-book'), er = $('#form-er');
     const oncall = STATE.options.surgeons.find(s => /on-call|เวร/i.test(s.name));
-    if (oncall) er.elements['surgeon_id'].value = oncall.id;
+    if (oncall && STATE.me.role !== 'surgeon') er.elements['surgeon_id'].value = oncall.id;
     const procs = STATE.options.procedures || [];
-    const cards = STATE.options.cards || [];
+    const cards = (STATE.options.cards || []).filter(c => STATE.me.role !== 'surgeon' || c.surgeon_id === STATE.me.staff_id);
     // Start each form on a surgeon + procedure pair that has a preference card.
     const pick = (form, test) => {
       const card = cards.find(c => test((procs.find(x => x.id === c.procedure_id) || {}).name || ''));
@@ -586,6 +669,127 @@
     $('#form-over').elements['now'].value = now;
   }
 
+  // ------------------------------------------------------------ equipment (CSSD)
+  const STATUS = { AVAILABLE: 'พร้อมใช้', IN_USE: 'กำลังใช้', STERILIZING: 'กำลังอบที่ CSSD', MAINTENANCE: 'ซ่อมบำรุง' };
+
+  let equipmentRequest = 0;  // only the newest response may redraw the list
+  async function loadEquipment() {
+    const n = ++equipmentRequest;
+    const data = await api('/api/equipment');
+    if (n === equipmentRequest) renderEquipment(data.units);
+  }
+
+  function renderEquipment(units) {
+    const edit = can('equipment');
+    $('#equip-list').innerHTML = units.map(u => `
+      <div class="row-item" data-unit="${esc(u.unit_id)}">
+        <div class="title"><b>${esc(u.unit_id)}</b>
+          <span class="badge ${u.status === 'AVAILABLE' ? 'ok' : u.status === 'MAINTENANCE' ? 'bad' : 'warn'}">${esc(STATUS[u.status] || u.status)}${u.ready_at ? ' · พร้อม ' + esc(u.ready_at) : ''}</span></div>
+        <small class="hint">${esc(u.type)} · อบฆ่าเชื้อ ${u.sterilization_mins} นาทีหลังใช้</small>
+        ${edit ? `<div class="line">
+          <select name="status">${Object.entries(STATUS).map(([k, v]) => `<option value="${k}" ${k === u.status ? 'selected' : ''}>${v}</option>`).join('')}</select>
+          <input type="time" name="ready_at" value="${esc(u.ready_at || '')}" aria-label="พร้อมใช้เวลา">
+          <button class="btn primary" type="button">บันทึก</button></div>` : ''}
+      </div>`).join('');
+    $('#equip-list').querySelectorAll('.row-item button').forEach(button => button.addEventListener('click', () => {
+      const row = button.closest('.row-item');
+      const body = { status: row.querySelector('[name="status"]').value, ready_at: row.querySelector('[name="ready_at"]').value || null };
+      busy(button, async () => {
+        const n = ++equipmentRequest;
+        const data = await api('/api/equipment/' + encodeURIComponent(row.dataset.unit), body, 'PATCH');
+        STATE = data.state; render();
+        if (n === equipmentRequest) renderEquipment(data.units);
+        if (data.result.warnings.length) toast('มีเคสที่ใช้เครื่องนี้อยู่และขัดกับสถานะใหม่ ผู้จัดตารางต้องแก้: ' + data.result.warnings[0]);
+      });
+    }));
+  }
+
+  // ------------------------------------------------------------------ users (admin)
+  function tempPassword() {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
+    const bytes = crypto.getRandomValues(new Uint8Array(14));
+    return [...bytes].map(b => chars[b % chars.length]).join('');
+  }
+
+  function showSecret(username, password) {
+    $('#user-secret').innerHTML = `<p class="hint">ส่งรหัสชั่วคราวนี้ให้ <b>${esc(username)}</b> (แสดงครั้งเดียว ผู้ใช้ต้องเปลี่ยนเมื่อเข้าครั้งแรก)</p>
+      <div class="secret">${esc(password)}</div>`;
+  }
+
+  let USERS = null;
+  async function loadUsers() { USERS = await api('/api/users'); renderUsers(); }
+
+  function renderUsers() {
+    const { users, people, roles } = USERS;
+    const roleOptions = sel => Object.entries(roles).map(([k, v]) => `<option value="${k}" ${k === sel ? 'selected' : ''}>${esc(v)}</option>`).join('');
+    const staffOptions = sel => '<option value="">— ไม่ผูก —</option>' + people.map(p =>
+      `<option value="${esc(p.id)}" ${p.id === sel ? 'selected' : ''}>${esc(p.name)} · ${esc(p.role)}</option>`).join('');
+    const form = $('#form-user');
+    if (!form.elements['role'].options.length) {
+      form.elements['role'].innerHTML = roleOptions('scheduler');
+      form.elements['staff_id'].innerHTML = staffOptions(null);
+    }
+    $('#user-list').innerHTML = users.map(u => `
+      <div class="row-item" data-user="${esc(u.user_id)}">
+        <div class="title"><b>${esc(u.display_name)}</b>
+          <span><span class="badge ${u.is_active ? 'ok' : 'bad'}">${u.is_active ? 'ใช้งาน' : 'ปิด'}</span>
+          ${u.must_change_password ? '<span class="badge warn">รอตั้งรหัสใหม่</span>' : ''}</span></div>
+        <small class="hint">${esc(u.username)}${u.last_login_at ? ' · เข้าล่าสุด ' + esc(new Date(u.last_login_at).toLocaleString('th-TH')) : ' · ยังไม่เคยเข้า'}</small>
+        <div class="line"><select name="role">${roleOptions(u.role)}</select><select name="staff_id">${staffOptions(u.staff_id)}</select></div>
+        <div class="line">
+          <label style="flex:0 0 auto;display:flex;flex-direction:row;align-items:center;gap:6px;color:var(--text)"><input type="checkbox" name="is_active" ${u.is_active ? 'checked' : ''}>ใช้งาน</label>
+          <button class="btn primary" type="button" data-act="save">บันทึก</button>
+          <button class="btn" type="button" data-act="reset">รีเซ็ตรหัสผ่าน</button>
+        </div>
+      </div>`).join('') || '<p class="hint">ยังไม่มีผู้ใช้ (บัญชีหลักจาก Render ใช้ได้เสมอ)</p>';
+    $('#user-list').querySelectorAll('[data-act]').forEach(button => button.addEventListener('click', () => {
+      const row = button.closest('.row-item'), id = row.dataset.user;
+      busy(button, async () => {
+        if (button.dataset.act === 'save') {
+          await api('/api/users/' + id, {
+            role: row.querySelector('[name="role"]').value,
+            staff_id: row.querySelector('[name="staff_id"]').value || null,
+            is_active: row.querySelector('[name="is_active"]').checked,
+          }, 'PATCH');
+          toast('บันทึกแล้ว ผู้ใช้จะต้องเข้าสู่ระบบใหม่', true);
+        } else {
+          const password = tempPassword();
+          await api('/api/users/' + id + '/reset-password', { password });
+          showSecret(users.find(u => u.user_id === id).username, password);
+        }
+        await loadUsers();
+      });
+    }));
+  }
+
+  $('#form-user').addEventListener('submit', e => {
+    e.preventDefault();
+    const form = e.target, f = new FormData(form), password = tempPassword();
+    busy(form.querySelector('[type="submit"]'), async () => {
+      await api('/api/users', { username: f.get('username').trim().toLowerCase(), display_name: f.get('display_name').trim(),
+        role: f.get('role'), staff_id: f.get('staff_id') || null, password });
+      showSecret(f.get('username').trim().toLowerCase(), password);
+      form.reset();
+      form.elements['role'].innerHTML = '';
+      await loadUsers();
+    });
+  });
+
+  // ------------------------------------------------------------------ account
+  $('#logout').addEventListener('click', async () => { await api('/api/logout', {}).catch(() => {}); location.href = '/login'; });
+  $('#change-pass').addEventListener('click', () => $('#pass-dialog').showModal());
+  $('#pass-cancel').addEventListener('click', () => $('#pass-dialog').close());
+  $('#pass-form').addEventListener('submit', e => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    if (f.get('new_password') !== f.get('confirm')) { toast('รหัสผ่านใหม่ทั้งสองช่องไม่ตรงกัน'); return; }
+    busy(e.target.querySelector('[type="submit"]'), async () => {
+      await api('/api/password', { current_password: f.get('current_password'), new_password: f.get('new_password') });
+      e.target.reset(); $('#pass-dialog').close(); toast('เปลี่ยนรหัสผ่านแล้ว', true);
+      if (!STATE) await loadDay(null);
+    });
+  });
+
   async function loadDay(day) {
     const path = day ? '/api/state?date=' + day : '/api/state';
     STATE = await api(path);
@@ -598,7 +802,16 @@
   $('#date').addEventListener('change', e => { if (e.target.value) loadDay(e.target.value).catch(err => toast(err.message)); });
   $('#reload').addEventListener('click', e => busy(e.target, () => loadDay(STATE && STATE.date)));
 
-  loadDay(null).catch(e => toast('โหลดข้อมูลไม่สำเร็จ: ' + e.message));
+  (async () => {
+    const me = (await api('/api/me')).user;
+    if (me.must_change_password) {  // temporary password from an admin: change it first
+      $('#pass-cancel').hidden = true;
+      $('#pass-dialog').addEventListener('cancel', e => e.preventDefault());
+      $('#pass-dialog').showModal();
+      return;
+    }
+    await loadDay(null);
+  })().catch(e => toast('โหลดข้อมูลไม่สำเร็จ: ' + e.message));
 </script>
 </body>
 </html>

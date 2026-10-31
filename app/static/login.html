@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>เข้าสู่ระบบ ORchestraAI</title>
+<link href="https://fonts.googleapis.com/css2?family=Prompt:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root { --bg: #f4f6fb; --surface: #fff; --text: #0f172a; --muted: #64748b; --border: #e2e8f0; --accent: #0e7490; --bad: #b91c1c; --bad-soft: #fee2e2; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { --bg: #0b1220; --surface: #111a2e; --text: #e2e8f0; --muted: #94a3b8; --border: #1f2a44; --accent: #22d3ee; --bad: #f87171; --bad-soft: rgba(239,68,68,.15); }
+  }
+  :root[data-theme="dark"] { --bg: #0b1220; --surface: #111a2e; --text: #e2e8f0; --muted: #94a3b8; --border: #1f2a44; --accent: #22d3ee; --bad: #f87171; --bad-soft: rgba(239,68,68,.15); }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 16px; background: var(--bg); color: var(--text);
+    font: 15px/1.5 'Prompt', 'Noto Sans Thai', system-ui, sans-serif; }
+  .card { width: 100%; max-width: 380px; background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 28px; }
+  .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+  .orb { width: 14px; height: 14px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 12px var(--accent); }
+  h1 { margin: 0; font-size: 1.25rem; }
+  p { margin: 0 0 18px; color: var(--muted); font-size: .88rem; }
+  form { display: grid; gap: 12px; }
+  label { display: grid; gap: 4px; font-size: .82rem; color: var(--muted); }
+  input { width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: transparent; color: var(--text); font: inherit; }
+  button { padding: 11px; border: 0; border-radius: 8px; background: var(--accent); color: #fff; font: inherit; font-weight: 600; cursor: pointer; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) button { color: #04121a; } }
+  button:disabled { opacity: .6; cursor: progress; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .error { background: var(--bad-soft); color: var(--bad); border-radius: 8px; padding: 8px 10px; font-size: .85rem; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main class="card">
+  <div class="brand"><span class="orb" aria-hidden="true"></span><h1>ORchestraAI</h1></div>
+  <p id="subtitle">ระบบนัดผ่าตัดอัจฉริยะ · เข้าสู่ระบบ</p>
+
+  <form id="login">
+    <label>ชื่อผู้ใช้<input name="username" autocomplete="username" required autofocus></label>
+    <label>รหัสผ่าน<input name="password" type="password" autocomplete="current-password" required></label>
+    <div class="error" id="login-error" role="alert" hidden></div>
+    <button type="submit">เข้าสู่ระบบ</button>
+  </form>
+
+  <form id="change" hidden>
+    <label>รหัสผ่านใหม่ (อย่างน้อย 10 ตัวอักษร)<input name="new_password" type="password" autocomplete="new-password" minlength="10" required></label>
+    <label>ยืนยันรหัสผ่านใหม่<input name="confirm" type="password" autocomplete="new-password" minlength="10" required></label>
+    <div class="error" id="change-error" role="alert" hidden></div>
+    <button type="submit">ตั้งรหัสผ่านและเข้าใช้งาน</button>
+  </form>
+</main>
+<script>
+  let temporaryPassword = '';
+  async function post(path, body) {
+    const res = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(typeof data.detail === 'string' ? data.detail : 'เกิดข้อผิดพลาด (' + res.status + ')');
+    return data;
+  }
+  function show(id, message) { const el = document.getElementById(id); el.textContent = message; el.hidden = !message; }
+
+  document.getElementById('login').addEventListener('submit', async e => {
+    e.preventDefault();
+    const f = new FormData(e.target), button = e.target.querySelector('button');
+    button.disabled = true; show('login-error', '');
+    try {
+      const data = await post('/api/login', { username: f.get('username'), password: f.get('password') });
+      if (data.user.must_change_password) {
+        temporaryPassword = f.get('password');
+        e.target.hidden = true;
+        document.getElementById('change').hidden = false;
+        document.getElementById('subtitle').textContent = 'สวัสดี ' + data.user.display_name + ' · กรุณาตั้งรหัสผ่านใหม่แทนรหัสชั่วคราว';
+      } else {
+        location.href = '/';
+      }
+    } catch (err) { show('login-error', err.message); } finally { button.disabled = false; }
+  });
+
+  document.getElementById('change').addEventListener('submit', async e => {
+    e.preventDefault();
+    const f = new FormData(e.target), button = e.target.querySelector('button');
+    if (f.get('new_password') !== f.get('confirm')) { show('change-error', 'รหัสผ่านทั้งสองช่องไม่ตรงกัน'); return; }
+    button.disabled = true; show('change-error', '');
+    try {
+      await post('/api/password', { current_password: temporaryPassword, new_password: f.get('new_password') });
+      location.href = '/';
+    } catch (err) { show('change-error', err.message); } finally { button.disabled = false; }
+  });
+</script>
+</body>
+</html>

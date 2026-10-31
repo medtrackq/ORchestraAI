@@ -159,6 +159,9 @@ def test_database_rejects_overlap_even_without_the_app(store, db_url):
 
 
 def test_row_level_security_hides_patients_from_the_public_api_role(store, db_url):
+    from app.auth import DbUserStore
+
+    DbUserStore(store.db).create("someone", "Someone", "staff", None, "Temporary-Pass-77")
     with psycopg.connect(db_url, autocommit=True) as conn:
         conn.execute("DO $$ BEGIN CREATE ROLE anon NOLOGIN; EXCEPTION WHEN duplicate_object THEN NULL; END $$")
         conn.execute("GRANT USAGE ON SCHEMA public TO anon")
@@ -167,3 +170,56 @@ def test_row_level_security_hides_patients_from_the_public_api_role(store, db_ur
         conn.execute("SET ROLE anon")
         assert conn.execute("SELECT count(*) FROM surgery_requests").fetchone()[0] == 0
         assert conn.execute("SELECT count(*) FROM staff").fetchone()[0] == 0
+        assert conn.execute("SELECT count(*) FROM app_users").fetchone()[0] == 0  # password hashes too
+
+
+def test_accounts_are_stored_hashed_and_sessions_end_on_change(store, db_url):
+    from app.auth import Accounts, AuthError, DbUserStore, Signer
+
+    accounts = Accounts(DbUserStore(store.db), Signer(b"k" * 32))
+    staff_id = next(p["id"] for p in store.people() if p["name"].startswith("Dr.Napat"))
+    user = accounts.store.create("napat", "Napat", "surgeon", staff_id, "Temporary-Pass-77")
+    assert user.must_change_password and user.staff_id == staff_id
+    with pytest.raises(AuthError):
+        accounts.store.create("Napat", "Again", "staff", None, "Temporary-Pass-77")  # user names are unique
+
+    logged_in, token = accounts.login("NAPAT", "Temporary-Pass-77", "10.0.0.1")
+    assert accounts.user_from_token(token).user_id == logged_in.user_id
+    new_token = accounts.change_own_password(logged_in, "Temporary-Pass-77", "Real-Pass-2026!")
+    assert accounts.user_from_token(token) is None  # the old session ended
+    assert accounts.user_from_token(new_token) is not None
+    stored, must_change = _rows(db_url, "SELECT password_hash, must_change_password FROM app_users")[0]
+    assert stored.startswith("scrypt$") and "Real-Pass" not in stored and must_change is False
+
+    accounts.store.update(logged_in.user_id, is_active=False)
+    assert accounts.user_from_token(new_token) is None
+    with pytest.raises(AuthError):
+        accounts.login("napat", "Real-Pass-2026!", "10.0.0.1")
+
+
+def test_actor_and_cssd_equipment_updates_are_saved(store, db_url):
+    day = _tomorrow(store)
+    state = store.state(day)
+    scheduler = {"name": "Nurse A", "username": "a", "role": "scheduler", "staff_id": None}
+    assert store.slot_check(_request(state, "Dr.Napat", "Laparoscopic cholecystectomy", "HN-Q"), "09:00",
+                            commit=True, day=day, actor=scheduler)["booked"]
+    assert _rows(db_url, "SELECT actor FROM orchestra_activity WHERE kind = 'booking'")[0][0] == "Nurse A (scheduler)"
+
+    booked = store.state(day)["schedule"]["bookings"][0]
+    unit = booked["equipment"][0]["unit_id"]
+    cssd = {"name": "CSSD B", "username": "b", "role": "cssd", "staff_id": None}
+    result = store.update_equipment(unit, "STERILIZING", "13:00", day=day, actor=cssd)
+    assert result["warnings"] and result["unit"]["ready_at"] == "13:00"
+    assert _rows(db_url, "SELECT current_status FROM equipment_units WHERE serial_number = %s", unit)[0][0] == "STERILIZING"
+    assert store.state(day)["warnings"]  # the scheduler now sees the conflict
+
+
+def test_owner_login_still_works_before_migration_003(store, db_url):
+    from app.auth import Accounts, AuthError, DbUserStore, Signer
+
+    with psycopg.connect(db_url, autocommit=True) as conn:
+        conn.execute("DROP TABLE app_users")
+    accounts = Accounts(DbUserStore(store.db), Signer(b"k" * 32))
+    assert accounts.store.by_username("anyone") is None
+    with pytest.raises(AuthError, match="20261102000000_user_accounts.sql"):
+        accounts.store.list()

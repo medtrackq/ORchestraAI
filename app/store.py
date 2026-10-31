@@ -28,6 +28,40 @@ class StoreError(ValueError):
     """Request that cannot be carried out; the message is shown to the user."""
 
 
+class Forbidden(StoreError):
+    """The signed-in role may not do this (HTTP 403)."""
+
+
+EQUIPMENT_STATUSES = ("AVAILABLE", "IN_USE", "STERILIZING", "MAINTENANCE")
+
+
+def actor_name(actor: dict | None) -> str | None:
+    return None if actor is None else f"{actor.get('name')} ({actor.get('role')})"
+
+
+def check_own_case(actor: dict | None, surgeon_id: str) -> None:
+    """Surgeons may only act on cases where they are the primary surgeon."""
+    if actor and actor.get("role") == "surgeon" and actor.get("staff_id") != surgeon_id:
+        raise Forbidden("ศัลยแพทย์ทำรายการได้เฉพาะเคสที่ตัวเองเป็นแพทย์ผ่าตัดหลัก")
+
+
+def equipment_rows(units) -> list[dict]:
+    return [
+        {"unit_id": u.unit_id, "type": u.eq_type, "status": u.status,
+         "ready_at": fmt(u.available_at) if 0 < u.available_at < 24 * 60 else None,
+         "sterilization_mins": u.reprocess_mins, "usable": u.is_usable}
+        for u in sorted(units, key=lambda u: (u.eq_type, u.unit_id))
+    ]
+
+
+def ready_minute(status: str, ready_text: str | None) -> int | None:
+    if status not in EQUIPMENT_STATUSES:
+        raise StoreError(f"สถานะไม่ถูกต้อง: {status}")
+    if status in ("IN_USE", "STERILIZING") and not ready_text:
+        raise StoreError("กรุณาระบุเวลาที่เครื่องมือจะพร้อมใช้")
+    return parse_time(ready_text) if ready_text else None
+
+
 @dataclass
 class Activity:
     kind: str  # reset / booking / emergency / overrun
@@ -36,6 +70,7 @@ class Activity:
     changes: list[dict] = field(default_factory=list)
     notifications: list[dict] = field(default_factory=list)
     highlight: list[str] = field(default_factory=list)
+    actor: str | None = None
 
 
 KNOWN_ROLES = {StaffRole.ANESTHESIOLOGIST, StaffRole.SCRUB_NURSE, StaffRole.CIRCULATING_NURSE, StaffRole.SURGEON}
@@ -161,7 +196,30 @@ class ScheduleStore:
             raise StoreError("ตารางที่คำนวณได้ไม่ผ่านการตรวจ: " + "; ".join(errors[:3]))
         self.result = result
 
-    def slot_check(self, data: dict, start_text: str, *, commit: bool, day: str | None = None) -> dict:
+    def people(self) -> list[dict]:
+        return [{"id": s.staff_id, "name": s.name, "role": s.role} for s in self.hospital.staff]
+
+    def equipment(self, day: str | None = None) -> list[dict]:
+        return equipment_rows(self.hospital.equipments)
+
+    def update_equipment(self, serial: str, status: str, ready_text: str | None, *,
+                         day: str | None = None, actor: dict | None = None) -> dict:
+        ready = ready_minute(status, ready_text)
+        with self._lock:
+            unit = next((u for u in self.hospital.equipments if u.unit_id == serial), None)
+            if unit is None:
+                raise StoreError(f"ไม่พบเครื่องมือ {serial}")
+            unit.status, unit.available_at = status, ready or 0
+            h = self.hospital
+            problems = [p for p in validate_schedule(self.result, self.result.cases.values(), h.rooms,
+                                                     h.equipments, h.staff, h.beds) if serial in p]
+            when = f" พร้อม {fmt(ready)}" if ready else ""
+            self.activity.append(Activity("equipment", f"{serial}: {status}{when}", problems,
+                                          actor=actor_name(actor)))
+            return {"unit": equipment_rows([unit])[0], "warnings": problems}
+
+    def slot_check(self, data: dict, start_text: str, *, commit: bool, day: str | None = None,
+                   actor: dict | None = None) -> dict:
         start = parse_time(start_text)
         with self._lock:
             if start < self.result.now_min:
@@ -177,11 +235,11 @@ class ScheduleStore:
                 self.activity.append(Activity(
                     "booking", f"จอง {case.case_id} {case.procedure}", check.log,
                     [{"case_id": c.case_id, "details": c.details} for c in check.result.changes],
-                    check.result.to_dict()["notifications"], [case.case_id],
+                    check.result.to_dict()["notifications"], [case.case_id], actor_name(actor),
                 ))
             return out
 
-    def emergency(self, data: dict, now_text: str, *, day: str | None = None) -> dict:
+    def emergency(self, data: dict, now_text: str, *, day: str | None = None, actor: dict | None = None) -> dict:
         now = parse_time(now_text)
         with self._lock:
             case = build_case(self.hospital, {**data, "urgency": "EMERGENCY"}, self._next_id("E", commit=False), release=now)
@@ -193,14 +251,17 @@ class ScheduleStore:
                 raise StoreError(f"คำนวณไม่สำเร็จ ({after.status})")
             self._commit(after)
             self._next_id("E", commit=True)
-            return self._record_change("emergency", f"ฉุกเฉิน {case.case_id} {case.procedure}", after, case.case_id)
+            return self._record_change("emergency", f"ฉุกเฉิน {case.case_id} {case.procedure}", after, case.case_id,
+                                       actor)
 
-    def overrun(self, case_id: str, new_duration: int, now_text: str, *, day: str | None = None) -> dict:
+    def overrun(self, case_id: str, new_duration: int, now_text: str, *, day: str | None = None,
+                actor: dict | None = None) -> dict:
         now = parse_time(now_text)
         with self._lock:
             current = self.result.assignments.get(case_id)
             if current is None:
                 raise StoreError(f"ไม่พบเคส {case_id} ในตาราง")
+            check_own_case(actor, current.staff_ids[0])
             if not current.start_min < now:
                 raise StoreError(f"{case_id} ยังไม่เริ่ม (เริ่ม {fmt(current.start_min)}) ให้แก้เวลาผ่าตัดแทน")
             if current.start_min + new_duration <= now:
@@ -212,16 +273,18 @@ class ScheduleStore:
             if not after.is_feasible:
                 raise StoreError(f"คำนวณไม่สำเร็จ ({after.status})")
             self._commit(after)
-            return self._record_change("overrun", f"{case_id} ผ่าตัดเกินเวลา -> {new_duration} นาที", after, case_id)
+            return self._record_change("overrun", f"{case_id} ผ่าตัดเกินเวลา -> {new_duration} นาที", after, case_id,
+                                       actor)
 
-    def _record_change(self, kind: str, title: str, after: ScheduleResult, case_id: str) -> dict:
+    def _record_change(self, kind: str, title: str, after: ScheduleResult, case_id: str,
+                       actor: dict | None = None) -> dict:
         data = after.to_dict()
         log = [f"[Master Orchestrator] {c['case_id']}: {'; '.join(c['details'])}" for c in data["changes"]]
         unscheduled = [f"[Master Orchestrator] NOT SCHEDULED {u['case_id']}: {'; '.join(u['reasons'])}"
                        for u in data["unscheduled"]]
         self.activity.append(Activity(
             kind, title, log + unscheduled, data["changes"], data["notifications"],
-            [c["case_id"] for c in data["changes"]] or [case_id],
+            [c["case_id"] for c in data["changes"]] or [case_id], actor_name(actor),
         ))
         return {"changes": data["changes"], "notifications": data["notifications"],
                 "unscheduled": data["unscheduled"], "log": log + unscheduled}

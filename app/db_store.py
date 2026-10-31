@@ -19,7 +19,8 @@ from orchestra_engine.demo import elective_day
 
 from . import seed
 from .db import ConflictError, Database, World, case_code
-from .store import Activity, StoreError, build_case, parse_time
+from .store import (Activity, StoreError, actor_name, build_case, check_own_case, equipment_rows, parse_time,
+                    ready_minute)
 
 
 class DatabaseStore:
@@ -89,7 +90,7 @@ class DatabaseStore:
 
     def _record(self, conn, world: World, activity: Activity) -> dict:
         record = {"kind": activity.kind, "title": activity.title, "log": activity.log,
-                  "changes": activity.changes, "notifications": activity.notifications}
+                  "changes": activity.changes, "notifications": activity.notifications, "actor": activity.actor}
         if not world.has_activity:
             self._fallback_activity.setdefault(world.day, []).append(activity)
         return record
@@ -141,9 +142,39 @@ class DatabaseStore:
             "empty": not h.rooms or not h.staff,
         }
 
+    def people(self) -> list[dict]:
+        with self._transaction(write=False) as conn:
+            return self.db.people(conn)
+
+    def equipment(self, day: str | None = None) -> list[dict]:
+        with self._transaction(write=False) as conn:
+            return equipment_rows(self.db.load(conn, self._day(day)).hospital.equipments)
+
+    def update_equipment(self, serial: str, status: str, ready_text: str | None, *,
+                         day: str | None = None, actor: dict | None = None) -> dict:
+        """CSSD / Equipment & Inventory input: unit status and when it is ready again."""
+        ready = ready_minute(status, ready_text)
+        with self._transaction(write=True) as conn:
+            world = self.db.load(conn, self._day(day))
+            if serial not in world.unit_ids:
+                raise StoreError(f"ไม่พบเครื่องมือ {serial}")
+            conn.execute(
+                "UPDATE equipment_units SET current_status = %s, available_at = COALESCE(%s, NOW()) WHERE unit_id = %s",
+                (status, world.ts(ready) if ready is not None else None, world.unit_ids[serial]),
+            )
+            after = self.db.load(conn, world.day)
+            problems = [p for p in self._problems(after, after.result) if serial in p]
+            when = f" พร้อม {fmt(ready)}" if ready is not None else ""
+            record = self._record(conn, after, Activity("equipment", f"{serial}: {status}{when}", problems,
+                                                        actor=actor_name(actor)))
+            self.db.log_activity(conn, after, record)
+            unit = next(u for u in after.hospital.equipments if u.unit_id == serial)
+            return {"unit": equipment_rows([unit])[0], "warnings": problems}
+
     # -------------------------------------------------------------- writes
 
-    def slot_check(self, data: dict, start_text: str, *, commit: bool, day: str | None = None) -> dict:
+    def slot_check(self, data: dict, start_text: str, *, commit: bool, day: str | None = None,
+                   actor: dict | None = None) -> dict:
         start = parse_time(start_text)
         with self._transaction(write=commit) as conn:
             world = self.db.load(conn, self._day(day))
@@ -161,14 +192,14 @@ class DatabaseStore:
                 activity = Activity(
                     "booking", f"จอง {case.case_id} {case.procedure}", check.log,
                     [{"case_id": c.case_id, "details": c.details} for c in check.result.changes],
-                    check.result.to_dict()["notifications"], [case.case_id],
+                    check.result.to_dict()["notifications"], [case.case_id], actor_name(actor),
                 )
                 self.db.save(conn, world, check.result, {case.case_id: request},
                              activity=self._record(conn, world, activity))
                 out["booked"] = True
             return out
 
-    def emergency(self, data: dict, now_text: str, *, day: str | None = None) -> dict:
+    def emergency(self, data: dict, now_text: str, *, day: str | None = None, actor: dict | None = None) -> dict:
         now = parse_time(now_text)
         with self._transaction(write=True) as conn:
             world = self.db.load(conn, self._day(day))
@@ -182,15 +213,17 @@ class DatabaseStore:
             )
             return self._save_change(conn, world, after, "emergency",
                                      f"ฉุกเฉิน {case.case_id} {case.procedure}", case.case_id,
-                                     {case.case_id: request})
+                                     {case.case_id: request}, actor)
 
-    def overrun(self, case_id: str, new_duration: int, now_text: str, *, day: str | None = None) -> dict:
+    def overrun(self, case_id: str, new_duration: int, now_text: str, *, day: str | None = None,
+                actor: dict | None = None) -> dict:
         now = parse_time(now_text)
         with self._transaction(write=True) as conn:
             world = self.db.load(conn, self._day(day))
             current = world.result.assignments.get(case_id)
             if current is None:
                 raise StoreError(f"ไม่พบเคส {case_id} ในตาราง")
+            check_own_case(actor, current.staff_ids[0])
             if not current.start_min < now:
                 raise StoreError(f"{case_id} ยังไม่เริ่ม (เริ่ม {fmt(current.start_min)}) ให้แก้เวลาผ่าตัดแทน")
             if current.start_min + new_duration <= now:
@@ -200,10 +233,10 @@ class DatabaseStore:
                 new_duration_mins=new_duration, now_min=now, scenario_name=f"Overrun {case_id}", verbose=False,
             )
             return self._save_change(conn, world, after, "overrun",
-                                     f"{case_id} ผ่าตัดเกินเวลา -> {new_duration} นาที", case_id, {})
+                                     f"{case_id} ผ่าตัดเกินเวลา -> {new_duration} นาที", case_id, {}, actor)
 
     def _save_change(self, conn, world: World, after: ScheduleResult, kind: str, title: str,
-                     case_id: str, new_requests: dict) -> dict:
+                     case_id: str, new_requests: dict, actor: dict | None = None) -> dict:
         if not after.is_feasible:
             raise StoreError(f"คำนวณไม่สำเร็จ ({after.status})")
         self._guard(world, after)
@@ -212,7 +245,7 @@ class DatabaseStore:
         log += [f"[Master Orchestrator] NOT SCHEDULED {u['case_id']}: {'; '.join(u['reasons'])}"
                 for u in data["unscheduled"]]
         activity = Activity(kind, title, log, data["changes"], data["notifications"],
-                            [c["case_id"] for c in data["changes"]] or [case_id])
+                            [c["case_id"] for c in data["changes"]] or [case_id], actor_name(actor))
         self.db.save(conn, world, after, new_requests, activity=self._record(conn, world, activity))
         return {"changes": data["changes"], "notifications": data["notifications"],
                 "unscheduled": data["unscheduled"], "log": log}

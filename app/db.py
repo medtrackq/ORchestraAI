@@ -68,6 +68,7 @@ class World:
     has_recovery_col: bool = False
     has_activity: bool = False
     rls_off: list[str] = field(default_factory=list)
+    has_actor_col: bool = False
 
     def minute(self, ts: datetime | None, default: int = 0) -> int:
         if ts is None:
@@ -159,6 +160,7 @@ class Database:
         }
         has_recovery_col = ("scheduled_surgeries", "recovery_end_time") in columns
         has_activity = ("orchestra_activity", "activity_id") in columns
+        has_actor_col = ("orchestra_activity", "actor") in columns
         rls = {
             r["relname"]: r["relrowsecurity"]
             for r in conn.execute(
@@ -366,7 +368,7 @@ class Database:
         return World(
             day, start, result.now_min, hospital, room_ids, unit_ids, bed_ids,
             {key: tid for tid, key in type_keys.items()}, procedures, cards, result, bookings,
-            has_recovery_col, has_activity, sorted(t for t in TABLES if not rls.get(t, False)),
+            has_recovery_col, has_activity, sorted(t for t in TABLES if not rls.get(t, False)), has_actor_col,
         )
 
     def activity(self, conn: psycopg.Connection, world: World, limit: int = 30) -> list[dict]:
@@ -374,7 +376,8 @@ class Database:
             return []
         return [
             {"kind": r["kind"], "title": r["title"], "log": r["agent_log"], "changes": r["changes"],
-             "notifications": r["notifications"], "highlight": [], "created_at": r["created_at"].isoformat()}
+             "notifications": r["notifications"], "highlight": [], "created_at": r["created_at"].isoformat(),
+             "actor": r.get("actor")}
             for r in conn.execute(
                 "SELECT * FROM orchestra_activity WHERE planning_date = %s ORDER BY created_at DESC LIMIT %s",
                 (world.day, limit),
@@ -442,15 +445,29 @@ class Database:
                      case.duration_mins, world.day, world.day),
                 )
                 self._insert_schedule(conn, world, uuid.uuid4(), request_id, case, a, None)
-            if activity is not None and world.has_activity:
-                conn.execute(
-                    """INSERT INTO orchestra_activity (planning_date, kind, title, agent_log, changes, notifications)
-                       VALUES (%s, %s, %s, %s, %s, %s)""",
-                    (world.day, activity["kind"], activity["title"], Jsonb(activity["log"]),
-                     Jsonb(activity["changes"]), Jsonb(activity["notifications"])),
-                )
+            if activity is not None:
+                self.log_activity(conn, world, activity)
         except psycopg.errors.ExclusionViolation as exc:
             raise ConflictError("the database already holds an overlapping booking") from exc
+
+    @staticmethod
+    def log_activity(conn: psycopg.Connection, world: World, activity: dict) -> None:
+        if not world.has_activity:
+            return
+        cols = ["planning_date", "kind", "title", "agent_log", "changes", "notifications"]
+        values = [world.day, activity["kind"], activity["title"], Jsonb(activity["log"]),
+                  Jsonb(activity["changes"]), Jsonb(activity["notifications"])]
+        if world.has_actor_col:
+            cols.append("actor")
+            values.append(activity.get("actor"))
+        conn.execute(
+            f"INSERT INTO orchestra_activity ({', '.join(cols)}) VALUES ({', '.join(['%s'] * len(cols))})", values
+        )
+
+    @staticmethod
+    def people(conn: psycopg.Connection) -> list[dict]:
+        return [{"id": str(r["staff_id"]), "name": r["full_name"], "role": r["role"]}
+                for r in conn.execute("SELECT staff_id, full_name, role FROM staff WHERE is_active ORDER BY full_name")]
 
     def _insert_schedule(self, conn, world: World, schedule_id, request_id, case: SurgeryCase,
                          a: Assignment, old: dict | None) -> None:

@@ -16,6 +16,8 @@
 | `app/` | เว็บแอป FastAPI (หน้าเว็บ `app/static/index.html` + API) สำหรับ Render |
 | `app/db.py`, `app/db_store.py`, `app/seed.py` | โหมด Supabase: อ่าน/เขียนตาราง, lock + ตรวจก่อนบันทึก, ข้อมูลตัวอย่าง |
 | `supabase/migrations/20261101000000_security_and_integrity.sql` | RLS ทุกตาราง, exclusion constraint ใหม่, ตาราง activity |
+| `app/auth.py`, `app/static/login.html` | บัญชีผู้ใช้ บทบาท สิทธิ์ session และหน้าเข้าสู่ระบบ |
+| `supabase/migrations/20261102000000_user_accounts.sql` | ตาราง `app_users` + ผู้ทำรายการใน activity |
 | `render.yaml` | Render Blueprint (web service ฟรี + รหัสผ่านอัตโนมัติ) |
 | `web/orchestra-flow.html` | หน้า interactive 5 ขั้น (ปรับจาก ORchestraAIFlow.html) แสดงผลจาก engine จริง |
 | `orchestra_engine/validation.py` | ตัวตรวจ Hard Constraint อิสระ (ไม่ใช้โค้ด solver) |
@@ -28,16 +30,34 @@ repo มี `render.yaml` (Render Blueprint) สำหรับ deploy เว็
 
 1. Render Dashboard → **New → Blueprint** → เลือก repo `medtrackq/ORchestraAI` (branch `main`) → **Apply**
 2. รอ build เสร็จ (ครั้งแรกประมาณ 3-5 นาที) แล้วเปิด URL ของ service `orchestra-ai` (เช่น `https://orchestra-ai.onrender.com`)
-3. ล็อกอิน: ชื่อผู้ใช้ `orchestra` รหัสผ่านดูได้ที่ service → **Environment** → `APP_PASSWORD` (Render สุ่มให้ เปลี่ยนเองได้)
+3. ล็อกอินครั้งแรกด้วยบัญชีหลัก: ชื่อผู้ใช้ `orchestra` รหัสผ่านดูได้ที่ service → **Environment** → `APP_PASSWORD` (Render สุ่มให้ เปลี่ยนเองได้) แล้วสร้างบัญชีของแต่ละคนในแท็บ **ผู้ใช้**
 
 หน้าเว็บ: ตารางทุกห้อง · จองผ่าตัด (Agent ตรวจเวลา + เสนอช่วงใหม่) · แทรกเคสฉุกเฉิน · ผ่าตัดเกินเวลา · ประวัติกิจกรรม/แจ้งเตือน · `/flow` หน้า Flow สาธิต · `/api/docs` เอกสาร API
 
 ถ้าไม่ได้ตั้ง `DATABASE_URL` แอปจะใช้ข้อมูลจำลองในหน่วยความจำ (รีเซ็ตเมื่อ service restart) plan ฟรีของ Render จะหลับเมื่อไม่มีคนใช้ 15 นาที เปิดครั้งแรกหลังจากนั้นรอประมาณ 1 นาที
 
+### บัญชีผู้ใช้และบทบาท
+
+| บทบาท | ทำอะไรได้ | Agent ที่เกี่ยวข้อง |
+|---|---|---|
+| `admin` ผู้ดูแลระบบ | ทุกอย่าง + จัดการผู้ใช้ + ใส่ข้อมูลตัวอย่าง | — |
+| `scheduler` ผู้จัดตาราง OR | จอง / ฉุกเฉิน / เกินเวลา ทุกเคส, อัปเดตเครื่องมือ, เห็นการแจ้งเตือนทั้งหมด | Master Orchestrator |
+| `surgeon` ศัลยแพทย์ | จอง / ฉุกเฉิน / แจ้งเกินเวลา **เฉพาะเคสที่ตัวเองเป็นแพทย์หลัก** (ต้องผูกกับรายชื่อศัลยแพทย์) | Intake & Triage |
+| `cssd` จ่ายกลาง | อัปเดตสถานะเครื่องมือและเวลาอบเสร็จ, ดูตาราง **ไม่เห็น HN/ชื่อผู้ป่วย** | Equipment & Inventory |
+| `staff` วิสัญญี / พยาบาล | ดูตาราง, เห็นเคสของตัวเอง ("ของฉัน") และการแจ้งเตือนของตัวเอง | Staffing |
+
+- admin สร้างบัญชีในแท็บ **ผู้ใช้** ระบบสุ่มรหัสชั่วคราวให้ (แสดงครั้งเดียว) ผู้ใช้ต้องตั้งรหัสใหม่เมื่อเข้าครั้งแรก
+- รหัสผ่านเก็บแบบ scrypt hash · session เป็น cookie ที่เซ็นด้วย HMAC (HttpOnly, SameSite=Lax, Secure บน HTTPS) อายุ 12 ชั่วโมง · เปลี่ยนรหัส / เปลี่ยนบทบาท / ปิดบัญชี = ออกจากระบบทุกเครื่องทันที
+- ล็อกอินผิด 5 ครั้งใน 10 นาที ถูกพัก 10 นาที · การแก้ไขข้อมูลต้องเป็น JSON จากเว็บเดียวกัน (กัน CSRF)
+- ทุกการเปลี่ยนแปลงบันทึกชื่อผู้ทำใน `orchestra_activity.actor`
+- บัญชีหลักจาก `APP_USERNAME` / `APP_PASSWORD` ใช้ได้เสมอ (สำหรับเจ้าของระบบ) เปลี่ยนรหัสที่ Render
+- โหมด Supabase เก็บบัญชีในตาราง `app_users` (migration 003, เปิด RLS) · โหมดข้อมูลจำลองเก็บในหน่วยความจำ
+
 ### เชื่อม Supabase
 
-1. Supabase → **SQL Editor** → วางเนื้อหา `supabase/migrations/20261101000000_security_and_integrity.sql` → **Run**
-   (เปิด Row Level Security ทุกตาราง, เคสที่ยกเลิกไม่บล็อกห้อง, ห้ามจองเตียงพักฟื้นซ้อน, ตาราง `orchestra_activity`)
+1. Supabase → **SQL Editor** → รันทีละไฟล์ตามลำดับ (รันซ้ำได้):
+   - `supabase/migrations/20261101000000_security_and_integrity.sql` (Row Level Security ทุกตาราง, เคสที่ยกเลิกไม่บล็อกห้อง, ห้ามจองเตียงพักฟื้นซ้อน, ตาราง `orchestra_activity`)
+   - `supabase/migrations/20261102000000_user_accounts.sql` (ตารางบัญชีผู้ใช้ `app_users`)
 2. Supabase → **Connect** → คัดลอก connection string แบบ **Session pooler** (Render ต่อแบบ direct ไม่ได้เพราะเป็น IPv6) แล้วแทน `[YOUR-PASSWORD]` ด้วยรหัสผ่านฐานข้อมูล (อักขระพิเศษต้อง URL-encode)
 3. Render → service `orchestra-ai` → **Environment** → เพิ่ม `DATABASE_URL` = connection string นั้น → Save (Render deploy ใหม่เอง)
 4. เปิดเว็บ ป้าย **Supabase** จะขึ้นข้างชื่อ ถ้าฐานข้อมูลยังว่าง กด **ใส่ข้อมูลตัวอย่าง** ได้ (ใช้ได้เฉพาะตอนที่ยังไม่มีห้องหรือบุคลากร)
