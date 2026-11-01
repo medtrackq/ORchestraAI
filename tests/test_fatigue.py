@@ -83,7 +83,7 @@ def test_emergency_may_break_rest_and_is_reported():
     issue = rest[0]
     assert issue.override and not issue.is_error and issue.case_id == "ER2"
     assert issue.after_case == "NIGHT" and issue.minutes == hm("04:00")  # rest ends 12:00, starts 08:00
-    assert "EMERGENCY override" in issue.detail()
+    assert "ฉุกเฉิน: ยอมเกินเกณฑ์" in issue.detail()
 
 
 def test_emergency_prefers_a_rested_person_when_there_is_one():
@@ -104,7 +104,7 @@ def test_rest_from_the_previous_day():
     assert result.assignments["X"].start_min >= hm("09:00")
 
     _, result = solve(staff, [case("X", "SUR-A", 60, **at(hm("07:00")))])
-    assert "rests until 09:00" in result.unscheduled["X"][0]
+    assert "พักถึง 09:00" in result.unscheduled["X"][0]
 
     _, result = solve(staff, [case("ER", "SUR-A", 60, urgency=Urgency.EMERGENCY, **at(hm("07:00")))])
     assert result.assignments["ER"].start_min == hm("07:00")
@@ -159,7 +159,7 @@ def test_validator_reports_fatigue_breaks_of_normal_cases():
         "A2": Assignment("A2", "OR-1", hm("10:00"), hm("11:30"), hm("12:00"), people),
     }
     errors = validate_schedule(schedule, cases, [OperatingRoom("OR-1")], [], staff)
-    assert sum("fatigue daily" in e for e in errors) == 4
+    assert sum("เกินเกณฑ์ความเหนื่อยล้า" in e and "วันนี้" in e for e in errors) == 4
 
 
 def test_slot_check_reports_rest_and_offers_the_rested_slot():
@@ -169,7 +169,7 @@ def test_slot_check_reports_rest_and_offers_the_rested_slot():
     check = opt.check_slot(day, case("NEW", "SUR-A", 60), hm("09:00"), verbose=False)
     staffing = next(v for v in check.verdicts if v.agent == "Staffing Agent")
     assert not staffing.ok
-    assert "resting until 12:00 after late case NIGHT" in staffing.items[0].note
+    assert "พักถึง 12:00 หลังเคสดึก NIGHT" in staffing.items[0].note
     assert check.assignment.start_min == hm("12:00")
 
 

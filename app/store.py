@@ -25,6 +25,7 @@ from orchestra_engine import (
     staff_fatigue,
 )
 from orchestra_engine.demo import Hospital, build_hospital, elective_day
+from orchestra_engine import thai
 from orchestra_engine.models import DEFAULT_TEAM
 
 from . import cancellations as cx
@@ -184,7 +185,7 @@ def cssd_event(day, serial: str, status: str, ready: int | None, problems: list[
 
 
 def fatigue_log(issues) -> list[str]:
-    return [f"[Staffing Agent] FATIGUE OVERRIDE: {i.detail()}" for i in issues if i.override]
+    return [f"[Staffing Agent] {thai.FATIGUE_OVERRIDE}: {i.detail()}" for i in issues if i.override]
 
 
 def build_case(hospital: Hospital, data: dict, case_id: str, *, release: int = 0) -> SurgeryCase:
@@ -278,8 +279,8 @@ class ScheduleStore:
             self._ids = Counter()
             self.activity: list[Activity] = [Activity(
                 "reset", "โหลดข้อมูลตัวอย่าง",
-                [f"[Master Orchestrator] booked {len(self.result.assignments)} elective cases, "
-                 f"status {self.result.status}"],
+                [f"[Master Orchestrator] จองเคสนัดล่วงหน้า {len(self.result.assignments)} เคส "
+                 f"(ผล {thai.solver(self.result.status)})"],
             )]
 
     # -------------------------------------------------------------- reads
@@ -608,7 +609,7 @@ class ScheduleStore:
                 scenario_name=f"Emergency {case.case_id}", verbose=False,
             )
             if not after.is_feasible:
-                raise StoreError(f"คำนวณไม่สำเร็จ ({after.status})")
+                raise StoreError(f"คำนวณไม่สำเร็จ ({thai.solver(after.status)})")
             tired = self.opt.new_fatigue(self.result, after)
             self._commit(after)
             if not data.get("pending_id"):
@@ -633,7 +634,7 @@ class ScheduleStore:
                 new_duration_mins=new_duration, now_min=now, scenario_name=f"Overrun {case_id}", verbose=False,
             )
             if not after.is_feasible:
-                raise StoreError(f"คำนวณไม่สำเร็จ ({after.status})")
+                raise StoreError(f"คำนวณไม่สำเร็จ ({thai.solver(after.status)})")
             tired = self.opt.new_fatigue(self.result, after)
             self._commit(after)
             return self._record_change("overrun", f"{case_id} ผ่าตัดเกินเวลา -> {new_duration} นาที", after, case_id,
@@ -645,7 +646,7 @@ class ScheduleStore:
             after = self.opt.reschedule(self.result, list(self.result.cases.values()), now_min=self.result.now_min,
                                         scenario_name="Replan", verbose=False)
             if not after.is_feasible:
-                raise StoreError(f"คำนวณไม่สำเร็จ ({after.status})")
+                raise StoreError(f"คำนวณไม่สำเร็จ ({thai.solver(after.status)})")
             tired = self.opt.new_fatigue(self.result, after)
             self._commit(after)
             return self._record_change("replan", "จัดตารางวันนี้ใหม่", after, "", actor, tired)
@@ -684,7 +685,8 @@ class ScheduleStore:
         kinds = Counter(a.kind for a in self.activity)
         extra = {"waiting": len(self.pending), "cancelled": 0, "replans": kinds["replan"], "overruns": kinds["overrun"],
                  "emergencies_inserted": kinds["emergency"], "supplies_used": [], "mode": self.mode,
-                 "fatigue_overrides": sum("FATIGUE OVERRIDE" in line for a in self.activity for line in a.log)}
+                 "fatigue_overrides": sum(thai.FATIGUE_OVERRIDE in line or thai.FATIGUE_OVERRIDE_OLD in line
+                                          for a in self.activity for line in a.log)}
         today = date.today()
         report = build_report(self.report_cases(), rooms, today, today, ZoneInfo("Asia/Bangkok"), extra=extra)
         planned = [c for c in self.cancellations if c["planned"]]
@@ -711,7 +713,7 @@ class ScheduleStore:
                                     "POSTPONED", actor)
         data = after.to_dict()
         log = [f"[Master Orchestrator] {c['case_id']}: {'; '.join(c['details'])}" for c in data["changes"]]
-        log += [f"[Master Orchestrator] NOT SCHEDULED {u['case_id']}: {'; '.join(u['reasons'])}"
+        log += [f"[Master Orchestrator] จัดลงตารางไม่ได้ {u['case_id']}: {'; '.join(u['reasons'])}"
                 for u in data["unscheduled"]]
         log += fatigue_log(tired)
         self.activity.append(Activity(

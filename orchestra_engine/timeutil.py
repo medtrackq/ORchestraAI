@@ -15,7 +15,9 @@ def hm(text: str, day: int = 0) -> int:
 
 
 def fmt(minute: int) -> str:
-    """Format horizon minutes as "HH:MM", with a "+Nd" suffix past day 0."""
+    """Format horizon minutes as "HH:MM", naming the day when it is not day 0 (Thai)."""
     day, rem = divmod(int(minute), MINUTES_PER_DAY)
     text = f"{rem // 60:02d}:{rem % 60:02d}"
-    return text if day == 0 else f"{text}(+{day}d)"
+    if day == 0:
+        return text
+    return f"{text} " + {1: "(พรุ่งนี้)", -1: "(เมื่อวาน)"}.get(day, f"({day:+d} วัน)")

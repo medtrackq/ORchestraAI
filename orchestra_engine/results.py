@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass, field
 
+from . import thai
 from .models import SurgeryCase
 from .timeutil import fmt
 
@@ -125,44 +126,44 @@ class ScheduleResult:
         obj = "-" if self.objective is None else f"{self.objective:.0f}"
         lines = [
             f"=== {self.scenario} ===",
-            f"status={self.status}  scheduled={len(self.assignments)}/{total}  "
-            f"objective={obj}  solve={self.wall_time_s:.2f}s"
-            + (f"  now={fmt(self.now_min)}" if self.now_min else ""),
+            f"ผล={thai.solver(self.status)}  จัดได้={len(self.assignments)}/{total}  "
+            f"คะแนน={obj}  ใช้เวลา={self.wall_time_s:.2f} วินาที"
+            + (f"  ตอนนี้={fmt(self.now_min)}" if self.now_min else ""),
         ]
         for room, items in self.by_room().items():
             lines.append(f"[{room}]")
             for a in items:
                 case = self.cases[a.case_id]
-                tag = " (in progress, locked)" if a.frozen else ""
+                tag = " (เริ่มแล้ว ล็อกไว้)" if a.frozen else ""
                 lines.append(
-                    f"  {fmt(a.start_min)}-{fmt(a.end_min)} clean->{fmt(a.cleanup_end_min)}  "
-                    f"{a.case_id} {case.urgency.value:<9} {case.procedure}{tag}"
+                    f"  {fmt(a.start_min)}-{fmt(a.end_min)} ทำความสะอาดถึง {fmt(a.cleanup_end_min)}  "
+                    f"{a.case_id} {thai.urgency(case.urgency.value)} {case.procedure}{tag}"
                 )
-                lines.append("      team: " + ", ".join(self._name(s) for s in a.staff_ids))
+                lines.append("      ทีม: " + ", ".join(self._name(s) for s in a.staff_ids))
                 if a.equipment_unit_ids:
-                    ready = ", ".join(f"{u} (CSSD->{fmt(t)})" for u, t in a.equipment_ready_min)
-                    lines.append(f"      equipment: {ready}")
+                    ready = ", ".join(f"{u} (กลับจาก CSSD {fmt(t)})" for u, t in a.equipment_ready_min)
+                    lines.append(f"      เครื่องมือ: {ready}")
                 if a.bed_id is not None:
                     lines.append(
-                        f"      recovery: {a.bed_id} {fmt(a.recovery_start_min)}-{fmt(a.recovery_end_min)}"
+                        f"      พักฟื้น: {a.bed_id} {fmt(a.recovery_start_min)}-{fmt(a.recovery_end_min)}"
                     )
                 for why in a.reasoning:
-                    lines.append(f"      why: {why}")
+                    lines.append(f"      เหตุผล: {why}")
         if self.unscheduled:
-            lines.append("Not scheduled:")
+            lines.append("จัดลงตารางไม่ได้:")
             for cid, reasons in self.unscheduled.items():
                 case = self.cases[cid]
-                lines.append(f"  {cid} {case.urgency.value} {case.procedure}")
+                lines.append(f"  {cid} {thai.urgency(case.urgency.value)} {case.procedure}")
                 lines.extend(f"      - {r}" for r in reasons)
         if self.fatigue:
-            lines.append("Fatigue limits broken:")
+            lines.append("เกินเกณฑ์ความเหนื่อยล้า:")
             lines.extend(f"  {i.detail()}" for i in self.fatigue)
         if self.changes:
-            lines.append("Changes vs previous schedule:")
+            lines.append("สิ่งที่เปลี่ยนจากตารางเดิม:")
             for ch in self.changes:
                 lines.append(f"  {ch.case_id}: " + "; ".join(ch.details))
         if self.notifications:
             people = sorted({self._name(n.staff_id) for n in self.notifications})
-            lines.append(f"Notifications: {len(self.notifications)} messages to {len(people)} staff")
+            lines.append(f"แจ้งเตือน: {len(self.notifications)} ข้อความ ถึง {len(people)} คน")
             lines.append("  " + ", ".join(people))
         return "\n".join(lines)

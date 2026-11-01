@@ -44,14 +44,14 @@ def test_implant_in_stock_for_only_one_case():
     _, result = solve(cases, stock)
     assert len(result.assignments) == 1
     [why] = result.unscheduled.values()
-    assert "Knee implant (KNEE) runs out: 1 of 1" in why[0] and "next delivery 2026-11-05" in why[0]
+    assert "Knee implant (KNEE) ไม่พอ: วันนี้เคสอื่นใช้ 1 จาก 1" in why[0] and "next delivery 2026-11-05" in why[0]
 
 
 def test_out_of_stock_and_unknown_items_are_reported():
     stock = [SupplyItem("MESH", "Hernia mesh", 0, note="no delivery on order")]
     _, result = solve([case("H1", required_supplies={"MESH": 1}), case("X1", "SUR-B", required_supplies={"NOPE": 1})], stock)
-    assert result.unscheduled["H1"] == ["Inventory: need 1 x Hernia mesh (MESH), only 0 available; no delivery on order"]
-    assert result.unscheduled["X1"] == ["Inventory: NOPE is not a stocked item"]
+    assert result.unscheduled["H1"] == ["วัสดุ: ต้องใช้ Hernia mesh (MESH) 1 ชิ้น แต่มีเพียง 0; no delivery on order"]
+    assert result.unscheduled["X1"] == ["วัสดุ: ไม่มี NOPE ในคลัง"]
 
 
 def test_emergency_takes_the_last_implant():
@@ -61,7 +61,7 @@ def test_emergency_takes_the_last_implant():
     er = case("ER", "SUR-B", urgency=Urgency.EMERGENCY, release_min=hm("09:00"), required_supplies={"GRAFT": 1})
     after = opt.insert_emergency(day, [elective], [er], now_min=hm("09:00"), verbose=False)
     assert "ER" in after.assignments and "EL" not in after.assignments
-    assert "runs out" in after.unscheduled["EL"][0]
+    assert "ไม่พอ" in after.unscheduled["EL"][0]
     assert validate_schedule(after, [elective, er], ROOMS, [], STAFF, supplies=stock) == []
 
 
@@ -73,7 +73,7 @@ def test_validator_counts_stock():
     _, other = solve(cases[1:], stock)
     both.update(other.assignments)
     errors = validate_schedule(both, cases, ROOMS, [], STAFF, supplies=stock)
-    assert any("Bone cement (CEM): 4 booked, only 3 available" in e for e in errors)
+    assert any("Bone cement (CEM): จองไว้ 4 แต่มีเพียง 3" in e for e in errors)
 
 
 def test_slot_scan_reports_stock():
@@ -81,7 +81,7 @@ def test_slot_scan_reports_stock():
     opt, day = solve([case("R1", required_supplies={"DRAPE": 1})], stock)
     check = opt.check_slot(day, case("R2", "SUR-B", required_supplies={"DRAPE": 1}), hm("15:00"), verbose=False)
     equipment = next(v for v in check.verdicts if v.agent == "Equipment & CSSD Agent")
-    assert not equipment.ok and "need 1, only 0 ชุด left" in equipment.items[-1].note
+    assert not equipment.ok and "ต้องใช้ 1 แต่เหลือเพียง 0 ชุด" in equipment.items[-1].note
     assert check.assignment is None
 
 

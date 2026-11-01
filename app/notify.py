@@ -266,8 +266,8 @@ class WebPushSender:
         except WebPushException as exc:
             code = getattr(exc.response, "status_code", None)
             if code in (404, 410):
-                return "removed", f"subscription expired ({code})"
-            return "failed", f"push service {code}: {str(exc)[:200]}"
+                return "removed", f"การรับแจ้งเตือนของอุปกรณ์นี้หมดอายุ ({code})"
+            return "failed", f"บริการ push ตอบกลับ {code}: {str(exc)[:200]}"
         except Exception as exc:  # network errors etc.: log, never raise into the app
             return "failed", str(exc)[:200]
 

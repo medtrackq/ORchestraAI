@@ -54,7 +54,7 @@ def test_a_case_keeps_out_of_another_owners_block():
     day_opt = ORchestraOptimizer(day_rooms, [], staff, [], time_limit_s=10)
     plan, reasons = day_opt._plan_case(SurgeryCase("N3", "HN-3", "Long", "SUR-A", 300,
                                                    room_blocks={"OR-1": [ORTHO_BLOCK], "OR-2": [ORTHO_BLOCK]}), hm("09:00"))
-    assert plan is None and any("another owner's OR block" in r and "บล็อกของ Orthopedics" in r for r in reasons)
+    assert plan is None and any("บล็อกห้องของคนอื่น" in r and "บล็อกของ Orthopedics" in r for r in reasons)
 
 
 def test_the_owners_block_room_is_preferred():

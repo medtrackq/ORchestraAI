@@ -164,9 +164,9 @@ class StaffMember:
         self.shifts = tuple(sorted((int(a), int(b)) for a, b in self.shifts))
         for start, end in self.shifts:
             if end <= start:
-                raise ValueError(f"{self.staff_id}: shift end must be after start")
+                raise ValueError(f"{self.staff_id}: เวลาเลิกเวรต้องหลังเวลาเริ่มเวร")
         if self.max_daily_hours <= 0 or self.max_weekly_hours <= 0 or self.rest_hours < 0:
-            raise ValueError(f"{self.staff_id}: hour limits must be positive")
+            raise ValueError(f"{self.staff_id}: เกณฑ์ชั่วโมงทำงานต้องมากกว่า 0")
 
     @property
     def weekly_cap_minutes(self) -> int:
@@ -302,7 +302,7 @@ class SurgeryCase:
 
     def __post_init__(self) -> None:
         if self.duration_mins <= 0:
-            raise ValueError(f"{self.case_id}: duration_mins must be positive")
+            raise ValueError(f"{self.case_id}: เวลาผ่าตัดต้องมากกว่า 0 นาที")
         self.urgency = Urgency(self.urgency)
         self.infection_risk = InfectionRisk(self.infection_risk)
         self.required_capabilities = frozenset(self.required_capabilities)
@@ -314,7 +314,7 @@ class SurgeryCase:
         }
         for role, count in self.required_staff_roles.items():
             if count < 0:
-                raise ValueError(f"{self.case_id}: negative staff count for {role}")
+                raise ValueError(f"{self.case_id}: จำนวน {role} ต้องไม่ติดลบ")
         self.required_supplies = {str(k): int(v) for k, v in self.required_supplies.items() if int(v) > 0}
         self.room_blocks = {str(r): tuple((int(a), int(b), str(why)) for a, b, why in spans)
                             for r, spans in self.room_blocks.items() if spans}

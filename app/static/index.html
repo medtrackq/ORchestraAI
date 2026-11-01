@@ -480,6 +480,15 @@
   const hours = m => (m / 60).toFixed(1).replace(/\.0$/, '');
   const supplyName = code => ((STATE.options.supplies || []).find(x => x.id === code) || { name: code }).name;
   const timeText = m => hhmm(m) + (m >= 24 * 60 ? ' (พรุ่งนี้)' : m < 0 ? ' (เมื่อวาน)' : '');
+  const URGENCY_SHORT = { ELECTIVE: 'นัดล่วงหน้า', URGENT: 'ด่วน', EMERGENCY: 'ฉุกเฉิน' };
+  const urgencyText = u => URGENCY_SHORT[u] || u;
+  const SOLVER_TH = { OPTIMAL: 'ดีที่สุด', FEASIBLE: 'ใช้ได้', INFEASIBLE: 'จัดไม่ได้', UNKNOWN: 'หาคำตอบไม่ทันเวลา' };
+  const ACCOUNT_ROLE = { admin: 'ผู้ดูแลระบบ', scheduler: 'ผู้จัดตาราง', surgeon: 'ศัลยแพทย์', cssd: 'CSSD', staff: 'วิสัญญี/พยาบาล' };
+  const actorText = a => String(a).replace(/\((admin|scheduler|surgeon|cssd|staff)\)$/, (m, r) => `(${ACCOUNT_ROLE[r]})`);
+  const ACTIVITY_KIND = {
+    reset: 'เริ่มต้น', seed: 'ข้อมูลตัวอย่าง', booking: 'จองเคส', emergency: 'แทรกเคสฉุกเฉิน', overrun: 'ผ่าตัดเกินเวลา',
+    replan: 'จัดตารางใหม่', cancel: 'งดผ่าตัด', actual: 'บันทึกเวลาจริง', equipment: 'สถานะเครื่องมือ', admin: 'ข้อมูลโรงพยาบาล',
+  };
 
   // Staffing Agent fatigue issue -> Thai sentence.
   function fatigueText(i) {
@@ -668,7 +677,7 @@
     delete form.dataset.durationTouched;
     updatePrediction(form);
     hint.textContent = card
-      ? `ค่าจาก preference card: ${card.duration} นาที (±${card.stddev ?? '?'}), ทีม ${Object.entries(card.roles).filter(([, n]) => n > 0).map(([r, n]) => n + ' ' + r).join(', ') || 'ไม่ต้องใช้ทีมเพิ่ม'}`
+      ? `ค่าจาก preference card: ${card.duration} นาที (±${card.stddev ?? '?'}), ทีม ${Object.entries(card.roles).filter(([, n]) => n > 0).map(([r, n]) => (ROLE_TH[r] || r) + ' ' + n).join(', ') || 'ไม่ต้องใช้ทีมเพิ่ม'}`
         + (card.equipment.length ? ', เครื่องมือ ' + Object.entries(countOf(card.equipment)).map(([t, n]) => n > 1 ? `${t} ×${n}` : t).join(', ') : '')
         + (card.notes ? ' · หมายเหตุ: ' + card.notes : '')
       : 'ศัลยแพทย์คนนี้ยังไม่มี preference card สำหรับหัตถการนี้ ใช้เวลามาตรฐานของหัตถการและทีมมาตรฐาน';
@@ -744,7 +753,7 @@
     $('#stats').innerHTML = `
       <span class="chip ok">จองแล้ว ${s.bookings.length} เคส</span>
       <span class="chip ${s.unscheduled.length ? 'bad' : ''}">ยังไม่ได้จัด ${s.unscheduled.length}</span>
-      <span class="chip">${s.status === 'LOADED' ? 'ข้อมูลจาก Supabase' : 'solver ' + esc(s.status)}</span>`;
+      <span class="chip">${s.status === 'LOADED' ? 'ข้อมูลจาก Supabase' : 'ผลการคำนวณ: ' + esc(SOLVER_TH[s.status] || s.status)}</span>`;
     renderGantt();
     renderUnscheduled();
     renderPending();
@@ -957,7 +966,7 @@
       <h3 style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center">${esc(b.case_id)} · ${esc(b.procedure)}
         <a class="btn" href="/print?${printQ}" target="_blank" rel="noopener" style="padding:3px 10px;font-size:.78rem;font-weight:400">🖨 WHO checklist</a></h3>
       <dl>
-        <dt>ผู้ป่วย</dt><dd>${esc(b.patient_hn)}${b.patient_name ? ' · ' + esc(b.patient_name) : ''} · ${esc(b.urgency)}${b.frozen ? ' · เริ่มแล้ว (ล็อก)' : ''}${b.airborne ? ' · <b>ติดเชื้อทางอากาศ (ห้องความดันลบ)</b>' : ''}</dd>
+        <dt>ผู้ป่วย</dt><dd>${esc(b.patient_hn)}${b.patient_name ? ' · ' + esc(b.patient_name) : ''} · ${esc(urgencyText(b.urgency))}${b.frozen ? ' · เริ่มแล้ว (ล็อก)' : ''}${b.airborne ? ' · <b>ติดเชื้อทางอากาศ (ห้องความดันลบ)</b>' : ''}</dd>
         <dt>ห้อง / เวลา</dt><dd>${esc(b.or_id)} ${esc(b.start)}-${esc(b.end)} (ห้องพร้อมใหม่ ${esc(b.cleanup_end)})</dd>
         <dt>ทีม</dt><dd>${teamText(b.team)}</dd>
         <dt>เครื่องมือ</dt><dd>${b.equipment.map(e => esc(e.unit_id) + ' (กลับจาก CSSD ' + hhmm(e.back_from_cssd_min) + ')').join(', ') || '-'}</dd>
@@ -1099,7 +1108,7 @@
   function renderUnscheduled() {
     const u = STATE.schedule.unscheduled;
     $('#unscheduled').innerHTML = u.length ? `<h3>ยังจัดไม่ได้</h3><ul>${u.map(x =>
-      `<li><b>${esc(x.case_id)}</b> ${esc(x.urgency)} ${esc(x.procedure)}: ${esc(x.reasons.join('; '))}</li>`).join('')}</ul>` : '';
+      `<li><b>${esc(x.case_id)}</b> ${esc(urgencyText(x.urgency))} ${esc(x.procedure)}: ${esc(x.reasons.join('; '))}</li>`).join('')}</ul>` : '';
   }
 
   // Cases taken off the schedule (re-plan, emergency) wait here until rebooked or cancelled.
@@ -1110,7 +1119,7 @@
     $('#pending').innerHTML = list.length ? `<h3>รอจัดวันใหม่ (${list.length})</h3>
       <p class="hint">เคสที่ถูกเอาออกจากตารางเพราะจัดตารางใหม่หรือมีเคสฉุกเฉินแทรก และยังไม่ได้ผ่าตัด: กดจองใหม่ (เลือกวันที่ด้านบนได้) หรือยกเลิกคำขอ</p>
       <div class="rows" style="margin-top:8px">${list.map(p => `<div class="row-item">
-        <div class="title"><b>${esc(p.code)} · ${esc(p.procedure)}</b><span class="triage ${esc(p.urgency)}">${esc(p.urgency)}</span></div>
+        <div class="title"><b>${esc(p.code)} · ${esc(p.procedure)}</b><span class="triage ${esc(p.urgency)}">${esc(urgencyText(p.urgency))}</span></div>
         <small class="hint">${esc(p.patient_hn)}${p.patient_name ? ' · ' + esc(p.patient_name) : ''} · ${esc(p.surgeon || '-')} · ${p.duration_mins} นาที${p.was_on ? ' · เดิมวันที่ ' + esc(p.was_on) : ''}${p.airborne ? ' · ติดเชื้อทางอากาศ' : ''}</small>
         ${can('book') && (STATE.me.role !== 'surgeon' || p.surgeon_id === STATE.me.staff_id) ? `<div class="line">
           <button class="btn primary" type="button" data-rebook="${esc(p.id)}">จองใหม่</button>
@@ -1163,11 +1172,11 @@
   function renderActivity() {
     $('#activity').innerHTML = STATE.activity.map(a => `
       <div class="activity-item">
-        <div class="kind">${esc(a.kind)}${a.created_at ? ' · ' + esc(new Date(a.created_at).toLocaleString('th-TH')) : ''}${a.actor ? ' · โดย ' + esc(a.actor) : ''}</div>
+        <div class="kind">${esc(ACTIVITY_KIND[a.kind] || a.kind)}${a.created_at ? ' · ' + esc(new Date(a.created_at).toLocaleString('th-TH')) : ''}${a.actor ? ' · โดย ' + esc(actorText(a.actor)) : ''}</div>
         <div>${esc(a.title)}</div>
         ${a.changes.length ? '<ul class="changes">' + a.changes.map(c => '<li>' + esc(c.case_id) + ': ' + esc(c.details.join('; ')) + '</li>').join('') + '</ul>' : ''}
         ${a.notifications.length ? '<div class="hint">แจ้งเตือน ' + a.notifications.length + ' ข้อความ: ' + esc([...new Set(a.notifications.map(n => n.name))].join(', ')) + '</div>' : ''}
-        ${a.log.length ? '<details><summary>Agent log</summary><pre class="log">' + esc(a.log.join('\n')) + '</pre></details>' : ''}
+        ${a.log.length ? '<details><summary>บันทึกของ Agent</summary><pre class="log">' + esc(a.log.join('\n')) + '</pre></details>' : ''}
       </div>`).join('') || '<p class="hint">ยังไม่มีกิจกรรม</p>';
   }
 
@@ -1191,7 +1200,7 @@
     }
     const tired = (r.result.fatigue || []).filter(i => i.case_id === r.case_id);
     $('#result-book').innerHTML = `<h3>ผลตรวจ ${esc(r.requested_start)}</h3>${verdicts}${proposal}${fatigueBox(tired, 'ทีมเกินเกณฑ์ความเหนื่อยล้า')}
-      <details><summary>Negotiation log</summary><pre class="log">${esc(r.log.join('\n'))}</pre></details>`;
+      <details><summary>บันทึกการเจรจาของ Agent</summary><pre class="log">${esc(r.log.join('\n'))}</pre></details>`;
     const confirm = $('#confirm-book');
     if (confirm) confirm.addEventListener('click', () => busy(confirm, async () => {
       const data = await api('/api/bookings', body);
@@ -1211,7 +1220,7 @@
       ${r.unscheduled.length ? '<div class="proposal none">' + r.unscheduled.map(u => esc(u.case_id) + ': ' + esc(u.reasons.join('; '))).join('<br>') + '</div>' : ''}
       ${fatigueBox(r.fatigue, 'ใช้บุคลากรเกินเกณฑ์ความเหนื่อยล้า (อนุญาตเพราะเป็นเคสฉุกเฉิน) ควรหาคนสลับหรือให้พักชดเชย')}
       <p class="hint">แจ้งเตือน ${r.notifications.length} ข้อความถึง ${people.length} คน${people.length ? ': ' + esc(people.join(', ')) : ''}</p>
-      ${r.log.length ? '<details><summary>Agent log</summary><pre class="log">' + esc(r.log.join('\n')) + '</pre></details>' : ''}`;
+      ${r.log.length ? '<details><summary>บันทึกของ Agent</summary><pre class="log">' + esc(r.log.join('\n')) + '</pre></details>' : ''}`;
   }
 
   // Re-plan the cases of this day that have not started (after leave, a room closure, ...).

@@ -67,7 +67,7 @@ def test_leave_is_reported_and_replanning_fixes_the_day(admin, store, db_url):
                                "start": "00:00", "end": "00:00", "type": "LEAVE", "note": "ลาป่วย"}, actor=ADMIN)
     assert result["created"] == 1
     [affected] = result["affected"]
-    assert affected["date"] == day and any("off shift" in p for p in affected["problems"])
+    assert affected["date"] == day and any("ไม่อยู่เวร" in p for p in affected["problems"])
     listed = admin.shifts(day, day, nurse["staff_id"])["shifts"]
     assert any(s["type"] == "LEAVE" and s["note"] == "ลาป่วย" for s in listed)
 
@@ -307,8 +307,8 @@ def test_elective_hours_per_room(admin, store):
     data = _request(state, "Dr.Napat", "Laparoscopic cholecystectomy", "HN-H1")
     check = store.slot_check(data, "13:00", commit=False, day=day)
     facility = next(v for v in check["verdicts"] if v["agent"] == "OR Facility Agent")
-    assert not facility["ok"] and "elective hours are 08:00-12:00" in facility["items"][0]["note"]
-    assert "elective hours" in check["result"]["unscheduled"][-1]["reasons"][0]
+    assert not facility["ok"] and "เวลาผ่าตัดนัดของห้องคือ 08:00-12:00" in facility["items"][0]["note"]
+    assert "เวลาผ่าตัดนัดของห้อง" in check["result"]["unscheduled"][-1]["reasons"][0]
     assert store.slot_check({**data, "urgency": "URGENT"}, "13:00", commit=True, day=day)["booked"]
 
 
@@ -323,11 +323,11 @@ def test_planned_equipment_maintenance(admin, store):
                     required_supplies={}, required_staff_skills=robotic["skills"])
     check = store.slot_check(data, "09:00", commit=False, day=day)
     equipment = next(v for v in check["verdicts"] if v["agent"] == "Equipment & CSSD Agent")
-    assert any("planned maintenance 07:00-13:00 (PM ประจำปี)" in i["note"] for i in equipment["items"])
+    assert any("นัดซ่อมบำรุง 07:00-13:00 (PM ประจำปี)" in i["note"] for i in equipment["items"])
     assert store.slot_check(data, "13:30", commit=True, day=day)["booked"]  # after the morning's maintenance
     clash = admin.add_maintenance({"serial": "DV-01", "start_date": day, "end_date": day, "start_time": "13:00",
                                    "end_time": "23:59", "reason": "เสีย"})  # tomorrow's robotic case needs it
-    assert clash["affected"][0]["date"] == day and "planned maintenance" in clash["affected"][0]["problems"][0]
+    assert clash["affected"][0]["date"] == day and "นัดซ่อมบำรุง" in clash["affected"][0]["problems"][0]
     admin.delete_maintenance(clash["id"])
     assert store.state(day)["warnings"] == []
 
@@ -338,7 +338,7 @@ def test_recovery_beds_are_managed(admin, store):
         admin.occupy_bed(bed, {"until_date": day, "until_time": "23:00", "note": "ผู้ป่วยอายุรกรรม"})
     data = _request(store.state(day), "Dr.Pimchanok", "Femoral-popliteal bypass", "HN-B1", required_supplies={})
     check = store.slot_check(data, "08:00", commit=False, day=day)
-    assert "ICU_SURGICAL bed" in check["result"]["unscheduled"][-1]["reasons"][0]
+    assert "เตียง ICU_SURGICAL" in check["result"]["unscheduled"][-1]["reasons"][0]
     beds = {b["code"]: b for b in admin.beds()["beds"]}
     assert beds["ICU-1"]["occupied_until"] == f"{day} 23:00"
     admin.occupy_bed("ICU-2", {})  # free now
