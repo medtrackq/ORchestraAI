@@ -1,4 +1,5 @@
 """ORchestraAI scheduling engine (OR-Tools CP-SAT)."""
+from .fatigue import FatigueIssue, fatigue_issues, staff_fatigue
 from .models import (
     BedType,
     EquipmentUnit,
@@ -19,6 +20,7 @@ __all__ = [
     "Assignment",
     "BedType",
     "EquipmentUnit",
+    "FatigueIssue",
     "InfectionRisk",
     "Notification",
     "ORchestraOptimizer",
@@ -31,7 +33,9 @@ __all__ = [
     "SurgeryCase",
     "Urgency",
     "Weights",
+    "fatigue_issues",
     "fmt",
     "hm",
+    "staff_fatigue",
     "validate_schedule",
 ]

@@ -46,7 +46,7 @@ class Hospital:
         )
 
 
-def _person(staff_id, name, role, start, end, skills=(), used=36.0, more_shifts=()):
+def _person(staff_id, name, role, start, end, skills=(), used=24.0, more_shifts=()):
     shifts = [(hm(start), hm(end)), *more_shifts]
     return StaffMember(staff_id, name, role, shifts, skills=skills, current_weekly_hours=used)
 
@@ -83,23 +83,23 @@ def build_hospital() -> Hospital:
         _person("SUR-GEN", "Dr.Napat (General)", S, "08:00", "16:00"),
         _person("SUR-URO", "Dr.Kittipong (Uro)", S, "08:00", "17:00", {"ROBOTIC_CERTIFIED"}),
         _person("SUR-VASC", "Dr.Pimchanok (Vascular)", S, "08:00", "17:00"),
-        _person("SUR-ONCALL", "Dr.Anan (General, on-call)", S, "08:00", "23:59", used=20),
+        _person("SUR-ONCALL", "Dr.Anan (General, on-call)", S, "08:00", "23:59"),
         _person("ANE-1", "Dr.Wanida", A, "08:00", "16:00"),
         _person("ANE-2", "Dr.Chaiwat", A, "08:00", "16:00", used=45),  # only 3 h left
-        _person("ANE-3", "Dr.Ratana", A, "10:00", "18:00"),
+        _person("ANE-3", "Dr.Ratana", A, "10:00", "18:00", {"PEDIATRIC_ANESTHESIA"}),
         _person("ANE-4", "Dr.Suda", A, "08:00", "16:00"),
-        _person("ANE-ONCALL", "Dr.Prasert (on-call)", A, "08:00", "23:59", used=20),
+        _person("ANE-ONCALL", "Dr.Prasert (on-call)", A, "08:00", "23:59"),
         _person("SCR-1", "Malee", SN, "08:00", "16:00", {"ROBOTIC_CERTIFIED"}),
         _person("SCR-2", "Kanya", SN, "08:00", "16:00"),
         _person("SCR-3", "Orathai", SN, "08:00", "16:00"),
         _person("SCR-4", "Jintana", SN, "10:00", "18:00", {"ROBOTIC_CERTIFIED"}),
         _person("SCR-5", "Sirilak", SN, "08:00", "16:00"),
-        _person("SCR-ONCALL", "Duangjai (on-call)", SN, "08:00", "23:59", used=20),
+        _person("SCR-ONCALL", "Duangjai (on-call)", SN, "08:00", "23:59"),
         _person("CIR-1", "Nok", CN, "08:00", "16:00"),
         _person("CIR-2", "Ploy", CN, "08:00", "16:00"),
         _person("CIR-3", "Fon", CN, "08:00", "16:00"),
-        _person("CIR-4", "Dao", CN, "10:00", "18:00"),
-        _person("CIR-ONCALL", "Fah (on-call)", CN, "08:00", "23:59", used=20),
+        _person("CIR-4", "Dao", CN, "10:00", "18:00", {"PEDIATRIC_CARE"}),
+        _person("CIR-ONCALL", "Fah (on-call)", CN, "08:00", "23:59"),
     ]
     beds = [RecoveryBed(f"PACU-{i}", BedType.PACU) for i in range(1, 5)] + [
         RecoveryBed(f"ICU-{i}", BedType.ICU_SURGICAL) for i in range(1, 3)

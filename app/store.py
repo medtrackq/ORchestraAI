@@ -7,6 +7,7 @@ Supabase data layer will replace this class.
 """
 from __future__ import annotations
 
+import re
 import threading
 from collections import Counter
 from dataclasses import dataclass, field
@@ -17,8 +18,10 @@ from orchestra_engine import (
     StaffRole,
     SurgeryCase,
     Urgency,
+    fatigue_issues,
     fmt,
     hm,
+    staff_fatigue,
     validate_schedule,
 )
 from orchestra_engine.demo import Hospital, build_hospital, elective_day
@@ -81,6 +84,45 @@ class Activity:
 
 
 KNOWN_ROLES = {StaffRole.ANESTHESIOLOGIST, StaffRole.SCRUB_NURSE, StaffRole.CIRCULATING_NURSE, StaffRole.SURGEON}
+SKILL = re.compile(r"^[A-Z][A-Z0-9_]{1,49}$")
+
+
+def staff_skills(hospital: Hospital) -> dict[str, list[str]]:
+    """Skills held by active staff, per role (what a booking can ask for)."""
+    out: dict[str, set[str]] = {}
+    for s in hospital.staff:
+        if s.is_active and s.skills:
+            out.setdefault(s.role, set()).update(s.skills)
+    return {role: sorted(skills) for role, skills in sorted(out.items())}
+
+
+def required_skills(data: dict) -> dict[str, set[str]]:
+    skills: dict[str, set[str]] = {}
+    for role, names in (data.get("required_staff_skills") or {}).items():
+        if role not in KNOWN_ROLES:
+            raise StoreError(f"บทบาทไม่ถูกต้องในทักษะที่ต้องการ: {role}")
+        bad = [n for n in names if not SKILL.match(str(n))]
+        if bad:
+            raise StoreError(f"ชื่อทักษะไม่ถูกต้อง: {', '.join(map(str, bad))}")
+        if names:
+            skills[role] = set(names)
+    if data.get("robotic_certified_scrub"):
+        skills.setdefault(StaffRole.SCRUB_NURSE, set()).add("ROBOTIC_CERTIFIED")
+    return skills
+
+
+def fatigue_view(hospital: Hospital, result: ScheduleResult) -> dict:
+    """Staffing Agent view: every person's load and fatigue score, and the
+    fatigue-limit breaks of the day (emergency overrides and history)."""
+    issues = fatigue_issues(result.assignments, result.cases, hospital.staff)
+    return {
+        "staff": staff_fatigue(hospital.staff, result.assignments, issues, now_min=result.now_min),
+        "fatigue": [i.to_dict() for i in issues],
+    }
+
+
+def fatigue_log(issues) -> list[str]:
+    return [f"[Staffing Agent] FATIGUE OVERRIDE: {i.detail()}" for i in issues if i.override]
 
 
 def build_case(hospital: Hospital, data: dict, case_id: str, *, release: int = 0) -> SurgeryCase:
@@ -100,7 +142,7 @@ def build_case(hospital: Hospital, data: dict, case_id: str, *, release: int = 0
     bad = [r for r, n in roles.items() if r not in KNOWN_ROLES or not 0 <= int(n) <= 4]
     if bad:
         raise StoreError(f"บทบาททีมไม่ถูกต้อง: {', '.join(bad)}")
-    skills = {StaffRole.SCRUB_NURSE: {"ROBOTIC_CERTIFIED"}} if data.get("robotic_certified_scrub") else {}
+    skills = required_skills(data)
     return SurgeryCase(
         case_id, data["patient_hn"], data["procedure"], surgeon.staff_id, int(data["duration_mins"]),
         urgency=Urgency(data.get("urgency") or "ELECTIVE"),
@@ -176,6 +218,7 @@ class ScheduleStore:
             "bed_types": sorted({b.bed_type for b in h.beds}),
             "procedures": self.procedures,
             "cards": self.cards,
+            "skills": staff_skills(h),
         }
 
     def state(self, day: str | None = None) -> dict:
@@ -200,6 +243,7 @@ class ScheduleStore:
             "axis": {"start": start, "end": end},
             "options": self.options(),
             "activity": [a.__dict__ for a in reversed(self.activity[-30:])],
+            **fatigue_view(self.hospital, self.result),
         }
 
     # ------------------------------------------------------------- writes
@@ -312,10 +356,11 @@ class ScheduleStore:
             )
             if not after.is_feasible:
                 raise StoreError(f"คำนวณไม่สำเร็จ ({after.status})")
+            tired = self.opt.new_fatigue(self.result, after)
             self._commit(after)
             self._next_id("E", commit=True)
             return self._record_change("emergency", f"ฉุกเฉิน {case.case_id} {case.procedure}", after, case.case_id,
-                                       actor)
+                                       actor, tired)
 
     def overrun(self, case_id: str, new_duration: int, now_text: str, *, day: str | None = None,
                 actor: dict | None = None) -> dict:
@@ -335,19 +380,21 @@ class ScheduleStore:
             )
             if not after.is_feasible:
                 raise StoreError(f"คำนวณไม่สำเร็จ ({after.status})")
+            tired = self.opt.new_fatigue(self.result, after)
             self._commit(after)
             return self._record_change("overrun", f"{case_id} ผ่าตัดเกินเวลา -> {new_duration} นาที", after, case_id,
-                                       actor)
+                                       actor, tired)
 
     def _record_change(self, kind: str, title: str, after: ScheduleResult, case_id: str,
-                       actor: dict | None = None) -> dict:
+                       actor: dict | None = None, tired=()) -> dict:
         data = after.to_dict()
         log = [f"[Master Orchestrator] {c['case_id']}: {'; '.join(c['details'])}" for c in data["changes"]]
-        unscheduled = [f"[Master Orchestrator] NOT SCHEDULED {u['case_id']}: {'; '.join(u['reasons'])}"
-                       for u in data["unscheduled"]]
+        log += [f"[Master Orchestrator] NOT SCHEDULED {u['case_id']}: {'; '.join(u['reasons'])}"
+                for u in data["unscheduled"]]
+        log += fatigue_log(tired)
         self.activity.append(Activity(
-            kind, title, log + unscheduled, data["changes"], data["notifications"],
+            kind, title, log, data["changes"], data["notifications"],
             [c["case_id"] for c in data["changes"]] or [case_id], actor_name(actor),
         ))
         return {"changes": data["changes"], "notifications": data["notifications"],
-                "unscheduled": data["unscheduled"], "log": log + unscheduled}
+                "unscheduled": data["unscheduled"], "log": log, "fatigue": [i.to_dict() for i in tired]}

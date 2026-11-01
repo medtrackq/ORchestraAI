@@ -36,8 +36,10 @@ from orchestra_engine import (
     Urgency,
 )
 from orchestra_engine.demo import Hospital
+from orchestra_engine.fatigue import is_late_end
 
 HORIZON = 24 * 60
+WEEK_DAYS = 7  # fatigue: operating-room hours over the last 7 days (incl. the planning day)
 WRITE_LOCK = 724_310_001  # pg_advisory_xact_lock key: one scheduler write at a time
 TABLES = (
     "staff", "staff_schedules", "team_synergy", "equipment_types", "equipment_units", "operating_rooms",
@@ -204,6 +206,14 @@ def _merge(windows: list[tuple[int, int]]) -> list[tuple[int, int]]:
     return [(a, b) for a, b in merged]
 
 
+def _skills(value) -> dict[str, list[str]]:
+    """procedures.required_staff_skills: {"SCRUB_NURSE": ["ROBOTIC_CERTIFIED"], ...}."""
+    if not isinstance(value, dict):
+        return {}
+    return {str(role): sorted(str(x) for x in skills) for role, skills in value.items()
+            if isinstance(skills, list) and skills}
+
+
 def case_code(request_id: uuid.UUID, urgency: str, taken: set[str]) -> str:
     letter = {"EMERGENCY": "E", "URGENT": "U"}.get(urgency, "R")
     for size in (6, 8, 12, 32):
@@ -299,10 +309,13 @@ class Database:
         for r in conn.execute("SELECT * FROM staff ORDER BY full_name"):
             windows = _subtract(_merge(shifts.get(r["staff_id"], [])), leave.get(r["staff_id"], []))
             sid = str(r["staff_id"])
+            # Hours worked are computed from bookings below (staff.current_weekly_hours is not read).
             staff.append(StaffMember(
                 sid, r["full_name"], r["role"], windows, skills=r["skills"] or [],
                 specialty=r["specialty"], max_weekly_hours=float(r["max_hours_per_week"] or 48),
-                current_weekly_hours=float(r["current_weekly_hours"] or 0), is_active=bool(r["is_active"]),
+                is_active=bool(r["is_active"]),
+                max_daily_hours=float(r.get("max_hours_per_day") or 10),
+                rest_hours=float(r["min_rest_hours"]) if r.get("min_rest_hours") is not None else 8,
             ))
             names[sid] = r["full_name"]
 
@@ -341,6 +354,7 @@ class Database:
                 "id": str(r["procedure_id"]), "name": r["name"], "code": r["icd9_cm_code"],
                 "duration": r["default_duration_mins"], "caps": r["required_room_capabilities"] or [],
                 "icu": bool(r["requires_icu_post_op"]), "infection": r["infection_risk_level"] or "CLEAN",
+                "skills": _skills(r.get("required_staff_skills")),
             }
             for r in conn.execute("SELECT * FROM procedures ORDER BY name")
         ]
@@ -357,6 +371,8 @@ class Database:
         ]
 
         recovery_sel = ", s.recovery_end_time" if has_recovery_col else ""
+        if ("procedures", "required_staff_skills") in columns:
+            recovery_sel += ", p.required_staff_skills"
         rows = list(conn.execute(
             f"""SELECT s.schedule_id, s.request_id, s.or_id, s.reserved_bed_id, s.start_time, s.end_time,
                        s.cleanup_end_time, s.status, s.actual_start_time, s.actual_end_time,
@@ -418,6 +434,7 @@ class Database:
                     obj.blocked = tuple(sorted(spans))
 
         staff_by_id = {s.staff_id: s for s in staff}
+        self._work_history(conn, staff_by_id, outside, minute)
         unit_by_serial = {u.unit_id: u for u in units}
         assignments, cases, bookings, taken = {}, {}, {}, set()
         for r in rows:
@@ -449,6 +466,7 @@ class Database:
                 urgency=r["urgency_level"] if r["urgency_level"] in Urgency.__members__ else "ELECTIVE",
                 required_capabilities=set(r["caps"]),
                 required_staff_roles=dict(roles),
+                required_staff_skills=_skills(r.get("required_staff_skills")),
                 required_equipment_types=[unit_by_serial[s].eq_type for s in unit_list],
                 infection_risk=infection, requires_icu_post_op=bool(r["icu"]),
                 recovery_mins=recovery, patient_name=r["patient_name"],
@@ -474,6 +492,36 @@ class Database:
             {key: tid for tid, key in type_keys.items()}, procedures, cards, result, bookings,
             has_recovery_col, has_activity, sorted(t for t in TABLES if not rls.get(t, False)), has_actor_col,
         )
+
+    @staticmethod
+    def _work_history(conn: psycopg.Connection, staff_by_id: dict[str, StaffMember], outside: dict, minute) -> None:
+        """Fatigue inputs from bookings on other days (actual times when recorded):
+        operating-room hours in the 6 days before, rest still owed after a late
+        case the day before, and the first booking after this day."""
+        window = {**outside, "week": outside["start"] - timedelta(days=WEEK_DAYS - 1)}
+        prior: Counter[str] = Counter()
+        for r in conn.execute(
+            """SELECT a.staff_id, COALESCE(s.actual_start_time, s.start_time) AS t0,
+                      COALESCE(s.actual_end_time, s.end_time) AS t1
+               FROM resource_allocations a JOIN scheduled_surgeries s ON s.schedule_id = a.schedule_id
+               WHERE a.staff_id IS NOT NULL AND s.status IS DISTINCT FROM 'CANCELLED'
+                 AND COALESCE(s.actual_end_time, s.end_time) > %(week)s AND s.start_time < %(far)s
+                 AND NOT (s.schedule_id = ANY(%(ids)s::uuid[]))""",
+            window,
+        ):
+            person = staff_by_id.get(str(r["staff_id"]))
+            if person is None:
+                continue
+            t0, t1 = minute(r["t0"]), minute(r["t1"])
+            if t1 <= 0:  # before this day
+                prior[person.staff_id] += max(0, t1 - max(t0, -(WEEK_DAYS - 1) * HORIZON))
+                if is_late_end(t1) and t1 + person.rest_minutes > person.rest_until:
+                    person.rest_until = t1 + person.rest_minutes
+            elif t0 >= HORIZON:  # after this day
+                if person.next_booking_min is None or t0 < person.next_booking_min:
+                    person.next_booking_min = t0
+        for sid, minutes in prior.items():
+            staff_by_id[sid].current_weekly_hours = minutes / 60
 
     def activity(self, conn: psycopg.Connection, world: World, limit: int = 30) -> list[dict]:
         if not world.has_activity:

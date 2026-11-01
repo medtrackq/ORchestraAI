@@ -55,6 +55,7 @@ class ScheduleResult:
     now_min: int = 0
     changes: list[ScheduleChange] = field(default_factory=list)
     notifications: list[Notification] = field(default_factory=list)
+    fatigue: list = field(default_factory=list)  # fatigue.FatigueIssue: emergency overrides / history
 
     @property
     def is_feasible(self) -> bool:
@@ -113,6 +114,7 @@ class ScheduleResult:
                 {"staff_id": n.staff_id, "name": self._name(n.staff_id), "case_id": n.case_id, "message": n.message}
                 for n in self.notifications
             ],
+            "fatigue": [i.to_dict() for i in self.fatigue],
         }
 
     def report(self) -> str:
@@ -149,6 +151,9 @@ class ScheduleResult:
                 case = self.cases[cid]
                 lines.append(f"  {cid} {case.urgency.value} {case.procedure}")
                 lines.extend(f"      - {r}" for r in reasons)
+        if self.fatigue:
+            lines.append("Fatigue limits broken:")
+            lines.extend(f"  {i.detail()}" for i in self.fatigue)
         if self.changes:
             lines.append("Changes vs previous schedule:")
             for ch in self.changes:

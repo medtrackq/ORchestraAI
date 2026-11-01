@@ -13,7 +13,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Mapping
 
-from .models import SurgeryCase
+from .fatigue import day_minutes, is_late_end
+from .models import SurgeryCase, Urgency
 from .results import Assignment, ScheduleResult
 from .timeutil import fmt
 
@@ -103,15 +104,17 @@ class Busy:
     unit: dict[str, list[Span]]
     bed: dict[str, list[Span]]
     load: dict[str, int]  # booked minutes per person
+    day_load: dict[str, int]  # booked minutes per person inside the planning day
 
     @classmethod
     def from_assignments(cls, assignments: Mapping[str, Assignment]) -> "Busy":
-        busy = cls({}, {}, {}, {}, {})
+        busy = cls({}, {}, {}, {}, {}, {})
         for a in assignments.values():
             busy.room.setdefault(a.or_id, []).append((a.start_min, a.cleanup_end_min, a.case_id))
             for sid in a.staff_ids:
                 busy.staff.setdefault(sid, []).append((a.start_min, a.end_min, a.case_id))
                 busy.load[sid] = busy.load.get(sid, 0) + (a.end_min - a.start_min)
+                busy.day_load[sid] = busy.day_load.get(sid, 0) + day_minutes(a.start_min, a.end_min)
             for uid, ready in a.equipment_ready_min:
                 busy.unit.setdefault(uid, []).append((a.start_min, ready, a.case_id))
             if a.bed_id is not None:
@@ -169,19 +172,51 @@ def scan_slot(
     ]
 
 
+def _fatigue_limits(p, case: SurgeryCase, start: int, busy: Busy) -> tuple[list[str], list[Span]]:
+    """Fatigue limits ``p`` would break by working ``case`` from ``start``,
+    and the rest periods to avoid when looking for a later start."""
+    dur, end, rest = case.duration_mins, start + case.duration_mins, p.rest_minutes
+    spans = busy.staff.get(p.staff_id, [])
+    rests = [(e, e + rest, c) for _, e, c in spans if rest and is_late_end(e)]
+    if p.rest_until > 0:
+        rests.append((p.rest_until - rest, p.rest_until, OTHER_DAY))
+    problems = []
+    left = p.remaining_minutes - busy.load.get(p.staff_id, 0)
+    if left < dur:
+        problems.append(f"7-day hour limit {p.max_weekly_hours:g} h reached ({max(left, 0)} min left)")
+    left_today = p.daily_cap_minutes - busy.day_load.get(p.staff_id, 0)
+    if left_today < dur:
+        problems.append(f"daily limit {p.max_daily_hours:g} h reached ({max(left_today, 0)} min left today)")
+    resting = [(e, c) for s, e, c in rests if s <= start < e]
+    if resting:
+        until, after = max(resting)
+        problems.append(f"resting until {fmt(until)} after late case {after}")
+    if rest and is_late_end(end):
+        later = [(s, c) for s, _, c in spans if s >= end]
+        if p.next_booking_min is not None:
+            later.append((p.next_booking_min, OTHER_DAY))
+        clash = [(s, c) for s, c in later if s < end + rest]
+        if clash:
+            s, c = min(clash)
+            problems.append(f"ends at night with less than {p.rest_hours:g} h rest before {c} at {fmt(s)}")
+    return problems, rests
+
+
 def _staffing(opt, case: SurgeryCase, start: int, busy: Busy) -> AgentVerdict:
     dur = case.duration_mins
     end = start + dur
     latest = opt.horizon_mins - dur
+    emergency = case.urgency is Urgency.EMERGENCY
 
     def person(p) -> ResourceStatus:
-        left = p.remaining_minutes - busy.load.get(p.staff_id, 0)
         if not p.is_active:
             return ResourceStatus(p.name, False, "inactive")
-        if left < dur:
-            return ResourceStatus(p.name, False, f"weekly-hour cap reached ({max(left, 0)} min left)")
         spans = busy.staff.get(p.staff_id, [])
-        nxt = earliest_free(spans, dur, start, list(p.shifts), dur, latest)
+        limits, rests = _fatigue_limits(p, case, start, busy)
+        hours_left = (p.remaining_minutes - busy.load.get(p.staff_id, 0) >= dur
+                      and p.daily_cap_minutes - busy.day_load.get(p.staff_id, 0) >= dur)
+        blocked = spans if emergency else spans + rests
+        nxt = earliest_free(blocked, dur, start, list(p.shifts), dur, latest) if emergency or hours_left else None
         clash = _clash(spans, start, end)
         if clash:
             note = _clash_note(clash, start, "busy with {case} until {end}", "booked for {case} at {start}")
@@ -189,6 +224,10 @@ def _staffing(opt, case: SurgeryCase, start: int, busy: Busy) -> AgentVerdict:
         if not any(a <= start and end <= b for a, b in p.shifts):
             shifts = ", ".join(f"{fmt(a)}-{fmt(b)}" for a, b in p.shifts) or "none"
             return ResourceStatus(p.name, False, f"off shift (shifts {shifts})", nxt)
+        if limits and not emergency:
+            return ResourceStatus(p.name, False, "; ".join(limits), nxt)
+        if limits:
+            return ResourceStatus(p.name, True, "free but OVER fatigue limit (emergency): " + "; ".join(limits), start)
         return ResourceStatus(p.name, True, f"free {fmt(start)}-{fmt(end)}", start)
 
     items: list[ResourceStatus] = []
@@ -213,7 +252,10 @@ def _staffing(opt, case: SurgeryCase, start: int, busy: Busy) -> AgentVerdict:
         states = [person(p) for p in pool]
         free = [s for s in states if s.ok]
         label = role.replace("_", " ").title() + (f" [{', '.join(sorted(skills))}]" if skills else "")
-        if len(free) >= count:
+        if not pool:
+            items.append(ResourceStatus(label, False, "nobody has this skill" if skills else "nobody in this role"))
+            readies.append(None)
+        elif len(free) >= count:
             names = ", ".join(s.resource for s in free[:3]) + ("..." if len(free) > 3 else "")
             items.append(ResourceStatus(label, True, f"{len(free)} free ({names})", start))
             readies.append(start)

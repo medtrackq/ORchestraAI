@@ -147,6 +147,11 @@ def _shape(state: dict, user: User) -> dict:
         item["notifications"] = notes
         activity.append(item)
     state["activity"] = activity
+    # Staffing Agent view: schedulers see everyone's fatigue, clinical staff only their own.
+    if not can(user.role, "staff_all"):
+        own = lambda sid: user.staff_id is not None and sid == user.staff_id  # noqa: E731
+        state["staff"] = [p for p in state.get("staff", []) if own(p["staff_id"])]
+        state["fatigue"] = [i for i in state.get("fatigue", []) if own(i["staff_id"])]
     state["me"] = user.public()
     state["roles"] = ROLES
     return state
@@ -292,6 +297,7 @@ class CaseIn(BaseModel):
     patient_name: str | None = Field(default=None, max_length=150)
     procedure_id: str | None = None
     required_staff_roles: dict[str, int] | None = None
+    required_staff_skills: dict[str, list[str]] | None = None
 
 
 class SlotIn(BaseModel):

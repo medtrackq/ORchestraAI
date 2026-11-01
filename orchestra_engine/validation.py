@@ -4,13 +4,15 @@ It re-checks a finished schedule without using any solver code, so tests (and
 the data layer before writing to the DB) can confirm the schedule has no
 conflicts. Cases marked ``frozen`` were already running when the schedule was
 re-optimised, so the shift, opening-hour, release and availability checks are
-skipped for them; they still count for every overlap check.
+skipped for them; they still count for every overlap check. Fatigue limits
+(``fatigue``) are errors only for cases that are not EMERGENCY overrides.
 """
 from __future__ import annotations
 
 from collections import Counter, defaultdict
 from typing import Iterable, Mapping
 
+from .fatigue import fatigue_issues
 from .models import EquipmentUnit, OperatingRoom, RecoveryBed, StaffMember, SurgeryCase
 from .results import Assignment, ScheduleResult
 from .timeutil import MINUTES_PER_DAY, fmt
@@ -39,8 +41,6 @@ def validate_schedule(
     staff_busy: dict[str, list] = defaultdict(list)
     unit_busy: dict[str, list] = defaultdict(list)
     bed_busy: dict[str, list] = defaultdict(list)
-    load: dict[str, int] = defaultdict(int)
-    locked_load: dict[str, int] = defaultdict(int)
 
     for cid, a in assignments.items():
         case = case_by_id.get(cid)
@@ -88,9 +88,6 @@ def validate_schedule(
                     errors.append(f"{tag}: {person.name} is inactive")
                 if not any(s <= a.start_min and a.end_min <= e for s, e in person.shifts):
                     errors.append(f"{tag}: {person.name} is off shift {fmt(a.start_min)}-{fmt(a.end_min)}")
-                load[sid] += dur
-            else:
-                locked_load[sid] += dur
             staff_busy[sid].append((a.start_min, a.end_min, cid))
         wanted = Counter({r: n for r, n in case.required_staff_roles.items() if n})
         if roles != wanted:
@@ -146,9 +143,8 @@ def validate_schedule(
                         f"overlaps {c2} {fmt(s2)}-{fmt(e2)}"
                     )
 
-    for sid, minutes in load.items():
-        person = staff_by_id[sid]
-        cap = max(0, person.remaining_minutes - locked_load[sid])
-        if minutes > cap:
-            errors.append(f"staff {person.name}: {minutes} min booked, only {cap} min left this week")
+    known = {cid: a for cid, a in assignments.items() if cid in case_by_id}
+    for issue in fatigue_issues(known, case_by_id, staff_by_id.values(), horizon_mins=horizon_mins):
+        if issue.is_error:
+            errors.append(f"fatigue {issue.kind}: {issue.detail()}")
     return errors

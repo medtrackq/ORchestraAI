@@ -40,6 +40,8 @@ PERMISSIONS = {
     "record_times": {"admin", "scheduler", "surgeon", "staff"},  # surgeon / staff: cases they are on
     "patients": {"admin", "scheduler", "surgeon", "staff"},  # see patient HN / name
     "all_notifications": {"admin", "scheduler"},
+    "staff_view": {"admin", "scheduler", "surgeon", "staff"},  # Staffing tab (clinical staff: own row)
+    "staff_all": {"admin", "scheduler"},  # everyone's hours and fatigue
     "users": {"admin"},
     "seed": {"admin"},
     "reset": {"admin"},
