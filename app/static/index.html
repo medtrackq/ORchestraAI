@@ -282,6 +282,7 @@
     <a class="btn" href="/help" target="_blank" rel="noopener">❓ วิธีใช้</a>
     <button class="btn" id="notify-open" type="button">🔔 แจ้งเตือน</button>
     <button class="btn" id="change-pass" type="button">เปลี่ยนรหัสผ่าน</button>
+    <a class="btn" href="/security" title="การยืนยันตัวตน 2 ชั้น">🔐 ความปลอดภัย</a>
     <button class="btn" id="logout" type="button">ออกจากระบบ</button>
   </nav>
 </header>
@@ -1590,13 +1591,16 @@
       <div class="row-item" data-user="${esc(u.user_id)}">
         <div class="title"><b>${esc(u.display_name)}</b>
           <span><span class="badge ${u.is_active ? 'ok' : 'bad'}">${u.is_active ? 'ใช้งาน' : 'ปิด'}</span>
-          ${u.must_change_password ? '<span class="badge warn">รอตั้งรหัสใหม่</span>' : ''}</span></div>
+          ${u.must_change_password ? '<span class="badge warn">รอตั้งรหัสใหม่</span>' : ''}
+          ${u.totp_enabled ? '<span class="badge ok" title="เข้าระบบด้วยรหัสจากแอปในมือถือ">2 ชั้น</span>'
+            : u.two_factor_required ? '<span class="badge warn">ยังไม่ตั้ง 2 ชั้น</span>' : ''}</span></div>
         <small class="hint">${esc(u.username)}${u.last_login_at ? ' · เข้าล่าสุด ' + esc(new Date(u.last_login_at).toLocaleString('th-TH')) : ' · ยังไม่เคยเข้า'}</small>
         <div class="line"><select name="role">${roleOptions(u.role)}</select><select name="staff_id">${staffOptions(u.staff_id)}</select></div>
         <div class="line">
           <label style="flex:0 0 auto;display:flex;flex-direction:row;align-items:center;gap:6px;color:var(--text)"><input type="checkbox" name="is_active" ${u.is_active ? 'checked' : ''}>ใช้งาน</label>
           <button class="btn primary" type="button" data-act="save">บันทึก</button>
           <button class="btn" type="button" data-act="reset">รีเซ็ตรหัสผ่าน</button>
+          ${u.totp_enabled ? '<button class="btn" type="button" data-act="reset-2fa" title="เมื่อมือถือหายและไม่มีรหัสสำรอง">ล้าง 2 ชั้น</button>' : ''}
         </div>
       </div>`).join('') || '<p class="hint">ยังไม่มีผู้ใช้ (บัญชีหลักจาก Render ใช้ได้เสมอ)</p>';
     $('#user-list').querySelectorAll('[data-act]').forEach(button => button.addEventListener('click', () => {
@@ -1609,6 +1613,11 @@
             is_active: row.querySelector('[name="is_active"]').checked,
           }, 'PATCH');
           toast('บันทึกแล้ว ผู้ใช้จะต้องเข้าสู่ระบบใหม่', true);
+        } else if (button.dataset.act === 'reset-2fa') {
+          const who = users.find(u => u.user_id === id);
+          if (!confirm(`ล้างการยืนยันตัวตน 2 ชั้นของ ${who.display_name}? ใช้เมื่อมือถือหายและไม่มีรหัสสำรอง · ผู้ใช้จะออกจากระบบทุกเครื่อง และ${who.two_factor_required ? 'ต้องตั้งค่าใหม่เมื่อเข้าระบบครั้งถัดไป' : 'เข้าด้วยรหัสผ่านอย่างเดียวจนกว่าจะตั้งค่าใหม่'}`)) return;
+          await api('/api/users/' + id + '/reset-2fa', {});
+          toast('ล้างแล้ว แจ้งผู้ใช้ให้เข้าระบบแล้วตั้งค่ามือถือเครื่องใหม่', true);
         } else {
           const password = tempPassword();
           await api('/api/users/' + id + '/reset-password', { password });

@@ -14,9 +14,13 @@ OWNER = ("orchestra", "owner-secret-123")
 def fresh(monkeypatch):
     monkeypatch.setenv("APP_PASSWORD", OWNER[1])
     monkeypatch.delenv("APP_USERNAME", raising=False)
+    monkeypatch.delenv("APP_TOTP_SECRET", raising=False)
+    monkeypatch.delenv("TWO_FACTOR_ROLES", raising=False)
     store.reset()
     accounts.store = MemoryUserStore()
     accounts.limiter = LoginLimiter()
+    accounts.code_limiter = LoginLimiter(limit=5, window_s=600, per_user=10)
+    accounts._env_last_step = None
 
 
 def session(username: str, password: str) -> TestClient:

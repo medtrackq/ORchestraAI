@@ -6,3 +6,4 @@ psycopg[binary]>=3.1
 anthropic>=2.0
 pywebpush>=2.0
 openpyxl>=3.1
+segno>=1.6        # QR code for setting up two-step sign-in (pure Python)

@@ -41,8 +41,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from .auth import (COOKIE, ROLES, SESSION_HOURS, Accounts, AuthError, DbUserStore, MemoryUserStore,
-                   ServiceUnavailable, TooManyAttempts, User, can)
+from .auth import (COOKIE, ENV_ADMIN_ID, PENDING_S, ROLES, SESSION_HOURS, Accounts, AuthError, CodeNeeded, DbUserStore,
+                   MemoryUserStore, ServiceUnavailable, TooManyAttempts, User, can, env_totp_secret, required_roles)
 from . import backup, feedback as fb, his as his_mod, history_io, hospital_io, privacy, roster_io, system_status
 from .admin_store import require_supabase
 from .intake_service import IntakeService
@@ -98,9 +98,14 @@ app = FastAPI(title="ORchestraAI", docs_url="/api/docs", redoc_url=None, openapi
               redirect_slashes=False,  # no "/x/" -> "http://.../x" hop (an API key could follow it unencrypted)
               lifespan=_lifespan)
 
-PUBLIC = {"/login", "/help", "/api/login", "/api/health", "/api/line/webhook", "/sw.js", "/feedback.js", "/manifest.webmanifest",
+PUBLIC = {"/login", "/help", "/api/login", "/api/login/code", "/api/health", "/api/line/webhook", "/sw.js", "/feedback.js", "/manifest.webmanifest",
           "/icons/icon-192.png", "/icons/icon-512.png", "/icons/apple-touch-icon.png", "/icons/badge-96.png"}
 ALLOWED_WHILE_TEMPORARY = {"/api/me", "/api/password", "/api/logout"}
+# A role that must use two-step sign-in and has not set it up yet: only setting it up (and leaving).
+ALLOWED_WHILE_2FA_SETUP = {"/api/me", "/api/logout", "/api/2fa", "/api/2fa/setup", "/api/2fa/enable",
+                           "/api/feedback", "/api/feedback/mine", "/api/client-errors"}
+PAGES_WHILE_2FA_SETUP = {"/security", "/help", "/login", "/feedback.js", "/sw.js", "/manifest.webmanifest"}
+PENDING_COOKIE = "orchestra_2fa"
 HIS_PREFIX = "/api/his/v1/"
 
 
@@ -211,6 +216,12 @@ async def sessions(request: Request, call_next):
             return RedirectResponse("/login", status_code=303)
         if user.must_change_password and path.startswith("/api/") and path not in ALLOWED_WHILE_TEMPORARY:
             return JSONResponse({"detail": "กรุณาเปลี่ยนรหัสผ่านชั่วคราวก่อนใช้งาน"}, status_code=403)
+        if user.must_setup_2fa and not user.must_change_password:
+            if path.startswith("/api/") and path not in ALLOWED_WHILE_2FA_SETUP:
+                return JSONResponse({"detail": "กรุณาตั้งค่าการยืนยันตัวตน 2 ชั้นก่อนใช้งาน (หน้าความปลอดภัยของบัญชี)"},
+                                    status_code=403)
+            if not path.startswith("/api/") and path not in PAGES_WHILE_2FA_SETUP and not path.startswith("/icons/"):
+                return RedirectResponse("/security", status_code=303)
 
     # CSRF: state changes must be JSON from this site (cross-site forms cannot send JSON).
     if request.method in ("POST", "PUT", "PATCH", "DELETE") and path.startswith("/api/"):
@@ -399,6 +410,12 @@ def privacy_page() -> FileResponse:
     return FileResponse(ROOT / "static" / "privacy.html")
 
 
+@app.get("/security", include_in_schema=False)
+def security_page() -> FileResponse:
+    """Everyone: two-step sign-in for their own account (set up, recovery codes, new phone)."""
+    return FileResponse(ROOT / "static" / "security.html")
+
+
 @app.get("/flow", include_in_schema=False)
 def flow() -> FileResponse:
     return FileResponse(FLOW_PAGE)
@@ -445,18 +462,44 @@ def _set_session(response: Response, request: Request, token: str) -> None:
                         secure=_https(request), path="/")
 
 
-@app.post("/api/login")
-def login(body: LoginIn, request: Request, response: Response) -> dict:
+def _auth_errors(fn, *args, **kwargs):
     try:
-        user, token = accounts.login(body.username, body.password, _address(request))
+        return fn(*args, **kwargs)
     except TooManyAttempts as exc:
         raise HTTPException(status_code=429, detail=str(exc)) from exc
     except ServiceUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except AuthError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
+
+
+@app.post("/api/login")
+def login(body: LoginIn, request: Request, response: Response) -> dict:
+    try:
+        user, token = _auth_errors(accounts.login, body.username, body.password, _address(request))
+    except HTTPException as exc:
+        if not isinstance(exc.__cause__, CodeNeeded):
+            raise
+        # Password right; the session comes after the code. Until then only this short-lived cookie.
+        response.set_cookie(PENDING_COOKIE, exc.__cause__.pending, max_age=PENDING_S, httponly=True,
+                            samesite="strict", secure=_https(request), path="/api/login")
+        return {"needs_code": True, "display_name": exc.__cause__.user.display_name}
     _set_session(response, request, token)
     return {"user": user.public()}
+
+
+class CodeIn(BaseModel):
+    code: str = Field(min_length=6, max_length=40)
+
+
+@app.post("/api/login/code")
+def login_code(body: CodeIn, request: Request, response: Response) -> dict:
+    """Second step: the 6-digit code from the authenticator app, or a recovery code."""
+    user, token, used = _auth_errors(accounts.verify_code, request.cookies.get(PENDING_COOKIE), body.code,
+                                     _address(request))
+    response.delete_cookie(PENDING_COOKIE, path="/api/login")
+    _set_session(response, request, token)
+    return {"user": user.public(), **used}
 
 
 @app.post("/api/logout")
@@ -477,6 +520,52 @@ def change_password(body: PasswordIn, request: Request, response: Response) -> d
     token = _run(accounts.change_own_password, request.state.user, body.current_password, body.new_password)
     _set_session(response, request, token)
     return {"ok": True}
+
+
+# ------------------------------------------------------------- two-step sign-in (own account)
+
+class SetupDoneIn(BaseModel):
+    setup_token: str = Field(max_length=600)
+    code: str = Field(min_length=6, max_length=40)
+    current_code: str | None = Field(default=None, max_length=40)
+
+
+@app.get("/api/2fa")
+def two_factor_status(request: Request) -> dict:
+    user: User = request.state.user
+    owner = user.user_id == ENV_ADMIN_ID
+    ready = owner or (store.mode == "supabase" and _run(accounts.store.two_factor_ready)) or store.mode != "supabase"
+    return {"enabled": user.totp_enabled, "required": user.two_factor_required, "must_setup": user.must_setup_2fa,
+            "owner_account": owner, "ready": bool(ready), "recovery_left": _run(accounts.recovery_left, user),
+            "required_roles": sorted(required_roles()), "demo": store.mode != "supabase"}
+
+
+@app.post("/api/2fa/setup")
+def two_factor_setup(request: Request) -> dict:
+    """A new secret as a QR code (nothing changes until the first code from the app is typed)."""
+    return _run(accounts.start_setup, request.state.user)
+
+
+@app.post("/api/2fa/enable")
+def two_factor_enable(body: SetupDoneIn, request: Request, response: Response) -> dict:
+    out = _auth_errors(accounts.enable, request.state.user, body.setup_token, body.code, body.current_code,
+                       _address(request))
+    if out.get("token"):  # other devices are signed out; this one carries on
+        _set_session(response, request, out.pop("token"))
+    return out
+
+
+@app.post("/api/2fa/disable")
+def two_factor_disable(body: CodeIn, request: Request, response: Response) -> dict:
+    token = _auth_errors(accounts.disable, request.state.user, body.code, _address(request))
+    _set_session(response, request, token)
+    return {"ok": True}
+
+
+@app.post("/api/2fa/recovery")
+def two_factor_recovery(body: CodeIn, request: Request) -> dict:
+    """New recovery codes (the old ones stop working)."""
+    return {"recovery_codes": _auth_errors(accounts.new_recovery_codes, request.state.user, body.code, _address(request))}
 
 
 @app.get("/api/users")
@@ -507,6 +596,13 @@ def reset_user_password(user_id: str, body: ResetIn, request: Request) -> dict:
     _user(request, "users")
     _run(accounts.store.set_password, user_id, body.password, temporary=True)
     return {"ok": True}
+
+
+@app.post("/api/users/{user_id}/reset-2fa")
+def reset_user_two_factor(user_id: str, request: Request) -> dict:
+    """Someone lost their phone and recovery codes: they set two-step sign-in up again at next sign-in."""
+    actor = _user(request, "users")
+    return {"user": _run(accounts.reset_two_factor, user_id, actor).public()}
 
 
 # ------------------------------------------------------------- schedule
@@ -1492,8 +1588,37 @@ def system_status_view(request: Request) -> dict:
     """SQL files applied or missing, settings (set or not, never values) and the go-live checklist."""
     _user(request, "users")
     out = _run(system_status.summary, store, notifier, intake, accounts)
-    out["checks"] = out["checks"] + [c for c in (_feedback_check(), his.check()) if c]
+    out["checks"] = out["checks"] + [c for c in (_two_factor_check(), _feedback_check(), his.check()) if c]
     return out
+
+
+def _two_factor_check() -> dict | None:
+    """Go-live checklist: the accounts that can see and export everything sign in with a code too."""
+    if not os.environ.get("APP_PASSWORD"):
+        return None
+    problems, fine = [], []
+    if os.environ.get("APP_TOTP_SECRET") and not env_totp_secret():
+        problems.append("ค่า APP_TOTP_SECRET ใน Render ไม่ถูกต้อง (บัญชีหลักยังเข้าด้วยรหัสผ่านอย่างเดียว)")
+    elif not env_totp_secret():
+        problems.append("บัญชีหลักยังไม่เปิด (ตั้งค่าที่หน้าความปลอดภัยของบัญชี แล้วใส่ APP_TOTP_SECRET ใน Render)")
+    else:
+        fine.append("บัญชีหลักเปิดแล้ว")
+    if store.mode == "supabase":
+        try:
+            ready = accounts.store.two_factor_ready()
+            users = [u for u in accounts.store.list() if u.is_active] if ready else []
+        except AuthError:
+            return None
+        if not ready:
+            problems.append("ยังไม่ได้รัน SQL ไฟล์ 018 (ผู้ดูแลระบบอื่นยังเข้าด้วยรหัสผ่านอย่างเดียว)")
+        else:
+            waiting = [u for u in users if u.must_setup_2fa]
+            on = sum(1 for u in users if u.totp_enabled)
+            if waiting:
+                problems.append(f"ยังไม่ตั้งค่า {len(waiting)} บัญชี (ต้องตั้งเมื่อเข้าระบบครั้งถัดไป)")
+            fine.append(f"เปิดแล้ว {on} จาก {len(users)} บัญชี")
+    return {"label": "การยืนยันตัวตน 2 ชั้น", "status": "warn" if problems else "ok",
+            "detail": " · ".join(problems + fine), "link": "/security"}
 
 
 def _feedback_check() -> dict:
