@@ -905,6 +905,7 @@
         <label>ความเสี่ยงติดเชื้อ<select name="infection">${options(INFECTION_TH, p.infection || 'CLEAN', data.infection)}</select></label>
         <label>เวลาพักฟื้น (นาที, ว่าง = มาตรฐาน)<input type="number" name="recovery" min="0" max="10080" step="15" value="${p.recovery_mins ?? ''}" ${data.recovery_ready ? '' : 'disabled'}></label>
         <label style="display:flex;flex-direction:row;align-items:center;gap:6px;color:var(--text)"><input type="checkbox" name="icu" ${p.icu ? 'checked' : ''}>ต้องเข้า ICU หลังผ่าตัด</label>
+        <label style="display:flex;flex-direction:row;align-items:center;gap:6px;color:var(--text)"><input type="checkbox" name="blood" ${p.blood ? 'checked' : ''} ${data.blood_ready ? '' : 'disabled'}>ต้องจองเลือด (ถามในรายการเช็กความพร้อม)</label>
       </div>
       <fieldset><legend>ห้องต้องมี</legend><div class="checks">${caps}</div></fieldset>
       <div class="grid">${skills}</div>`;
@@ -918,6 +919,7 @@
     const rec = f.elements['recovery'].value;
     return { name: f.elements['name'].value.trim(), code: f.elements['code'].value.trim() || null,
       duration: Number(f.elements['duration'].value), infection: f.elements['infection'].value, icu: f.elements['icu'].checked,
+      ...(PROCS.blood_ready ? { blood: f.elements['blood'].checked } : {}),
       recovery_mins: rec === '' ? null : Number(rec), caps: [...f.querySelectorAll('input[name="cap"]:checked')].map(x => x.value), skills };
   }
   function renderProcedures() {
@@ -925,7 +927,7 @@
     const q = $('#proc-q').value.trim().toLowerCase();
     $('#procs').innerHTML = data.procedures.filter(p => !q || (p.name + ' ' + (p.code || '')).toLowerCase().includes(q)).map(p => `<details class="row-item">
         <summary class="title" style="cursor:pointer"><span><b>${esc(p.name)}</b> <small class="hint">${esc(p.code || '')} · ${p.duration} นาที</small></span>
-          <span>${p.icu ? '<span class="badge warn">ICU</span>' : ''}${p.infection !== 'CLEAN' ? `<span class="badge bad">${esc(p.infection)}</span>` : ''}
+          <span>${p.icu ? '<span class="badge warn">ICU</span>' : ''}${p.blood ? '<span class="badge">จองเลือด</span>' : ''}${p.infection !== 'CLEAN' ? `<span class="badge bad">${esc(p.infection)}</span>` : ''}
           ${p.recovery_mins !== null && p.recovery_mins !== undefined ? `<span class="badge">พักฟื้น ${p.recovery_mins} นาที</span>` : ''}
           ${p.caps.map(c => `<span class="badge">${esc(CAP_TH[c] || c)}</span>`).join('')}</span></summary>
         ${edit ? `<form data-proc="${esc(p.id)}">${procFields(p, data)}<div class="actions"><button class="btn primary" type="submit">บันทึก</button></div></form>` : ''}

@@ -166,6 +166,8 @@ PROCEDURES = Sheet("procedures", "หัตถการ", (
         aliases=(("สะอาด", "CLEAN"), ("ปนเปื้อน", "CONTAMINATED"), ("ติดเชื้อ", "DIRTY")),
         help="CLEAN = สะอาด · CONTAMINATED = ปนเปื้อน · DIRTY = ติดเชื้อ", example="CLEAN", width=16),
     Col("icu", "ต้องเข้า ICU หลังผ่าตัด", "bool", keep_blank=True, help="ใช่ / ไม่", example="ไม่", width=12),
+    Col("blood", "ต้องจองเลือด", "bool", keep_blank=True, help="ใช่ = รายการเช็กความพร้อมถามเรื่องจองเลือด",
+        example="ไม่", width=12),
     Col("recovery_mins", "เวลาพักฟื้น (นาที)", "int", help="ว่าง = มาตรฐาน (PACU 60 นาที / ICU 24 ชม.)", width=14),
     Col("caps", "ห้องต้องมี", "list", help="ความสามารถของห้อง คั่นด้วยจุลภาค", example="LAMINAR_FLOW", width=22),
     Col("skills", "ทักษะที่ทีมต้องมี", "skills",
@@ -204,8 +206,8 @@ NEW_DEFAULTS = {
     "staff": {"specialty": None, "skills": [], "max_hours_per_week": 48.0, "max_hours_per_day": 10.0,
               "min_rest_hours": 8.0, "active": True},
     "supplies": {"category": "CONSUMABLE", "unit": "ชิ้น", "on_hand": 0, "reorder_level": 0, "active": True},
-    "procedures": {"code": None, "duration": 60, "infection": "CLEAN", "icu": False, "recovery_mins": None, "caps": [],
-                   "skills": {}, "supplies": {}},
+    "procedures": {"code": None, "duration": 60, "infection": "CLEAN", "icu": False, "blood": False,
+                   "recovery_mins": None, "caps": [], "skills": {}, "supplies": {}},
     "cards": {"stddev": 15, "role_ANESTHESIOLOGIST": 1, "role_SCRUB_NURSE": 1, "role_CIRCULATING_NURSE": 1,
               "role_SURGEON": 0, "equipment": {}, "notes": None},
 }
@@ -381,7 +383,8 @@ def current(admin: HospitalAdmin, kind: str) -> list[dict]:
         if _ready(admin, "supply_items", "item_id"):
             supplies = {p["id"]: p["supplies"] for p in admin.inventory()["procedures"]}
         return [{"_id": p["id"], "code": p["code"], "name": p["name"], "duration": p["duration"],
-                 "infection": p["infection"], "icu": p["icu"], "recovery_mins": p["recovery_mins"], "caps": p["caps"],
+                 "infection": p["infection"], "icu": p["icu"], "blood": p.get("blood", False),
+                 "recovery_mins": p["recovery_mins"], "caps": p["caps"],
                  "skills": p["skills"], "supplies": supplies.get(p["id"], {})}
                 for p in admin.procedures()["procedures"]]
     if kind == "cards":

@@ -19,6 +19,7 @@ import psycopg
 from orchestra_engine import ORchestraOptimizer, ScheduleResult, fmt, hm
 from orchestra_engine.demo import elective_day
 
+from . import readiness as rd
 from . import seed
 from .db import ConflictError, Database, DatabaseUnavailable, World, case_code
 from .intake_service import IntakeContext
@@ -37,6 +38,7 @@ class DatabaseStore:
         self.workers = workers
         self.time_limit_s = time_limit_s
         self._fallback_activity: dict[date, list[Activity]] = {}  # if the activity table is missing
+        self._fallback_digests: set[str] = set()  # reminders sent, if app_settings is missing
 
     # ------------------------------------------------------------- helpers
 
@@ -169,7 +171,90 @@ class DatabaseStore:
                 a.__dict__ for a in reversed(self._fallback_activity.get(world.day, [])[-30:])
             ]
             pending = self.db.pending(conn)
-        return {**self._state(world, activity), "pending": pending}
+            readiness = self._readiness(conn, world)
+            following = self._readiness_next(conn, world.day, world) if readiness is not None else None
+        return {**self._state(world, activity), "pending": pending, "readiness": readiness or {},
+                "readiness_ready": readiness is not None, "readiness_next": following}
+
+    # ---------------------------------------------------- pre-op readiness
+
+    def _readiness(self, conn, world: World) -> dict | None:
+        """Checklist per case of the day (None before migration 009)."""
+        ids = {cid: row["request_id"] for cid, row in world.bookings.items()}
+        rows = self.db.readiness_rows(conn, ids.values())
+        if rows is None:
+            return None
+        blood = {p["id"]: p.get("blood", False) for p in world.procedures}
+        return {cid: rd.summarize(rows.get(str(rid), {}), blood.get(str(world.bookings[cid].get("procedure_id")), False))
+                for cid, rid in ids.items()}
+
+    def _readiness_next(self, conn, day: date, world: World | None = None) -> dict | None:
+        """The next day with cases (within a few days) and its cases that are not ready yet."""
+        first, cases = self.db.next_cases(conn, day, rd.LOOKAHEAD_DAYS)
+        if first is None:
+            return None
+        rows = self.db.readiness_rows(conn, [c["request_id"] for c in cases]) or {}
+        names = {s.staff_id: s.name for s in world.hospital.staff} if world else {}
+        open_cases = []
+        for c in cases:
+            summary = rd.summarize(rows.get(c["request_id"], {}), c["blood"])
+            if summary["status"] != "ready":
+                open_cases.append({k: c[k] for k in ("case_id", "start", "end", "or_id", "procedure", "urgency",
+                                                     "surgeon_id")}
+                                  | {"surgeon": names.get(c["surgeon_id"]), "readiness": summary})
+        return {"date": first.isoformat(), "total": len(cases), "cases": open_cases}
+
+    def readiness_next(self) -> dict | None:
+        """For the daily reminder: the next day with cases after today."""
+        with self._transaction(write=False) as conn:
+            if self.db.readiness_rows(conn, []) is None:
+                return None
+            return self._readiness_next(conn, self.db.today())
+
+    def claim_digest(self, day: str) -> bool:
+        """True once per target day across restarts and workers (kept in app_settings)."""
+        with self._transaction(write=False) as conn:
+            if not conn.execute("SELECT to_regclass('public.app_settings') IS NOT NULL AS ok").fetchone()["ok"]:
+                if day in self._fallback_digests:
+                    return False
+                self._fallback_digests.add(day)
+                return True
+            row = conn.execute(
+                """INSERT INTO app_settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO NOTHING RETURNING key""",
+                (f"readiness_digest:{day}", datetime.now(self.db.tz).isoformat(timespec="minutes")),
+            ).fetchone()
+        return row is not None
+
+    def readiness_update(self, case_id: str, data: dict, *, day: str | None = None, actor: dict | None = None) -> dict:
+        """Tick, clear or flag one checklist item of a case (surgeons: their own cases)."""
+        item, status, note = rd.parse_update(data)
+        with self._transaction(write=True) as conn:
+            world = self.db.load(conn, self._day(day))
+            a = world.result.assignments.get(case_id)
+            if a is None:
+                raise StoreError(f"ไม่พบเคส {case_id} ในวันที่ {world.day}")
+            case = world.result.cases[case_id]
+            check_own_case(actor, case.surgeon_id)
+            request_id = world.bookings[case_id]["request_id"]
+            rows = self.db.readiness_rows(conn, [request_id])
+            if rows is None:
+                raise StoreError("ยังบันทึกความพร้อมไม่ได้: ให้รัน supabase/migrations/20261108000000_case_readiness.sql "
+                                 "ใน Supabase ก่อน")
+            before = rows.get(str(request_id), {}).get(item)
+            if status == "PENDING":
+                conn.execute("DELETE FROM case_readiness WHERE request_id = %s AND item = %s", (request_id, item))
+            else:
+                conn.execute(
+                    """INSERT INTO case_readiness (request_id, item, status, note, updated_by) VALUES (%s, %s, %s, %s, %s)
+                       ON CONFLICT (request_id, item) DO UPDATE SET status = EXCLUDED.status, note = EXCLUDED.note,
+                           updated_by = EXCLUDED.updated_by, updated_at = NOW()""",
+                    (request_id, item, status, note, actor_name(actor)),
+                )
+            if status == "PROBLEM" and (before or {}).get("note") != note and world.day >= self.db.today():
+                self._emit(rd.problem_event(world.day, case_id, item, f"{fmt(a.start_min)}-{fmt(a.end_min)} ห้อง {a.or_id}",
+                                            case.surgeon_id, actor))
+            summary = self._readiness(conn, world)[case_id]
+        return {"case_id": case_id, "readiness": summary}
 
     def _state(self, world: World, activity: list[dict]) -> dict:
         schedule = world.result.to_dict()

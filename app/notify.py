@@ -8,6 +8,9 @@ Events come from the stores after a change is saved:
   emergency insert (kind ``emergency``).
 * ``cssd``: CSSD reports a tray ready later than a booked case needs it
   (kind ``cssd``) -> schedulers and CSSD.
+* ``readiness`` (an item of the pre-op checklist marked as a problem) and
+  ``readiness_digest`` (the next day's cases that are not ready, once a day)
+  (kind ``readiness``) -> schedulers and the case's surgeon.
 
 Messages carry case codes, times and rooms only - never a patient's name or
 HN - because they pass through Google/Apple push services and LINE. Delivery
@@ -40,8 +43,10 @@ KINDS = {
     "case": "เคสของฉันถูกเพิ่ม ย้าย หรือเอาออกจากตาราง",
     "emergency": "มีเคสฉุกเฉินแทรก (สรุปสำหรับผู้จัดตาราง)",
     "cssd": "CSSD อบเครื่องมือไม่ทันเคสที่จองไว้",
+    "readiness": "เคสยังไม่พร้อมผ่าตัด (มีปัญหา และสรุปเคสวันถัดไปวันละครั้ง)",
 }
-KIND_ROLES = {"case": None, "emergency": {"admin", "scheduler"}, "cssd": {"admin", "scheduler", "cssd"}}
+KIND_ROLES = {"case": None, "emergency": {"admin", "scheduler"}, "cssd": {"admin", "scheduler", "cssd"},
+              "readiness": {"admin", "scheduler", "surgeon"}}
 MAX_LINES = 6
 CODE_MINUTES = 15
 
@@ -378,6 +383,23 @@ def build_messages(event: dict, users: list) -> list[Message]:
                 "กระทบเคส: " + ", ".join(hit) if hit else "ตรวจตารางวันนี้"]
         out += [Message(u.user_id, "cssd", f"CSSD: {event['unit']} ไม่ทันเคสที่จองไว้", body, url)
                 for u in users if u.role in KIND_ROLES["cssd"] and u.user_id != actor]
+    elif event["type"] == "readiness":  # one checklist item flagged (the note stays in the app)
+        title = f"{event['case']} มีปัญหาความพร้อม: {event['item']}"
+        body = [f"วันที่ {day} {event['when']}" if day else event["when"], "ดูรายละเอียดในระบบ"]
+        out += [Message(u.user_id, "readiness", title, body, url + "#ready") for u in users
+                if u.user_id != actor and (u.role in ("admin", "scheduler")
+                                           or (u.role == "surgeon" and u.staff_id and u.staff_id == event.get("surgeon_id")))]
+    elif event["type"] == "readiness_digest":  # the next day's cases that are not ready
+        cases = event.get("cases", [])
+        lines = [f"{c['case']} {c['when']}: {c['missing']}" for c in cases]
+        out += [Message(u.user_id, "readiness", f"เคสวันที่ {day} ยังไม่พร้อม {len(cases)} เคส", lines, url + "#ready")
+                for u in users if u.role in ("admin", "scheduler")]
+        for u in users:
+            own = [f"{c['case']} {c['when']}: {c['missing']}" for c in cases
+                   if u.role == "surgeon" and u.staff_id and c.get("surgeon_id") == u.staff_id]
+            if own:
+                out.append(Message(u.user_id, "readiness", f"เคสของคุณวันที่ {day} ยังไม่พร้อม {len(own)} เคส", own,
+                                   url + "#ready"))
     return out
 
 

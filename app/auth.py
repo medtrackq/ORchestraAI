@@ -49,6 +49,7 @@ PERMISSIONS = {
     "inventory": {"admin", "cssd"},  # receive, count, order supplies; what procedures use
     "reports": {"admin", "scheduler"},  # management reports
     "cards": {"admin", "scheduler", "surgeon"},  # surgeon preference cards (surgeons: their own)
+    "readiness": {"admin", "scheduler", "surgeon", "staff"},  # pre-op checklist (surgeons: their own cases)
     "users": {"admin"},
     "seed": {"admin"},
     "reset": {"admin"},
