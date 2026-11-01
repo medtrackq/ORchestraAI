@@ -796,6 +796,18 @@ class Database:
             )
         ]
 
+    @staticmethod
+    def milestone_rows(conn: psycopg.Connection, request_ids) -> dict[str, dict[str, datetime]] | None:
+        """Recorded steps (holding, incision, closure, left recovery) per request; None before migration 011."""
+        if not conn.execute("SELECT to_regclass('public.case_milestones') IS NOT NULL AS ok").fetchone()["ok"]:
+            return None
+        out: dict[str, dict[str, datetime]] = {}
+        ids = [uuid.UUID(str(i)) for i in request_ids]
+        if ids:
+            for r in conn.execute("SELECT request_id, step, at FROM case_milestones WHERE request_id = ANY(%s)", (ids,)):
+                out.setdefault(str(r["request_id"]), {})[r["step"]] = r["at"]
+        return out
+
     def readiness_rows(self, conn: psycopg.Connection, request_ids) -> dict[str, dict[str, dict]] | None:
         """Checked readiness items per request (None before migration 009)."""
         if not conn.execute("SELECT to_regclass('public.case_readiness') IS NOT NULL AS ok").fetchone()["ok"]:

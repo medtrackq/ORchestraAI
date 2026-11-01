@@ -414,3 +414,22 @@ def test_calling_off_a_case_over_the_api(owner):
     assert r.status_code == 200 and r.json()["result"]["reason"] == "DECLINED"
     report = owner.get("/api/reports").json()["cancellations"]
     assert report["total"] == 1 and report["waiting_given_up"] == 1
+
+
+def test_status_board_and_steps_over_the_api(owner):
+    assert owner.get("/board").status_code == 200
+    case = owner.get("/api/state").json()["schedule"]["bookings"][0]
+    nurse = make_user(owner, "nurse4", "staff", "SCR-9")  # not on this case's team: holding / recovery nurses
+    r = nurse.post(f"/api/cases/{case['case_id']}/milestone", json={"step": "arrived", "time": "07:30"})
+    assert r.status_code == 200 and r.json()["state"]["milestones"][case["case_id"]]["stage"] == "arrived"
+    assert nurse.post(f"/api/cases/{case['case_id']}/milestone", json={"step": "lunch"}).status_code == 422
+    cssd = make_user(owner, "cssd4", "cssd")
+    assert cssd.post(f"/api/cases/{case['case_id']}/milestone", json={"step": "in_room"}).status_code == 403
+    board = cssd.get("/api/board").json()  # every role can see the board
+    room = next(r for r in board["rooms"] if r["room"] == case["or_id"])
+    first = next(c for c in room["cases"] if c["case_id"] == case["case_id"])
+    assert first["stage"] == "arrived" and first["procedure"] == case["procedure"]
+    text = str(owner.get("/api/board").json())
+    assert "HN-" not in text and "patient" not in text  # no patient identity on a screen in the corridor
+    family = owner.get("/api/board?family=1").json()
+    assert family["family"] and all("procedure" not in c and "surgeon" not in c for r in family["rooms"] for c in r["cases"])

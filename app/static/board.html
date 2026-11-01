@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>กระดานสถานะห้องผ่าตัด · ORchestraAI</title>
+<link href="https://fonts.googleapis.com/css2?family=Prompt:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #f1f5f9; --surface: #ffffff; --surface-2: #f8fafc; --text: #0f172a; --muted: #64748b; --border: #e2e8f0;
+    --accent: #0e7490; --accent-soft: #e0f2fe; --ok: #047857; --ok-soft: #d1fae5; --warn: #b45309; --warn-soft: #fef3c7;
+    --bad: #b91c1c; --bad-soft: #fee2e2; --rec: #6d28d9; --rec-soft: #ede9fe;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #070d1a; --surface: #0f172a; --surface-2: #111a2e; --text: #e2e8f0; --muted: #94a3b8; --border: #1f2a44;
+      --accent: #22d3ee; --accent-soft: rgba(34,211,238,.14); --ok: #34d399; --ok-soft: rgba(16,185,129,.16);
+      --warn: #fbbf24; --warn-soft: rgba(245,158,11,.16); --bad: #f87171; --bad-soft: rgba(239,68,68,.18);
+      --rec: #a78bfa; --rec-soft: rgba(139,92,246,.2);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #070d1a; --surface: #0f172a; --surface-2: #111a2e; --text: #e2e8f0; --muted: #94a3b8; --border: #1f2a44;
+    --accent: #22d3ee; --accent-soft: rgba(34,211,238,.14); --ok: #34d399; --ok-soft: rgba(16,185,129,.16);
+    --warn: #fbbf24; --warn-soft: rgba(245,158,11,.16); --bad: #f87171; --bad-soft: rgba(239,68,68,.18);
+    --rec: #a78bfa; --rec-soft: rgba(139,92,246,.2);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 18px/1.45 'Prompt', 'Noto Sans Thai', system-ui, sans-serif; }
+  a, button { font: inherit; color: inherit; }
+  header { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; padding: 14px 24px;
+    background: var(--surface); border-bottom: 1px solid var(--border); }
+  header h1 { margin: 0; font-size: 1.5rem; line-height: 1.2; }
+  header p { margin: 0; color: var(--muted); font-size: .9rem; }
+  .clock { font-size: 2.2rem; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1; text-align: right; }
+  .clock small { display: block; font-size: .75rem; font-weight: 400; color: var(--muted); margin-top: 4px; }
+  .tools { display: flex; gap: 8px; flex-wrap: wrap; }
+  .btn { border: 1px solid var(--border); background: var(--surface); padding: 6px 12px; border-radius: 8px; cursor: pointer;
+    text-decoration: none; font-size: .8rem; }
+  :focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+  #offline { margin: 12px 24px 0; padding: 10px 14px; border-radius: 10px; background: var(--bad-soft); color: var(--bad); font-weight: 600; }
+  main { padding: 18px 24px 28px; }
+  .rooms { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 380px), 1fr)); gap: 16px; }
+  .room { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 16px; display: grid; gap: 12px; align-content: start; }
+  .room-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  .room-head h2 { margin: 0; font-size: 1.8rem; letter-spacing: .02em; }
+  .room-head span { color: var(--muted); font-size: .85rem; }
+  .now { border-radius: 12px; padding: 12px 14px; background: var(--surface-2); border-left: 8px solid var(--muted); display: grid; gap: 4px; }
+  .now .code { font-size: 1.5rem; font-weight: 700; }
+  .now .proc { font-size: 1rem; }
+  .now .who { color: var(--muted); font-size: .9rem; }
+  .stage { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; border-radius: 99px; padding: 2px 12px; font-size: .95rem; width: fit-content; }
+  .dot { display: inline-block; width: .7em; height: .7em; border-radius: 50%; border: 2px solid currentColor; flex: none; }
+  .p-waiting .dot { background: linear-gradient(90deg, currentColor 50%, transparent 50%); }
+  .p-in_or .dot { background: currentColor; }
+  .p-recovery .dot { background: linear-gradient(90deg, transparent 50%, currentColor 50%); }
+  .mark { font-weight: 700; line-height: 1; }
+  .since { color: var(--muted); font-size: .9rem; }
+  .p-scheduled { --c: var(--muted); --s: var(--surface-2); }
+  .p-late { --c: var(--bad); --s: var(--bad-soft); }
+  .p-waiting { --c: var(--warn); --s: var(--warn-soft); }
+  .p-in_or { --c: var(--accent); --s: var(--accent-soft); }
+  .p-recovery { --c: var(--rec); --s: var(--rec-soft); }
+  .p-done { --c: var(--ok); --s: var(--ok-soft); }
+  .now[class*="p-"] { border-left-color: var(--c); }
+  .stage[class*="p-"] { color: var(--c); background: var(--s); }
+  .list { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+  .list li { display: grid; grid-template-columns: 4.2em minmax(0, 1fr) auto; gap: 10px; align-items: center; font-size: .95rem;
+    padding: 6px 0; border-top: 1px solid var(--border); }
+  .list li .t { font-variant-numeric: tabular-nums; color: var(--muted); }
+  .list li .c { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .list .stage { font-size: .8rem; padding: 1px 10px; }
+  .idle { color: var(--muted); font-size: 1.1rem; }
+  .foot { color: var(--muted); font-size: .85rem; }
+  .em { color: var(--bad); font-weight: 700; }
+  /* family screen */
+  .family { display: grid; gap: 10px; max-width: 1100px; margin: 0 auto; }
+  .family .intro { color: var(--muted); font-size: 1rem; margin: 0 0 4px; }
+  .frow { display: grid; grid-template-columns: 8em minmax(0, 1fr) auto; gap: 16px; align-items: center; background: var(--surface);
+    border: 1px solid var(--border); border-radius: 14px; padding: 14px 18px; border-left: 10px solid var(--c, var(--muted)); }
+  .frow .code { font-size: 1.6rem; font-weight: 700; letter-spacing: .03em; }
+  .frow .stage { font-size: 1.3rem; padding: 4px 16px; }
+  .frow .since { font-size: 1rem; text-align: right; }
+  .legend { display: flex; gap: 8px 14px; flex-wrap: wrap; margin-bottom: 14px; }
+  @media (max-width: 640px) {
+    header, main { padding-left: 16px; padding-right: 16px; }
+    .frow { grid-template-columns: 1fr; gap: 6px; }
+    .frow .since { text-align: left; }
+    .clock { font-size: 1.6rem; }
+  }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1 id="title">สถานะห้องผ่าตัด</h1>
+    <p id="sub"></p>
+  </div>
+  <div class="tools">
+    <a class="btn" id="mode" href="/board?family=1">จอสำหรับญาติ</a>
+    <button class="btn" type="button" id="full">เต็มจอ</button>
+    <a class="btn" id="back" href="/">← ตารางผ่าตัด</a>
+  </div>
+  <div class="clock" id="clock">--:--<small id="updated">กำลังโหลด…</small></div>
+</header>
+<div id="offline" role="alert" hidden></div>
+<main>
+  <div class="legend" id="legend" aria-label="ความหมายของสี"></div>
+  <div id="board" aria-live="polite"></div>
+</main>
+
+<script>
+  const $ = s => document.querySelector(s);
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const params = new URLSearchParams(location.search);
+  const family = params.get('family') === '1';
+  const ICON = { late: '<b class="mark">!</b>', done: '<b class="mark">✓</b>' };  // others: a drawn dot
+  const icon = phase => ICON[phase] || '<i class="dot" aria-hidden="true"></i>';
+  const PHASE_TH = { scheduled: 'นัดไว้', late: 'ช้ากว่านัด', waiting: 'ห้องเตรียม', in_or: 'ในห้องผ่าตัด', recovery: 'ห้องพักฟื้น', done: 'เสร็จสิ้น' };
+  const URGENCY = { URGENT: 'ด่วน', EMERGENCY: 'ฉุกเฉิน' };
+  let lastOk = null;
+
+  const stage = c => `<span class="stage p-${c.phase}">${icon(c.phase)} ${esc(c.label)}</span>`;
+  function since(c) {
+    if (c.phase === 'late') return `<span class="em">ช้ากว่านัด ${c.late_min} นาที</span>`;
+    if (c.since && c.elapsed !== null && c.elapsed !== undefined) return `ตั้งแต่ ${esc(c.since)} (${c.elapsed} นาที)`;
+    if (c.since) return `เมื่อ ${esc(c.since)}`;
+    return `นัด ${esc(c.start)}`;
+  }
+
+  function roomCard(room, cases) {
+    const live = cases.find(c => c.phase === 'in_or');
+    const nextUp = cases.find(c => ['waiting', 'late', 'scheduled'].includes(c.phase));
+    const current = live || nextUp;
+    const done = cases.filter(c => c.phase === 'done' || c.phase === 'recovery').length;
+    const rest = cases.filter(c => c !== current && !['done', 'recovery'].includes(c.phase));
+    const head = live ? 'กำลังใช้ห้อง' : nextUp ? 'ว่าง · รอเคสถัดไป' : cases.length ? 'เสร็จทุกเคสแล้ว' : 'ไม่มีเคส';
+    return `<section class="room" aria-label="ห้อง ${esc(room)}">
+      <div class="room-head"><h2>${esc(room)}</h2><span>${head}</span></div>
+      ${current ? `<div class="now p-${current.phase}">
+          <span class="code">${esc(current.case_id)} ${current.urgency !== 'ELECTIVE' ? `<span class="em">· ${URGENCY[current.urgency] || ''}</span>` : ''}</span>
+          <span class="proc">${esc(current.procedure)} · ${esc(current.start)}–${esc(current.end)}</span>
+          <span class="who">${esc(current.surgeon || '')}${current.readiness && current.readiness !== 'ready' && current.phase !== 'in_or'
+            ? ` · <span class="em">${current.readiness === 'problem' ? 'ความพร้อมมีปัญหา' : 'ยังเช็กความพร้อมไม่ครบ'}</span>` : ''}</span>
+          ${stage(current)} <span class="since">${since(current)}</span></div>` : `<p class="idle">ไม่มีเคสที่รออยู่</p>`}
+      ${rest.length ? `<ul class="list">${rest.map(c => `<li><span class="t">${esc(c.start)}</span>
+          <span class="c">${esc(c.case_id)} · ${esc(c.procedure)}</span>${stage(c)}</li>`).join('')}</ul>` : ''}
+      <div class="foot">ทั้งหมด ${cases.length} เคส · ผ่าตัดเสร็จแล้ว ${done}</div>
+    </section>`;
+  }
+
+  function familyBoard(rooms) {
+    const cases = rooms.flatMap(r => r.cases).sort((a, b) => a.start_min - b.start_min);
+    if (!cases.length) return '<p class="idle">วันนี้ไม่มีเคสผ่าตัด</p>';
+    return `<div class="family"><p class="intro">ดูสถานะด้วยรหัสเคสที่ได้รับจากเจ้าหน้าที่ · ไม่แสดงชื่อผู้ป่วย · สอบถามเพิ่มเติมที่เคาน์เตอร์พยาบาล</p>
+      ${cases.map(c => `<div class="frow p-${c.phase}"><span class="code">${esc(c.case_id)}</span>${stage(c)}
+        <span class="since">${c.phase === 'late' || c.phase === 'scheduled' ? 'รอเข้าห้องผ่าตัด' : since(c)}</span></div>`).join('')}</div>`;
+  }
+
+  async function load() {
+    const q = new URLSearchParams();
+    if (params.get('date')) q.set('date', params.get('date'));
+    if (family) q.set('family', '1');
+    try {
+      const res = await fetch('/api/board?' + q);
+      if (res.status === 401) { location.href = '/login'; return; }
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.detail || 'HTTP ' + res.status);
+      lastOk = new Date();
+      $('#offline').hidden = true;
+      const day = d.date ? new Date(d.date + 'T00:00:00') : new Date();
+      $('#title').textContent = family ? 'ติดตามสถานะผู้ป่วยผ่าตัด' : 'สถานะห้องผ่าตัด';
+      $('#sub').textContent = (d.hospital_name ? d.hospital_name + ' · ' : '')
+        + day.toLocaleDateString('th-TH', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+      $('#board').innerHTML = family ? familyBoard(d.rooms)
+        : `<div class="rooms">${d.rooms.map(r => roomCard(r.room, r.cases)).join('')}</div>`;
+      $('#updated').textContent = 'อัปเดต ' + lastOk.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    } catch (e) {
+      $('#offline').hidden = false;
+      $('#offline').textContent = `อัปเดตไม่ได้ (${e.message})${lastOk ? ' · ข้อมูลล่าสุดเมื่อ ' + lastOk.toLocaleTimeString('th-TH') : ''} · จะลองใหม่อัตโนมัติ`;
+    }
+  }
+  function tick() {
+    $('#clock').firstChild.textContent = new Date().toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
+  }
+
+  $('#legend').innerHTML = Object.entries(PHASE_TH).filter(([k]) => !family || k !== 'late')
+    .map(([k, t]) => `<span class="stage p-${k}">${icon(k)} ${t}</span>`).join('');
+  $('#mode').href = family ? '/board' + (params.get('date') ? '?date=' + params.get('date') : '')
+    : '/board?family=1' + (params.get('date') ? '&date=' + params.get('date') : '');
+  $('#mode').textContent = family ? 'จอสำหรับทีม' : 'จอสำหรับญาติ';
+  $('#back').href = '/' + (params.get('date') ? '?date=' + params.get('date') : '');
+  $('#full').addEventListener('click', () => document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen?.());
+  tick(); setInterval(tick, 10000);
+  load(); setInterval(load, 30000);
+</script>
+</body>
+</html>

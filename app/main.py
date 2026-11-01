@@ -242,6 +242,12 @@ def reports_page() -> FileResponse:
     return FileResponse(ROOT / "static" / "reports.html")
 
 
+@app.get("/board", include_in_schema=False)
+def board_page() -> FileResponse:
+    """Today's case status board for a screen in the OR suite or the waiting room (no patient identity)."""
+    return FileResponse(ROOT / "static" / "board.html")
+
+
 @app.get("/print", include_in_schema=False)
 def print_page() -> FileResponse:
     """Printable daily OR list (per room) and WHO Surgical Safety Checklist (per case)."""
@@ -1172,3 +1178,43 @@ def admin_roster_import(body: RosterImportIn, request: Request) -> dict:
         raise HTTPException(status_code=400, detail="อ่านไฟล์ไม่ได้ (ข้อมูลไฟล์ไม่ถูกต้อง)") from exc
     return _run(roster_io.import_roster, admin, body.filename, content, commit=body.commit, month=body.month,
                 actor=_actor(user))
+
+
+# ---------------------------------------------------------- steps and status board
+
+class MilestoneIn(BaseModel):
+    step: Literal["arrived", "in_room", "incision", "closure", "out_room", "recovery_out"]
+    time: str | None = Field(default=None, max_length=5)  # HH:MM; empty = now
+    clear: bool = False  # undo the latest step
+
+
+@app.post("/api/cases/{case_id}/milestone")
+def record_milestone(case_id: str, body: MilestoneIn, request: Request, date: str | None = None) -> dict:
+    """Record a step of a case (holding, into the OR, incision, closure, out, left recovery) or undo the latest."""
+    user = _user(request, "record_times")
+    result = _run(store.milestone_update, case_id, body.model_dump(), day=date, actor=_actor(user))
+    return {"result": result, "state": _state(user, date)}
+
+
+@app.get("/api/board")
+def board(request: Request, date: str | None = None, family: bool = False) -> dict:
+    """The status board: each room's cases and where each one is now. Never patient names or HNs;
+    ``family`` leaves out procedures and surgeons too (a waiting-room screen)."""
+    from datetime import datetime
+
+    user = _user(request, "view")
+    state = _run(store.state, date)
+    steps, ready = state.get("milestones") or {}, state.get("readiness") or {}
+    rooms: dict[str, list] = {r["id"]: [] for r in state["options"]["rooms"]}
+    for b in sorted(state["schedule"]["bookings"], key=lambda x: (x["or_id"], x["start_min"])):
+        m = steps.get(b["case_id"]) or {}
+        item = {"case_id": b["case_id"], "start": b["start"], "end": b["end"], "start_min": b["start_min"],
+                "urgency": b["urgency"], **{k: m.get(k) for k in ("stage", "label", "phase", "since", "elapsed", "late_min")}}
+        if not family:
+            item |= {"procedure": b["procedure"], "surgeon": (b["team"][0] if b["team"] else {}).get("name"),
+                     "readiness": (ready.get(b["case_id"]) or {}).get("status")}
+        rooms.setdefault(b["or_id"], []).append(item)
+    return {"date": state.get("date"), "now": datetime.now(_TZ).strftime("%H:%M"), "family": family,
+            "hospital_name": (os.environ.get("HOSPITAL_NAME") or "").strip()[:120] or None,
+            "rooms": [{"room": r, "cases": cases} for r, cases in rooms.items()],
+            "steps_ready": state.get("milestones_ready", False), "viewer": user.role}

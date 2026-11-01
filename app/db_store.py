@@ -21,6 +21,7 @@ from orchestra_engine.demo import elective_day
 from orchestra_engine.results import ScheduleChange
 
 from . import cancellations as cx
+from . import milestones as ms
 from . import readiness as rd
 from . import seed
 from .db import ConflictError, Database, DatabaseUnavailable, World, case_code
@@ -175,8 +176,83 @@ class DatabaseStore:
             pending = self.db.pending(conn)
             readiness = self._readiness(conn, world)
             following = self._readiness_next(conn, world.day, world) if readiness is not None else None
+            steps, steps_ready = self._milestones(conn, world)
         return {**self._state(world, activity), "pending": pending, "readiness": readiness or {},
-                "readiness_ready": readiness is not None, "readiness_next": following, "cancel_reasons": cx.options()}
+                "readiness_ready": readiness is not None, "readiness_next": following, "cancel_reasons": cx.options(),
+                "milestones": steps, "milestones_ready": steps_ready}
+
+    # ------------------------------------------------- steps on the day
+
+    def _now(self, world: World) -> int | None:
+        """Minutes since the planning day's midnight, on the day itself only."""
+        return world.now_min if world.day == self.db.today() else None
+
+    @staticmethod
+    def _case_minutes(world: World, case_id: str, rows: dict | None) -> dict:
+        row = world.bookings[case_id]
+        minutes = {k: world.minute(ts) for k, ts in (rows or {}).get(str(row["request_id"]), {}).items()}
+        if row.get("actual_start_time"):
+            minutes["in_room"] = world.minute(row["actual_start_time"])
+        if row.get("actual_end_time"):
+            minutes["out_room"] = world.minute(row["actual_end_time"])
+        return minutes
+
+    def _milestones(self, conn, world: World) -> tuple[dict, bool]:
+        rows = self.db.milestone_rows(conn, [r["request_id"] for r in world.bookings.values()])
+        now = self._now(world)
+        return {cid: ms.summarize(self._case_minutes(world, cid, rows), world.result.assignments[cid].start_min, now)
+                for cid in world.bookings if cid in world.result.assignments}, rows is not None
+
+    def milestone_update(self, case_id: str, data: dict, *, day: str | None = None, actor: dict | None = None) -> dict:
+        """Record (or clear the latest) step of a case: holding, into the OR, incision, closure, out, left recovery."""
+        step, time_text, clear = ms.parse_update(data)
+        with self._transaction(write=True) as conn:
+            world = self.db.load(conn, self._day(day))
+            a = world.result.assignments.get(case_id)
+            if a is None:
+                raise StoreError(f"ไม่พบเคส {case_id} ในวันที่ {world.day}")
+            check_own_case(actor, world.result.cases[case_id].surgeon_id)
+            row = world.bookings[case_id]
+            rows = self.db.milestone_rows(conn, [row["request_id"]])
+            if step in ms.IN_TABLE and rows is None:
+                raise StoreError("บันทึกขั้นนี้ได้หลังรัน supabase/migrations/20261110000000_case_milestones.sql "
+                                 "(เข้าห้อง / ออกห้อง บันทึกได้แล้ว)")
+            minutes = self._case_minutes(world, case_id, rows)
+            now = self._now(world)
+            if clear:
+                ms.check(minutes, step, None, clear=True)
+                minute = None
+            else:
+                if time_text:
+                    minute = ms.place(minutes, step, parse_time(time_text))
+                elif now is not None:
+                    minute = now
+                else:
+                    raise StoreError("วันอื่นที่ไม่ใช่วันนี้ ต้องใส่เวลา")
+                if now is not None and minute > now + 5:
+                    raise StoreError(f"บันทึกเวลาล่วงหน้าไม่ได้ (ตอนนี้ {fmt(now)})")
+                ms.check(minutes, step, minute)
+            at = world.ts(minute) if minute is not None else None
+            if step in ("in_room", "out_room"):
+                column = "actual_start_time" if step == "in_room" else "actual_end_time"
+                conn.execute(f"UPDATE scheduled_surgeries SET {column} = %s WHERE schedule_id = %s",
+                             (at, row["schedule_id"]))
+            elif clear:
+                conn.execute("DELETE FROM case_milestones WHERE request_id = %s AND step = %s", (row["request_id"], step))
+            else:
+                conn.execute(
+                    """INSERT INTO case_milestones (request_id, step, at, recorded_by) VALUES (%s, %s, %s, %s)
+                       ON CONFLICT (request_id, step) DO UPDATE SET at = EXCLUDED.at, recorded_by = EXCLUDED.recorded_by,
+                           recorded_at = NOW()""", (row["request_id"], step, at, actor_name(actor)))
+            minutes[step] = minute
+            if step == "out_room" and minute is not None:
+                used = minute - minutes["in_room"]
+                record = self._record(conn, world, Activity(
+                    "actual", f"{case_id} ออกจากห้องผ่าตัด: ใช้ห้อง {used} นาที (วางแผน {a.end_min - a.start_min})", [],
+                    actor=actor_name(actor)))
+                self.db.log_activity(conn, world, record)
+            summary = ms.summarize(minutes, a.start_min, now)
+        return {"case_id": case_id, "step": step, "milestones": summary}
 
     # ---------------------------------------------------- pre-op readiness
 
@@ -631,6 +707,7 @@ class DatabaseStore:
             waiting = len(self.db.pending(conn))
             cancellations = self._cancellations(conn, first, last)
             earlier_cancel = self._cancellations(conn, *before)
+            stages, stages_ready = self._stage_cases(conn, first, last)
         extra = {
             "waiting": waiting, "cancelled": cancelled, "fatigue_overrides": overrides,
             "emergencies_inserted": counts.get("emergency", 0), "replans": counts.get("replan", 0),
@@ -640,11 +717,31 @@ class DatabaseStore:
         earlier = build_report(cases, rooms, *before, self.db.tz)
         report["cancellations"] = cancellations and cx.summarize(cancellations[0], report["cases"], waiting=cancellations[1])
         report["cancellations_ready"] = cancellations is not None
+        report["stages"], report["stages_ready"] = ms.segment_stats(stages), stages_ready
         report["previous"] = {**earlier["kpi"], "cases": earlier["cases"]}
         if earlier_cancel is not None:
             report["previous"]["cancellations"] = cx.summarize(earlier_cancel[0], earlier["cases"], waiting=earlier_cancel[1])
         report["previous_range"] = [before[0].isoformat(), before[1].isoformat()]
         return report
+
+    def _stage_cases(self, conn, first: date, last: date) -> tuple[list[dict], bool]:
+        """Each case's step times (minutes since the epoch) for the report's time-per-step table."""
+        tz = self.db.tz
+        rows = list(conn.execute(
+            """SELECT request_id, actual_start_time, actual_end_time FROM scheduled_surgeries
+               WHERE status IS DISTINCT FROM 'CANCELLED' AND start_time >= %s AND start_time < %s
+                 AND actual_start_time IS NOT NULL""",
+            (datetime.combine(first, time(), tzinfo=tz), datetime.combine(last + timedelta(days=1), time(), tzinfo=tz))))
+        steps = self.db.milestone_rows(conn, [r["request_id"] for r in rows])
+        epoch = lambda ts: ts.timestamp() / 60  # noqa: E731
+        cases = []
+        for r in rows:
+            c = {k: epoch(v) for k, v in (steps or {}).get(str(r["request_id"]), {}).items()}
+            c["in_room"] = epoch(r["actual_start_time"])
+            if r["actual_end_time"]:
+                c["out_room"] = epoch(r["actual_end_time"])
+            cases.append(c)
+        return cases, steps is not None
 
     def _cancellations(self, conn, first: date, last: date) -> tuple[list[dict], int] | None:
         """Cases called off that were planned in ``first``..``last``, and waiting requests given up then."""

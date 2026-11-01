@@ -28,6 +28,7 @@ from orchestra_engine.demo import Hospital, build_hospital, elective_day
 from orchestra_engine.models import DEFAULT_TEAM
 
 from . import cancellations as cx
+from . import milestones as ms
 from . import readiness as rd
 
 
@@ -271,6 +272,7 @@ class ScheduleStore:
             self.actuals: dict[str, list[int | None]] = {}  # case_id -> [start, end] minutes
             self.readiness: dict[str, dict[str, dict]] = {}  # case_id -> checked pre-op items
             self.cancellations: list[dict] = []  # cases called off / given up, with the reason
+            self.steps: dict[str, dict[str, int]] = {}  # case_id -> holding / incision / closure / left recovery
             self.digests: set[str] = set()
             self.pending: dict[str, SurgeryCase] = {}  # taken off the schedule, waiting for a new slot
             self._ids = Counter()
@@ -329,9 +331,55 @@ class ScheduleStore:
             "readiness_ready": True,
             "readiness_next": None,  # the demo has one day
             "cancel_reasons": cx.options(),
+            "milestones": {cid: ms.summarize(self._case_minutes(cid), a.start_min, self._clock(), late=False)
+                           for cid, a in self.result.assignments.items()},  # demo day: elapsed by the clock, no "late"
+            "milestones_ready": True,
             **fatigue_view(self.hospital, self.result),
             **facility_view(self.hospital, self.result),
         }
+
+    # ---------------------------------------------------- steps on the day
+
+    @staticmethod
+    def _clock() -> int:
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        now = datetime.now(ZoneInfo("Asia/Bangkok"))
+        return now.hour * 60 + now.minute
+
+    def _case_minutes(self, case_id: str) -> dict:
+        start, end = self.actuals.get(case_id, [None, None])
+        return {**self.steps.get(case_id, {}), "in_room": start, "out_room": end}
+
+    def milestone_update(self, case_id: str, data: dict, *, day: str | None = None, actor: dict | None = None) -> dict:
+        step, time_text, clear = ms.parse_update(data)
+        with self._lock:
+            a = self.result.assignments.get(case_id)
+            if a is None:
+                raise StoreError(f"ไม่พบเคส {case_id} ในตาราง")
+            check_own_case(actor, self.result.cases[case_id].surgeon_id)
+            now = self._clock()
+            minutes = self._case_minutes(case_id)
+            if clear:
+                ms.check(minutes, step, None, clear=True)
+                minute = None
+            else:
+                minute = ms.place(minutes, step, parse_time(time_text)) if time_text else now
+                if minute > now + 5:
+                    raise StoreError(f"บันทึกเวลาล่วงหน้าไม่ได้ (ตอนนี้ {fmt(now)})")
+                ms.check(minutes, step, minute)
+            if step in ("in_room", "out_room"):
+                self.actuals.setdefault(case_id, [None, None])[0 if step == "in_room" else 1] = minute
+            elif minute is None:
+                self.steps.get(case_id, {}).pop(step, None)
+            else:
+                self.steps.setdefault(case_id, {})[step] = minute
+            minutes[step] = minute
+            if step == "out_room" and minute is not None:
+                self.activity.append(Activity("actual", f"{case_id} ออกจากห้องผ่าตัด: ใช้ห้อง {minute - minutes['in_room']} นาที "
+                                                         f"(วางแผน {a.end_min - a.start_min})", [], actor=actor_name(actor)))
+            return {"case_id": case_id, "step": step, "milestones": ms.summarize(minutes, a.start_min, now, late=False)}
 
     # ---------------------------------------------------- pre-op readiness
 
@@ -641,6 +689,9 @@ class ScheduleStore:
         planned = [c for c in self.cancellations if c["planned"]]
         report["cancellations"] = cx.summarize(planned, report["cases"], waiting=len(self.cancellations) - len(planned))
         report["cancellations_ready"] = True
+        report["stages"] = ms.segment_stats([{k: v for k, v in self._case_minutes(cid).items() if v is not None}
+                                             for cid in self.result.assignments])
+        report["stages_ready"] = True
         report["previous"], report["previous_range"] = None, None
         return report
 
