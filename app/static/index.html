@@ -256,6 +256,7 @@
     <input type="date" id="date" aria-label="วันที่วางแผน" hidden>
     <button class="btn" id="reload" type="button">โหลดใหม่</button>
     <a class="btn" href="/reports" id="reports-link" hidden>รายงาน</a>
+    <a class="btn" href="/board" id="board-link">📺 กระดานสถานะ</a>
     <a class="btn" href="/admin" id="admin-link" hidden>ข้อมูลโรงพยาบาล</a>
     <a class="btn" href="/flow" target="_blank" rel="noopener">ดู Flow สาธิต</a>
     <button class="btn" id="reset" type="button" hidden>รีเซ็ตข้อมูลตัวอย่าง</button>
@@ -946,35 +947,56 @@
       ${b.reasoning.length ? '<ul class="why">' + b.reasoning.map(r => '<li>' + esc(r) + '</li>').join('') + '</ul>' : ''}
       ${fatigueBox((STATE.fatigue || []).filter(i => i.case_id === b.case_id), 'เกณฑ์ความเหนื่อยล้าของทีมในเคสนี้')}
       ${readinessBox(b)}
-      ${actualTimes(b)}
+      ${stepsBox(b)}
       ${canCancel(b) ? '<div style="margin-top:10px"><button class="btn" type="button" id="cancel-case" style="color:var(--bad)">งดผ่าตัด / ยกเลิกเคสนี้</button></div>' : ''}`;
     wireReadiness(box, b);
     box.querySelector('#cancel-case')?.addEventListener('click', () => openCancel(b));
-    const form = box.querySelector('.actual-form');
-    if (form) form.addEventListener('submit', e => {
+    wireSteps(box, b);
+  }
+
+  // ------------------------------------------- steps of the case on the day
+  const STEPS = [['arrived', 'มาถึงห้องเตรียมผ่าตัด'], ['in_room', 'เข้าห้องผ่าตัด'], ['incision', 'ลงมีด'],
+    ['closure', 'เย็บแผลเสร็จ'], ['out_room', 'ออกจากห้องผ่าตัด (ไปห้องพักฟื้น)'], ['recovery_out', 'ออกจากห้องพักฟื้น (กลับหอ/ICU)']];
+  const STEP_ICON = { late: '!', done: '✓' };
+  const canSteps = b => can('record_times') && (STATE.me.role !== 'surgeon' || surgeonOf(b) === STATE.me.staff_id);
+  const stepsAvailable = () => STATE.milestones_ready ? STEPS.map(s => s[0]) : ['in_room', 'out_room'];
+  function stepsBox(b) {
+    const m = (STATE.milestones || {})[b.case_id];
+    if (!m) return '';
+    const edit = canSteps(b), avail = stepsAvailable();
+    const recorded = STEPS.filter(([k]) => m.times[k]).map(([k]) => k);
+    const last = recorded[recorded.length - 1];
+    const after = last ? STEPS.slice(STEPS.findIndex(s => s[0] === last) + 1) : STEPS;
+    const next = after.find(([k]) => avail.includes(k));
+    const pill = `<span class="badge ${m.phase === 'late' ? 'bad' : m.phase === 'done' ? 'ok' : m.phase === 'in_or' ? 'warn' : ''}">${STEP_ICON[m.phase] || ''} ${esc(m.label)}</span>`;
+    return `<div class="ready-box" id="steps-box">
+      <div class="ready-head"><b>สถานะวันนี้</b>${pill}</div>
+      ${STEPS.map(([k, label]) => `<div class="ready-item"><span>${esc(label)}${avail.includes(k) ? '' : ' <small class="hint">(ต้องรัน migration 011)</small>'}</span>
+        <span class="ri-state ${m.times[k] ? 'DONE' : 'NA'}">${m.times[k] ? esc(m.times[k]) : '–'}
+          ${edit && k === last ? `<button type="button" class="btn" data-undo="${k}" style="padding:1px 8px;font-size:.72rem;margin-left:6px">ยกเลิก</button>` : ''}</span></div>`).join('')}
+      ${edit && next ? `<div class="actual-form"><button class="btn primary" type="button" data-step="${next[0]}">บันทึก: ${esc(next[1])} ตอนนี้</button></div>` : ''}
+      ${edit ? `<form class="actual-form" id="step-fix"><label>แก้/ใส่เวลาย้อนหลัง<select name="step">${STEPS.filter(([k]) => avail.includes(k))
+          .map(([k, label]) => `<option value="${k}" ${next && k === next[0] ? 'selected' : ''}>${esc(label)}</option>`).join('')}</select></label>
+        <label>เวลา<input type="time" name="time" required></label><button class="btn" type="submit">บันทึกเวลา</button></form>` : ''}
+      <small class="hint">เข้าห้อง–ออกห้องคือเวลาผ่าตัดจริงที่รายงานและการพยากรณ์เวลาใช้ · <a href="/board" target="_blank" rel="noopener">เปิดกระดานสถานะ</a></small>
+    </div>`;
+  }
+  function wireSteps(box, b) {
+    const send = (button, body) => busy(button, async () => {
+      const data = await api('/api/cases/' + encodeURIComponent(b.case_id) + '/milestone', body);
+      STATE = data.state; render();
+      toast(body.clear ? 'ยกเลิกขั้นล่าสุดแล้ว' : `บันทึกแล้ว: ${data.result.milestones.label}`, true);
+    });
+    box.querySelector('[data-step]')?.addEventListener('click', e => send(e.target, { step: e.target.dataset.step }));
+    box.querySelector('[data-undo]')?.addEventListener('click', e => {
+      if (confirm('ยกเลิกเวลาที่บันทึกของขั้นนี้?')) send(e.target, { step: e.target.dataset.undo, clear: true });
+    });
+    box.querySelector('#step-fix')?.addEventListener('submit', e => {
       e.preventDefault();
-      const f = new FormData(form);
-      busy(form.querySelector('button'), async () => {
-        const data = await api('/api/cases/' + encodeURIComponent(b.case_id) + '/actual',
-          { start: f.get('start') || null, end: f.get('end') || null });
-        STATE = data.state; render();
-        const r = data.result;
-        toast(r.actual_minutes ? `บันทึกแล้ว: ใช้จริง ${r.actual_minutes} นาที (วางแผน ${r.planned_minutes}) ระบบจะใช้เรียนรู้` : 'บันทึกเวลาเริ่มแล้ว', true);
-      });
+      send(e.target.querySelector('button'), { step: e.target.elements['step'].value, time: e.target.elements['time'].value });
     });
   }
 
-  function actualTimes(b) {
-    const recorded = b.actual_start ? `เริ่ม ${esc(b.actual_start)}${b.actual_end ? ' · เสร็จ ' + esc(b.actual_end) : ' · ยังไม่เสร็จ'}` : 'ยังไม่บันทึก';
-    const mine = STATE.me.staff_id && b.team.some(t => t.staff_id === STATE.me.staff_id);
-    const allowed = can('record_times') && (['admin', 'scheduler'].includes(STATE.me.role) || mine);
-    return `<dl style="margin-top:8px"><dt>เวลาผ่าตัดจริง</dt><dd>${recorded}</dd></dl>` + (allowed ? `
-      <form class="actual-form">
-        <label>เริ่มจริง<input type="time" name="start" value="${esc(b.actual_start || '')}"></label>
-        <label>เสร็จจริง<input type="time" name="end" value="${esc(b.actual_end || '')}"></label>
-        <button class="btn primary" type="submit">บันทึกเวลาจริง</button>
-      </form>` : '');
-  }
 
   function applyTabs() {
     const tabs = [...document.querySelectorAll('.tab')];
