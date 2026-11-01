@@ -1218,3 +1218,56 @@ def board(request: Request, date: str | None = None, family: bool = False) -> di
             "hospital_name": (os.environ.get("HOSPITAL_NAME") or "").strip()[:120] or None,
             "rooms": [{"room": r, "cases": cases} for r, cases in rooms.items()],
             "steps_ready": state.get("milestones_ready", False), "viewer": user.role}
+
+
+# ------------------------------------------------------------- weekly OR blocks
+
+class BlockIn(BaseModel):
+    room: str = Field(max_length=20)
+    weekdays: list[int] = Field(max_length=7)
+    start: str = Field(max_length=5)
+    end: str = Field(max_length=5)
+    owner_kind: Literal["SPECIALTY", "SURGEON"]
+    specialty: str | None = Field(default=None, max_length=100)
+    surgeon_id: str | None = Field(default=None, max_length=64)
+    release_days: int = Field(default=2, ge=0, le=60)
+    valid_from: str | None = Field(default=None, max_length=10)
+    valid_to: str | None = Field(default=None, max_length=10)
+    note: str | None = Field(default=None, max_length=200)
+
+
+class BlockReleaseIn(BaseModel):
+    day: str = Field(max_length=10)
+    undo: bool = False
+
+
+@app.get("/api/admin/blocks")
+def admin_blocks(request: Request, day: str | None = None) -> dict:
+    """Weekly OR blocks (and, with ``day``, that date's blocks and whether each is open to everyone)."""
+    _, admin = _admin(request, "hospital_view")
+    return _run(admin.blocks, day)
+
+
+@app.post("/api/admin/blocks")
+def admin_add_block(body: BlockIn, request: Request) -> dict:
+    user, admin = _admin(request, "roster")
+    return _run(admin.save_block, body.model_dump(), actor=_actor(user))
+
+
+@app.patch("/api/admin/blocks/{block_id}")
+def admin_edit_block(block_id: str, body: BlockIn, request: Request) -> dict:
+    user, admin = _admin(request, "roster")
+    return _run(admin.save_block, body.model_dump(), block_id=block_id, actor=_actor(user))
+
+
+@app.delete("/api/admin/blocks/{block_id}")
+def admin_delete_block(block_id: str, request: Request) -> dict:
+    user, admin = _admin(request, "roster")
+    return _run(admin.delete_block, block_id, actor=_actor(user))
+
+
+@app.post("/api/admin/blocks/{block_id}/release")
+def admin_release_block(block_id: str, body: BlockReleaseIn, request: Request) -> dict:
+    """The owner gives one date of the block back to everyone early (``undo``: takes it back)."""
+    user, admin = _admin(request, "roster")
+    return _run(admin.release_block, block_id, body.day, undo=body.undo, actor=_actor(user))

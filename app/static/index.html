@@ -70,6 +70,15 @@
   .g-axis span { position: absolute; transform: translateX(-50%); font-size: .7rem; color: var(--muted); }
   .g-canvas { position: relative; background: var(--track); border-radius: 10px; border: 1px solid var(--border); }
   .g-row { position: absolute; left: 0; right: 0; height: 1px; background: var(--border); }
+  /* weekly OR block: a tinted band behind the cases, the owner's name along its bottom edge */
+  .g-band { position: absolute; height: 48px; z-index: 0; border-left: 2px solid var(--accent); pointer-events: none;
+    background: repeating-linear-gradient(90deg, var(--accent-soft) 0 10px, transparent 10px 14px); }
+  .g-band span { position: absolute; left: 4px; bottom: 0; font-size: .58rem; line-height: 1.1; color: var(--accent);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: calc(100% - 6px); font-weight: 600; }
+  .g-band.open { border-left-style: dashed; opacity: .55; }
+  .g-label:has(small.blk) { line-height: 1.15; min-width: 0; }
+  .g-label small.blk { color: var(--accent); font-size: .6rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+  .g-label small.blk.open { opacity: .6; }
   .g-tick { position: absolute; top: 0; bottom: 0; border-left: 1px dashed var(--border); }
   .g-block { position: absolute; height: 36px; border-radius: 7px; padding: 2px 7px; color: #fff; font-size: .72rem; line-height: 1.25;
     overflow: hidden; cursor: pointer; border: 2px solid transparent; text-align: left; transition: transform .15s, box-shadow .15s; z-index: 2; }
@@ -285,6 +294,7 @@
       <span>กรอบเขียว = เพิ่งเปลี่ยน</span>
       <span><i style="background: repeating-linear-gradient(45deg, var(--bad-soft) 0 3px, transparent 3px 6px); border: 1px dashed var(--bad)"></i>ปิดห้อง (ซ่อม/ทำความสะอาดใหญ่)</span>
       <span>วงกลมมุมขวา = ความพร้อมก่อนผ่าตัด: ตัวเลข = รายการที่ยังไม่ได้ · ✓ พร้อม · ! มีปัญหา</span>
+      <span><i style="background: repeating-linear-gradient(90deg, var(--accent-soft) 0 3px, transparent 3px 5px); border-left: 2px solid var(--accent)"></i>บล็อกห้องของแผนก/ศัลยแพทย์ (จางลง = เปิดให้ทุกคนแล้ว)</span>
     </div>
     <div id="replan-result" class="result"></div>
     <div id="detail" class="detail" hidden></div>
@@ -904,6 +914,13 @@
     }
     if (nowMin) axis += `<span class="now" style="left:${pct(nowMin)}">ตอนนี้ ${hhmm(nowMin)}</span>`;
     const rows = rooms.slice(1).map((_, i) => `<div class="g-row" style="top:${(i + 1) * ROW}px"></div>`).join('');
+    const bands = (STATE.blocks || []).map(bl => {
+      const i = rowOf[bl.room], a = Math.max(bl.start_min, start), z = Math.min(bl.end_min, end);
+      if (i === undefined || z <= a) return '';
+      const text = `บล็อก ${bl.owner}${bl.released ? ' · เปิดให้ทุกคน' : ''}`;
+      return `<div class="g-band${bl.released ? ' open' : ''}" style="left:${pct(a)};width:${(z - a) / span * 100}%;top:${i * ROW}px"
+        title="${esc(text + ' ' + bl.start + '-' + bl.end + (bl.released_why ? ' (' + bl.released_why + ')' : ` (เปิดให้คนอื่น ${bl.release_days} วันก่อนผ่าตัด)`))}"></div>`;
+    }).join('');
     const closed = rooms.flatMap((r, i) => (r.closures || []).map(c => {
       const a = Math.max(c.start_min, start), z = Math.min(c.end_min, end);
       if (z <= a) return '';
@@ -922,8 +939,9 @@
     }).join('');
     const now = nowMin ? `<div class="g-now" style="left:${pct(nowMin)}"></div>` : '';
     $('#gantt').innerHTML = `
-      <div class="g-labels">${rooms.map(r => `<div class="g-label${r.usable === false ? ' off' : ''}" title="${esc(r.caps.join(', ') + (r.elective ? ' · elective ' + hhmm(r.elective[0] ?? 0) + '-' + hhmm(r.elective[1] ?? 1440) : ''))}">${esc(r.id)}<small>${esc(r.usable === false ? ROOM_STATUS_TH[r.status] || r.status : ROOM_TYPE_TH[r.type] || r.type)}</small></div>`).join('')}</div>
-      <div><div class="g-axis">${axis}</div><div class="g-canvas" style="height:${rooms.length * ROW}px">${ticks}${rows}${closed}${blocks}${now}</div></div>`;
+      <div class="g-labels">${rooms.map(r => `<div class="g-label${r.usable === false ? ' off' : ''}" title="${esc(r.caps.join(', ') + (r.elective ? ' · elective ' + hhmm(r.elective[0] ?? 0) + '-' + hhmm(r.elective[1] ?? 1440) : ''))}">${esc(r.id)}<small>${esc(r.usable === false ? ROOM_STATUS_TH[r.status] || r.status : ROOM_TYPE_TH[r.type] || r.type)}</small>${
+        (STATE.blocks || []).filter(bl => bl.room === r.id).map(bl => `<small class="blk${bl.released ? ' open' : ''}" title="${esc(bl.released_why || `เปิดให้คนอื่น ${bl.release_days} วันก่อนผ่าตัด`)}">▮ ${esc(bl.owner)} ${esc(bl.start.slice(0, 5))}–${esc(bl.end.slice(0, 5))}</small>`).join('')}</div>`).join('')}</div>
+      <div><div class="g-axis">${axis}</div><div class="g-canvas" style="height:${rooms.length * ROW}px">${ticks}${bands}${rows}${closed}${blocks}${now}</div></div>`;
     document.querySelectorAll('.g-block').forEach(b => b.addEventListener('click', () => { selected = b.dataset.case; renderGantt(); showDetail(selected); }));
   }
 

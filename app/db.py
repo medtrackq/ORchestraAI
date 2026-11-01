@@ -797,6 +797,39 @@ class Database:
         ]
 
     @staticmethod
+    def has_blocks(conn: psycopg.Connection) -> bool:
+        return conn.execute("SELECT to_regclass('public.or_blocks') IS NOT NULL AS ok").fetchone()["ok"]
+
+    @staticmethod
+    def block_rows(conn: psycopg.Connection, weekday: int | None = None) -> list[dict]:
+        """OR blocks with their room code and owner label (all, or one weekday's)."""
+        where = "WHERE b.weekday = %s" if weekday is not None else ""
+        rows = conn.execute(
+            f"""SELECT b.*, o.room_code AS room, s.full_name, s.specialty AS surgeon_specialty
+                FROM or_blocks b JOIN operating_rooms o USING (or_id) LEFT JOIN staff s ON s.staff_id = b.surgeon_id
+                {where} ORDER BY o.room_code, b.weekday, b.start_time""", (weekday,) if weekday is not None else ())
+        return [{**r, "owner": r["specialty"] if r["owner_kind"] == "SPECIALTY" else (r["full_name"] or "ศัลยแพทย์")}
+                for r in rows]
+
+    def day_blocks(self, conn: psycopg.Connection, day: date, today: date) -> list | None:
+        """The OR blocks on ``day`` and whether each is open to everyone yet (None before migration 012)."""
+        from .blocks import DayBlock, release_state
+
+        if not self.has_blocks(conn):
+            return None
+        rows = [r for r in self.block_rows(conn, day.weekday())
+                if (r["valid_from"] is None or r["valid_from"] <= day) and (r["valid_to"] is None or r["valid_to"] >= day)]
+        given = {str(r["block_id"]) for r in conn.execute("SELECT block_id FROM or_block_releases WHERE day = %s", (day,))}
+        out = []
+        for r in rows:
+            released, why = release_state(str(r["block_id"]), r["release_days"], day, today, given)
+            out.append(DayBlock(str(r["block_id"]), r["room"], r["start_time"].hour * 60 + r["start_time"].minute,
+                                r["end_time"].hour * 60 + r["end_time"].minute, r["owner_kind"], r["specialty"],
+                                str(r["surgeon_id"]) if r["surgeon_id"] else None, r["owner"], r["release_days"],
+                                released, why, r["note"]))
+        return out
+
+    @staticmethod
     def milestone_rows(conn: psycopg.Connection, request_ids) -> dict[str, dict[str, datetime]] | None:
         """Recorded steps (holding, incision, closure, left recovery) per request; None before migration 011."""
         if not conn.execute("SELECT to_regclass('public.case_milestones') IS NOT NULL AS ok").fetchone()["ok"]:

@@ -433,3 +433,17 @@ def test_status_board_and_steps_over_the_api(owner):
     assert "HN-" not in text and "patient" not in text  # no patient identity on a screen in the corridor
     family = owner.get("/api/board?family=1").json()
     assert family["family"] and all("procedure" not in c and "surgeon" not in c for r in family["rooms"] for c in r["cases"])
+
+
+def test_or_block_endpoints_need_supabase_and_the_roster_permission(owner):
+    body = {"room": "OR-1", "weekdays": [0], "start": "08:00", "end": "12:00", "owner_kind": "SPECIALTY",
+            "specialty": "Orthopedics"}
+    assert owner.get("/api/admin/blocks").status_code == 400  # hospital data needs Supabase
+    scheduler = make_user(owner, "sched9", "scheduler")
+    assert scheduler.post("/api/admin/blocks", json=body).status_code == 400  # allowed, but demo mode
+    nurse = make_user(owner, "nurse9b", "staff", "SCR-2")
+    assert nurse.get("/api/admin/blocks").status_code == 403
+    assert nurse.post("/api/admin/blocks", json=body).status_code == 403
+    assert scheduler.post("/api/admin/blocks", json={**body, "owner_kind": "TEAM"}).status_code == 422
+    state = owner.get("/api/state").json()
+    assert state["blocks"] == [] and state["blocks_ready"] is False

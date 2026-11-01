@@ -145,6 +145,14 @@
         <p class="sub">สูงสุด 15 รายการ · งดในวันผ่าตัด = งดวันเดียวกับที่นัด</p>
         <div class="table-scroll" id="table-cancel"></div></section>
     </div>
+    <div class="grid2" style="margin-top:16px">
+      <section class="card"><h2>การใช้บล็อกห้องผ่าตัด</h2>
+        <p class="sub">เวลาที่เคสของเจ้าของบล็อกใช้ห้องในบล็อก ÷ เวลาบล็อกทั้งหมดในช่วงนี้ (ไม่รวมเวลาทำความสะอาด)</p>
+        <div id="chart-blocks"></div></section>
+      <section class="card"><h2>รายละเอียดบล็อก</h2>
+        <p class="sub">คนอื่นใช้ = เคสของแผนก/แพทย์อื่นที่อยู่ในเวลาบล็อก (หลังเปิดให้ทุกคน หรือเคสด่วน) · คืน = วันที่เจ้าของคืนบล็อกล่วงหน้า</p>
+        <div class="table-scroll" id="table-blocks"></div></section>
+    </div>
     <section class="card" style="margin-top:16px"><h2>เวลาแต่ละช่วงของเคส</h2>
       <p class="sub">จากเวลาที่บันทึกในรายละเอียดเคส (ห้องเตรียม เข้าห้อง ลงมีด เย็บแผลเสร็จ ออกห้อง ออกจากห้องพักฟื้น) · นับเฉพาะเคสที่บันทึกครบทั้งสองขั้นของช่วงนั้น</p>
       <div class="table-scroll" id="table-stages"></div></section>
@@ -330,6 +338,18 @@
       tile('รอจัดวันใหม่ตอนนี้', fmt(r.waiting), `ยกเลิกจากรายการรอในช่วงนี้ ${fmt((r.cancellations || {}).waiting_given_up ?? r.cancelled)} · แทรกฉุกเฉิน ${fmt(r.emergencies_inserted)} · จัดตารางใหม่ ${fmt(r.replans)} · เกินเกณฑ์ความเหนื่อยล้า ${fmt(r.fatigue_overrides)} ครั้ง`),
     ].join('');
     renderCancellations(r);
+    const blocks = r.blocks || [];
+    if (!blocks.length) {
+      const why = r.blocks_ready === false ? 'ต้องรัน supabase/migrations/20261111000000_or_blocks.sql และตั้งบล็อกที่หน้าข้อมูลโรงพยาบาล'
+        : 'ยังไม่มีบล็อกห้องในช่วงนี้ (ตั้งได้ที่หน้าข้อมูลโรงพยาบาล → บล็อกห้อง)';
+      $('#chart-blocks').innerHTML = $('#table-blocks').innerHTML = `<p class="empty">${why}</p>`;
+    } else {
+      hbars('#chart-blocks', blocks.map(x => ({ label: x.owner, value: x.utilization ?? 0,
+        note: `เจ้าของใช้ ${fmt(x.own_hours, 1)} จาก ${fmt(x.hours, 1)} ชม.` })), { suffix: '%', max: 100, digits: 1 });
+      table('#table-blocks', [['เจ้าของบล็อก'], ['ครั้ง', 1], ['ชม.บล็อก', 1], ['เจ้าของใช้ (ชม.)', 1], ['อัตราใช้', 1], ['คนอื่นใช้ (ชม.)', 1], ['คืน (ครั้ง)', 1]],
+        blocks.map(x => [x.owner + (x.kind === 'SURGEON' ? ' (แพทย์)' : ''), x.blocks, fmt(x.hours, 1), fmt(x.own_hours, 1),
+          x.utilization === null ? '–' : fmt(x.utilization, 1) + '%', fmt(x.others_hours, 1), x.given_back]));
+    }
     const stages = (r.stages || []).filter(x => x.n);
     if (!stages.length) $('#table-stages').innerHTML = `<p class="empty">${r.stages_ready === false
       ? 'บันทึกได้เฉพาะเข้าห้อง/ออกห้อง จนกว่าจะรัน migration 011 · ' : ''}ยังไม่มีเคสที่บันทึกเวลาแต่ละขั้นในช่วงนี้</p>`;

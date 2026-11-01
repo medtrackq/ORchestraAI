@@ -66,9 +66,9 @@ def demo_supplies() -> list[SupplyItem]:
             for code, name, category, unit, stock in DEMO_SUPPLIES]
 
 
-def _person(staff_id, name, role, start, end, skills=(), used=24.0, more_shifts=()):
+def _person(staff_id, name, role, start, end, skills=(), used=24.0, more_shifts=(), specialty=None):
     shifts = [(hm(start), hm(end)), *more_shifts]
-    return StaffMember(staff_id, name, role, shifts, skills=skills, current_weekly_hours=used)
+    return StaffMember(staff_id, name, role, shifts, skills=skills, current_weekly_hours=used, specialty=specialty)
 
 
 def build_hospital() -> Hospital:
@@ -99,11 +99,11 @@ def build_hospital() -> Hospital:
     S, A = StaffRole.SURGEON, StaffRole.ANESTHESIOLOGIST
     SN, CN = StaffRole.SCRUB_NURSE, StaffRole.CIRCULATING_NURSE
     staff = [
-        _person("SUR-ORTHO", "Dr.Somchai (Ortho)", S, "08:00", "17:00"),
-        _person("SUR-GEN", "Dr.Napat (General)", S, "08:00", "16:00"),
-        _person("SUR-URO", "Dr.Kittipong (Uro)", S, "08:00", "17:00", {"ROBOTIC_CERTIFIED"}),
-        _person("SUR-VASC", "Dr.Pimchanok (Vascular)", S, "08:00", "17:00"),
-        _person("SUR-ONCALL", "Dr.Anan (General, on-call)", S, "08:00", "23:59"),
+        _person("SUR-ORTHO", "Dr.Somchai (Ortho)", S, "08:00", "17:00", specialty="Orthopedics"),
+        _person("SUR-GEN", "Dr.Napat (General)", S, "08:00", "16:00", specialty="General Surgery"),
+        _person("SUR-URO", "Dr.Kittipong (Uro)", S, "08:00", "17:00", {"ROBOTIC_CERTIFIED"}, specialty="Urology"),
+        _person("SUR-VASC", "Dr.Pimchanok (Vascular)", S, "08:00", "17:00", specialty="Vascular Surgery"),
+        _person("SUR-ONCALL", "Dr.Anan (General, on-call)", S, "08:00", "23:59", specialty="General Surgery"),
         _person("ANE-1", "Dr.Wanida", A, "08:00", "16:00"),
         _person("ANE-2", "Dr.Chaiwat", A, "08:00", "16:00", used=45),  # only 3 h left
         _person("ANE-3", "Dr.Ratana", A, "10:00", "18:00", {"PEDIATRIC_ANESTHESIA"}),
