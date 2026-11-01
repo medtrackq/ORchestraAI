@@ -308,6 +308,7 @@ class CaseIn(BaseModel):
     airborne: bool = False
     pending_id: str | None = Field(default=None, max_length=64)  # rebook a request waiting for a slot
     required_supplies: dict[str, int] = Field(default={}, max_length=30)  # supply code -> quantity
+    recovery_mins: int | None = Field(default=None, ge=0, le=10080)  # PACU / ICU stay; None = default
 
 
 class SlotIn(BaseModel):
@@ -473,6 +474,8 @@ class RoomIn(BaseModel):
     base_turnover_mins: int = 30
     infectious_turnover_mins: int = 60
     status: str = "AVAILABLE"
+    elective_start: str | None = Field(default=None, pattern=TIME)
+    elective_end: str | None = Field(default=None, pattern=TIME)
 
 
 class ClosureIn(BaseModel):
@@ -524,8 +527,11 @@ class EquipmentUnitIn(BaseModel):
     location: str | None = Field(default=None, max_length=100)
 
 
-def _admin(request: Request, permission: str):
-    user = _user(request, permission)
+def _admin(request: Request, *permissions: str):
+    """Signed-in user with any of ``permissions`` and the Supabase-only hospital data service."""
+    user: User = request.state.user
+    if not any(can(user.role, p) for p in permissions):
+        raise HTTPException(status_code=403, detail="บทบาทของคุณไม่มีสิทธิ์ทำรายการนี้")
     return user, _run(require_supabase, store)
 
 
@@ -600,7 +606,7 @@ def admin_delete_shifts(body: ShiftDeleteIn, request: Request) -> dict:
 
 @app.get("/api/admin/equipment")
 def admin_equipment(request: Request) -> dict:
-    _, admin = _admin(request, "hospital_view")
+    _, admin = _admin(request, "hospital_view", "equipment")
     return _run(admin.equipment)
 
 
@@ -725,3 +731,94 @@ def admin_cancel_delivery(delivery_id: str, request: Request) -> dict:
 def admin_procedure_supplies(procedure_id: str, body: ProcedureSuppliesIn, request: Request) -> dict:
     user, admin = _admin(request, "inventory")
     return _run(admin.set_procedure_supplies, procedure_id, body.model_dump(), actor=_actor(user))
+
+
+# ------------------------------------------------- equipment maintenance, beds, procedures
+
+class MaintenanceIn(BaseModel):
+    serial: str = Field(max_length=100)
+    start_date: str
+    start_time: str = Field(default="00:00", pattern=TIME)
+    end_date: str
+    end_time: str = Field(default="00:00", pattern=TIME)
+    reason: str | None = Field(default=None, max_length=200)
+
+
+class BedIn(BaseModel):
+    code: str | None = Field(default=None, max_length=20)
+    type: Literal["PACU", "ICU_SURGICAL"] = "PACU"
+    status: Literal["AVAILABLE", "CLOSED"] = "AVAILABLE"
+    note: str | None = Field(default=None, max_length=200)
+
+
+class OccupyIn(BaseModel):
+    until_date: str | None = None  # None = free now
+    until_time: str | None = Field(default=None, pattern=TIME)
+    note: str | None = Field(default=None, max_length=200)
+
+
+class ProcedureIn(BaseModel):
+    name: str = Field(max_length=200)
+    code: str | None = Field(default=None, max_length=20)
+    duration: int = Field(default=60, ge=15, le=1440)
+    caps: list[str] = Field(default=[], max_length=20)
+    icu: bool = False
+    infection: Literal["CLEAN", "CONTAMINATED", "DIRTY"] = "CLEAN"
+    recovery_mins: int | None = Field(default=None, ge=0, le=10080)
+    skills: dict[str, list[str]] = Field(default={}, max_length=4)
+
+
+@app.post("/api/admin/maintenance")
+def admin_add_maintenance(body: MaintenanceIn, request: Request) -> dict:
+    """Planned maintenance of a machine or set; reports bookings that need it then."""
+    user, admin = _admin(request, "equipment")
+    return _run(admin.add_maintenance, body.model_dump(), actor=_actor(user))
+
+
+@app.delete("/api/admin/maintenance/{maintenance_id}")
+def admin_delete_maintenance(maintenance_id: str, request: Request) -> dict:
+    user, admin = _admin(request, "equipment")
+    return _run(admin.delete_maintenance, maintenance_id, actor=_actor(user))
+
+
+@app.get("/api/admin/beds")
+def admin_beds(request: Request) -> dict:
+    _, admin = _admin(request, "hospital_view")
+    return _run(admin.beds)
+
+
+@app.post("/api/admin/beds")
+def admin_add_bed(body: BedIn, request: Request) -> dict:
+    user, admin = _admin(request, "hospital_data")
+    return _run(admin.save_bed, body.model_dump(), actor=_actor(user))
+
+
+@app.patch("/api/admin/beds/{code}")
+def admin_edit_bed(code: str, body: BedIn, request: Request) -> dict:
+    user, admin = _admin(request, "roster")
+    return _run(admin.save_bed, body.model_dump(), code=code, actor=_actor(user))
+
+
+@app.post("/api/admin/beds/{code}/occupy")
+def admin_occupy_bed(code: str, body: OccupyIn, request: Request) -> dict:
+    """A patient outside the OR schedule holds the bed until a time (or the bed is free now)."""
+    user, admin = _admin(request, "roster")
+    return _run(admin.occupy_bed, code, body.model_dump(), actor=_actor(user))
+
+
+@app.get("/api/admin/procedures")
+def admin_procedures(request: Request) -> dict:
+    _, admin = _admin(request, "hospital_view")
+    return _run(admin.procedures)
+
+
+@app.post("/api/admin/procedures")
+def admin_add_procedure(body: ProcedureIn, request: Request) -> dict:
+    user, admin = _admin(request, "hospital_data")
+    return _run(admin.save_procedure, body.model_dump(), actor=_actor(user))
+
+
+@app.patch("/api/admin/procedures/{procedure_id}")
+def admin_edit_procedure(procedure_id: str, body: ProcedureIn, request: Request) -> dict:
+    user, admin = _admin(request, "hospital_data")
+    return _run(admin.save_procedure, body.model_dump(), procedure_id=procedure_id, actor=_actor(user))

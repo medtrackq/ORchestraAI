@@ -49,6 +49,17 @@ DEFAULT_RECOVERY_MINS = {BedType.PACU: 60, BedType.ICU_SURGICAL: 24 * 60}
 UNUSABLE_ROOM_STATUSES = frozenset({"MAINTENANCE", "CLOSED", "OUT_OF_SERVICE"})
 NEGATIVE_PRESSURE = "NEGATIVE_PRESSURE"  # room type / capability for airborne-infection cases
 UNUSABLE_EQUIPMENT_STATUSES = frozenset({"MAINTENANCE"})
+UNUSABLE_BED_STATUSES = frozenset({"CLOSED"})
+
+
+def _closures(items) -> tuple[tuple[int, int, str], ...]:
+    """Planned closed periods as sorted ``(start, end, reason)``."""
+    out = []
+    for c in items:
+        a, b = int(c[0]), int(c[1])
+        if b > a:
+            out.append((a, b, str(c[2]) if len(c) > 2 and c[2] else ""))
+    return tuple(sorted(out))
 
 
 def _spans(spans) -> tuple[tuple[int, int], ...]:
@@ -63,6 +74,9 @@ class OperatingRoom:
     either ``"HYBRID"`` (a room type) or ``"ROBOTIC_READY"`` (a capability).
     ``closures`` are planned closed periods (``room_closures``: repair, deep
     cleaning): ``(start, end, reason)``; nothing may occupy the room then.
+    ``elective_start`` / ``elective_end`` are the hours ELECTIVE cases may use
+    (e.g. 08:00-17:00); URGENT and EMERGENCY cases may use the room any time
+    it is open. ``None`` = no limit.
     """
 
     or_id: str
@@ -75,16 +89,13 @@ class OperatingRoom:
     status: str = "AVAILABLE"
     blocked: tuple[tuple[int, int], ...] = ()  # held by bookings outside this horizon
     closures: tuple[tuple[int, int, str], ...] = ()
+    elective_start: int | None = None
+    elective_end: int | None = None
 
     def __post_init__(self) -> None:
         self.capabilities = frozenset(self.capabilities)
         self.blocked = _spans(self.blocked)
-        spans = []
-        for c in self.closures:
-            a, b = int(c[0]), int(c[1])
-            if b > a:
-                spans.append((a, b, str(c[2]) if len(c) > 2 and c[2] else ""))
-        self.closures = tuple(sorted(spans))
+        self.closures = _closures(self.closures)
 
     @property
     def all_capabilities(self) -> frozenset[str]:
@@ -108,6 +119,17 @@ class OperatingRoom:
 
     def close(self, horizon_mins: int) -> int:
         return horizon_mins if self.close_min is None else self.close_min
+
+    def hours_for(self, case: "SurgeryCase", horizon_mins: int) -> tuple[int, int]:
+        """When ``case`` may run in this room: opening hours, narrowed to the
+        elective hours for ELECTIVE cases."""
+        start, end = self.open_min, self.close(horizon_mins)
+        if case.urgency is Urgency.ELECTIVE:
+            if self.elective_start is not None:
+                start = max(start, self.elective_start)
+            if self.elective_end is not None:
+                end = min(end, self.elective_end)
+        return start, end
 
 
 @dataclass
@@ -180,9 +202,15 @@ class EquipmentUnit:
     status: str = "AVAILABLE"
     name: str | None = None
     blocked: tuple[tuple[int, int], ...] = ()  # in use / in CSSD for bookings outside this horizon
+    closures: tuple[tuple[int, int, str], ...] = ()  # planned maintenance (start, end, reason)
 
     def __post_init__(self) -> None:
         self.blocked = _spans(self.blocked)
+        self.closures = _closures(self.closures)
+
+    def closed_at(self, start: int, end: int) -> tuple[int, int, str] | None:
+        """Planned maintenance overlapping ``[start, end)``, if any."""
+        return next((c for c in self.closures if c[0] < end and start < c[1]), None)
 
     @property
     def reprocess_mins(self) -> int:
@@ -226,11 +254,16 @@ class RecoveryBed:
 
     bed_id: str
     bed_type: str = BedType.PACU
-    available_from: int = 0
+    available_from: int = 0  # occupied (e.g. by a ward patient) until then
     blocked: tuple[tuple[int, int], ...] = ()  # reserved by bookings outside this horizon
+    status: str = "AVAILABLE"  # CLOSED = not in use
 
     def __post_init__(self) -> None:
         self.blocked = _spans(self.blocked)
+
+    @property
+    def is_usable(self) -> bool:
+        return self.status not in UNUSABLE_BED_STATUSES
 
 
 @dataclass

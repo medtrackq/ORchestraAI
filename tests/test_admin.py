@@ -287,3 +287,110 @@ def test_app_works_before_migration_006(db_url):
     from app.admin_store import Inventory
 
     assert Inventory(store).inventory()["ready"] is False
+
+
+# ------------------------------------------------ OR Facility and Equipment & CSSD agents
+
+def test_elective_hours_per_room(admin, store):
+    for room in admin.rooms()["rooms"]:
+        admin.save_room({**room, "elective_start": "08:00", "elective_end": "12:00"}, code=room["code"])
+    assert admin.rooms()["rooms"][0]["elective_start"] == "08:00"
+    day = _tomorrow(store)
+    state = store.state(day)
+    assert state["options"]["rooms"][0]["elective"] == [8 * 60, 12 * 60]
+    data = _request(state, "Dr.Napat", "Laparoscopic cholecystectomy", "HN-H1")
+    check = store.slot_check(data, "13:00", commit=False, day=day)
+    facility = next(v for v in check["verdicts"] if v["agent"] == "OR Facility Agent")
+    assert not facility["ok"] and "elective hours are 08:00-12:00" in facility["items"][0]["note"]
+    assert "elective hours" in check["result"]["unscheduled"][-1]["reasons"][0]
+    assert store.slot_check({**data, "urgency": "URGENT"}, "13:00", commit=True, day=day)["booked"]
+
+
+def test_planned_equipment_maintenance(admin, store):
+    day = _tomorrow(store)
+    result = admin.add_maintenance({"serial": "DV-01", "start_date": day, "start_time": "07:00", "end_date": day,
+                                    "end_time": "13:00", "reason": "PM ประจำปี"}, actor=ADMIN)
+    assert result["affected"] == []
+    assert admin.equipment()["maintenance"][0]["reason"] == "PM ประจำปี"
+    data = _request(store.state(day), "Dr.Kittipong", "Robotic partial nephrectomy", "HN-M1",
+                    required_supplies={})
+    check = store.slot_check(data, "09:00", commit=False, day=day)
+    equipment = next(v for v in check["verdicts"] if v["agent"] == "Equipment & CSSD Agent")
+    assert any("planned maintenance 07:00-13:00 (PM ประจำปี)" in i["note"] for i in equipment["items"])
+    today = store.db.today().isoformat()
+    clash = admin.add_maintenance({"serial": "DV-01", "start_date": today, "end_date": today, "start_time": "00:00",
+                                   "end_time": "23:59", "reason": "เสีย"})  # today's robotic cases need it
+    assert clash["affected"][0]["date"] == today and "planned maintenance" in clash["affected"][0]["problems"][0]
+    admin.delete_maintenance(clash["id"])
+    assert store.state()["warnings"] == []
+
+
+def test_recovery_beds_are_managed(admin, store):
+    day = _tomorrow(store)
+    for bed in ("ICU-1", "ICU-2"):
+        admin.occupy_bed(bed, {"until_date": day, "until_time": "23:00", "note": "ผู้ป่วยอายุรกรรม"})
+    data = _request(store.state(day), "Dr.Pimchanok", "Femoral-popliteal bypass", "HN-B1", required_supplies={})
+    check = store.slot_check(data, "08:00", commit=False, day=day)
+    assert "ICU_SURGICAL bed" in check["result"]["unscheduled"][-1]["reasons"][0]
+    beds = {b["code"]: b for b in admin.beds()["beds"]}
+    assert beds["ICU-1"]["occupied_until"] == f"{day} 23:00"
+    admin.occupy_bed("ICU-2", {})  # free now
+    admin.save_bed({"code": "ICU-3", "type": "ICU_SURGICAL"})
+    admin.save_bed({"type": "ICU_SURGICAL", "status": "CLOSED", "note": "ปิดปรับปรุง"}, code="ICU-3")
+    assert store.slot_check(data, "08:00", commit=True, day=day)["booked"]
+    state = store.state(day)
+    [b] = state["schedule"]["bookings"]
+    assert b["bed_id"] == "ICU-2"
+    closed = next(x for x in state["beds"] if x["id"] == "ICU-3")
+    assert closed["status"] == "CLOSED" and not closed["usable"]
+
+
+def test_procedures_and_recovery_time(admin, store):
+    from app.store import StoreError
+
+    made = admin.save_procedure({"name": "Thyroidectomy", "code": "06.4", "duration": 150, "caps": ["laminar_flow"],
+                                 "infection": "CLEAN", "recovery_mins": 120,
+                                 "skills": {"SCRUB_NURSE": ["head_neck"]}})
+    proc = next(p for p in admin.procedures()["procedures"] if p["id"] == made["id"])
+    assert (proc["recovery_mins"], proc["caps"], proc["skills"]) == (120, ["LAMINAR_FLOW"], {"SCRUB_NURSE": ["HEAD_NECK"]})
+    with pytest.raises(StoreError, match="06.4"):
+        admin.save_procedure({"name": "Other", "code": "06.4"})
+    admin.save_procedure({**proc, "skills": {}}, procedure_id=made["id"])
+    day = _tomorrow(store)
+    state = store.state(day)
+    assert next(p for p in state["options"]["procedures"] if p["id"] == made["id"])["recovery_mins"] == 120
+    surgeon = next(s["id"] for s in state["options"]["surgeons"] if s["name"].startswith("Dr.Napat"))
+    data = {"procedure": "Thyroidectomy", "procedure_id": made["id"], "patient_hn": "HN-T9", "patient_name": "T",
+            "surgeon_id": surgeon, "duration_mins": 150, "required_capabilities": ["LAMINAR_FLOW"],
+            "recovery_mins": 120}
+    assert store.slot_check(data, "09:00", commit=True, day=day)["booked"]
+    [b] = store.state(day)["schedule"]["bookings"]  # read back from the database
+    assert b["recovery_end_min"] - b["recovery_start_min"] == 120
+
+
+def test_cssd_queue_is_in_the_state(store):
+    jobs = store.state()["cssd"]
+    assert jobs and {"unit_id", "ready", "next_case", "slack_mins", "level"} <= set(jobs[0])
+    assert all(j["reprocess_mins"] > 0 for j in jobs)
+
+
+def test_app_works_before_migration_007(db_url):
+    import psycopg
+
+    from app.db_store import DatabaseStore
+
+    with psycopg.connect(db_url, autocommit=True) as conn:
+        conn.execute("DROP TABLE equipment_maintenance")
+        conn.execute("ALTER TABLE operating_rooms DROP COLUMN elective_start, DROP COLUMN elective_end")
+        conn.execute("ALTER TABLE recovery_beds DROP COLUMN status, DROP COLUMN note")
+        conn.execute("ALTER TABLE procedures DROP COLUMN recovery_mins")
+    store = DatabaseStore(db_url, workers=2, time_limit_s=10)
+    store.seed_demo()
+    state = store.state()
+    assert len(state["schedule"]["bookings"]) == 10 and state["warnings"] == [] and state["rls_off"] == []
+    from app.admin_store import Inventory
+
+    admin = Inventory(store)
+    assert admin.equipment()["maintenance_ready"] is False and admin.beds()["status_ready"] is False
+    room = admin.rooms()["rooms"][0]
+    admin.save_room({**room, "elective_start": "08:00", "elective_end": "16:00"}, code=room["code"])  # ignored

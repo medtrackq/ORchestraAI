@@ -18,6 +18,7 @@ from orchestra_engine import (
     StaffRole,
     SurgeryCase,
     Urgency,
+    cssd_queue,
     fatigue_issues,
     fmt,
     hm,
@@ -87,12 +88,26 @@ SKILL = re.compile(r"^[A-Z][A-Z0-9_]{1,49}$")
 
 
 def room_options(hospital: Hospital) -> list[dict]:
-    """Rooms for the schedule view: type, capabilities, status and planned closures."""
+    """Rooms for the schedule view: type, capabilities, status, elective hours and planned closures."""
     return [
         {"id": r.or_id, "type": r.room_type, "caps": sorted(r.capabilities), "status": r.status,
-         "usable": r.is_usable, "closures": [{"start_min": a, "end_min": b, "reason": why} for a, b, why in r.closures]}
+         "usable": r.is_usable, "closures": [{"start_min": a, "end_min": b, "reason": why} for a, b, why in r.closures],
+         "elective": [r.elective_start, r.elective_end] if r.elective_start is not None or r.elective_end is not None
+         else None}
         for r in hospital.rooms
     ]
+
+
+def facility_view(hospital: Hospital, result: ScheduleResult) -> dict:
+    """Equipment & CSSD work queue and recovery beds for this day."""
+    return {
+        "cssd": cssd_queue(result.assignments, hospital.equipments, now_min=result.now_min),
+        "beds": [{"id": b.bed_id, "type": b.bed_type, "status": b.status, "usable": b.is_usable,
+                  "occupied_until": fmt(b.available_from) if b.available_from > result.now_min else None,
+                  "reserved": sorted([(a.recovery_start_min, a.recovery_end_min, a.case_id)
+                                      for a in result.assignments.values() if a.bed_id == b.bed_id])}
+                 for b in hospital.beds],
+    }
 
 
 def supply_options(hospital: Hospital, result: ScheduleResult) -> list[dict]:
@@ -172,6 +187,9 @@ def build_case(hospital: Hospital, data: dict, case_id: str, *, release: int = 0
         if not 0 <= int(qty) <= 50:
             raise StoreError(f"จำนวน {code} ต้องอยู่ระหว่าง 0-50")
         supplies[code] = int(qty)
+    recovery = data.get("recovery_mins")
+    if recovery is not None and not 0 <= int(recovery) <= 10080:
+        raise StoreError("เวลาพักฟื้นต้องอยู่ระหว่าง 0-10080 นาที (7 วัน)")
     return SurgeryCase(
         case_id, data["patient_hn"], data["procedure"], surgeon.staff_id, int(data["duration_mins"]),
         urgency=Urgency(data.get("urgency") or "ELECTIVE"),
@@ -183,6 +201,7 @@ def build_case(hospital: Hospital, data: dict, case_id: str, *, release: int = 0
         requires_icu_post_op=bool(data.get("requires_icu_post_op")),
         airborne=bool(data.get("airborne")),
         required_supplies=supplies,
+        recovery_mins=None if recovery is None else int(recovery),
         release_min=release,
         patient_name=(data.get("patient_name") or "").strip() or None,
     )
@@ -278,6 +297,7 @@ class ScheduleStore:
             "activity": [a.__dict__ for a in reversed(self.activity[-30:])],
             "pending": self.pending_rows(),
             **fatigue_view(self.hospital, self.result),
+            **facility_view(self.hospital, self.result),
         }
 
     # ------------------------------------------------------------- writes

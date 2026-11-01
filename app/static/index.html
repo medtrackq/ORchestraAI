@@ -123,6 +123,10 @@
   .activity-item .kind { font-size: .7rem; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); }
   .unsched { margin-top: 14px; }
   .unsched li { font-size: .82rem; margin-bottom: 4px; }
+  .cssd-job { border-left: 4px solid var(--border); }
+  .cssd-job.late { border-left-color: var(--bad); background: var(--bad-soft); }
+  .cssd-job.tight { border-left-color: var(--warn); background: var(--warn-soft); }
+  .cssd-job.ok { border-left-color: var(--ok); }
   .supply-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: .82rem; color: var(--text); padding: 3px 0; }
   .supply-row span { flex: 1 1 160px; min-width: 0; }
   .supply-row input { width: 64px !important; flex: 0 0 64px; }
@@ -304,7 +308,13 @@
     </section>
 
     <section data-panel="equip" hidden>
-      <p class="hint">Equipment &amp; Inventory Agent: อัปเดตสถานะเครื่องมือและเวลาที่อบฆ่าเชื้อเสร็จ ระบบใช้เวลานี้ตอนจัดตาราง</p>
+      <h3 style="margin-top:0">คิว CSSD วันนี้</h3>
+      <p class="hint">Equipment &amp; CSSD Agent: ชุดไหนกลับจากห้องผ่าตัดเมื่อไร ต้องอบเสร็จกี่โมง และเคสถัดไปที่ต้องใช้ เรียงจากเร่งที่สุด
+        · ถ้าอบช้ากว่าแผน ใส่เวลาพร้อมจริง ระบบจะบอกเคสที่กระทบ</p>
+      <div id="cssd-result"></div>
+      <div id="cssd-queue" class="rows"></div>
+      <h3>เครื่องมือทั้งหมด</h3>
+      <p class="hint">อัปเดตสถานะเครื่องมือและเวลาที่อบฆ่าเชื้อเสร็จ ระบบใช้เวลานี้ตอนจัดตาราง</p>
       <div id="equip-list" class="rows"></div>
     </section>
 
@@ -463,6 +473,8 @@
         </label>
         <fieldset><legend>อื่น ๆ</legend><div class="checks">
           <label><input type="checkbox" name="icu" ${kind === 'er' ? 'checked' : ''}>ต้องการ ICU</label>
+          <label style="flex-wrap:wrap" title="เวลาที่ต้องจองเตียง PACU/ICU หลังผ่าตัด (เว้นว่าง = PACU 60 นาที, ICU 24 ชม.)">พักฟื้น
+            <input type="number" name="recovery_mins" min="0" max="10080" step="15" placeholder="ค่ามาตรฐาน" style="width:110px"> นาที</label>
           <label title="เช่น วัณโรค หัด อีสุกอีใส โควิด: ต้องใช้ห้องความดันลบ"><input type="checkbox" name="airborne">ติดเชื้อทางอากาศ (ห้องความดันลบ)</label>
         </div></fieldset>
       </div>`;
@@ -545,6 +557,7 @@
     form.elements['infection_risk'].value = p.infection;
     renderSkills(form, p.skills || {});
     renderSupplies(form, p.supplies || {});
+    form.elements['recovery_mins'].value = p.recovery_mins ?? '';
     if (card) form.dataset.roles = JSON.stringify(card.roles);
     delete form.dataset.durationTouched;
     updatePrediction(form);
@@ -591,6 +604,7 @@
       required_staff_skills: skills,
       airborne: f.get('airborne') === 'on',
       required_supplies: readSupplies(form),
+      recovery_mins: f.get('recovery_mins') === '' || f.get('recovery_mins') === null ? null : Number(f.get('recovery_mins')),
       pending_id: REBOOK && form.dataset.pending === REBOOK.id ? REBOOK.id : null,
       patient_name: (f.get('patient_name') || '').trim() || null,
       procedure_id: f.get('procedure_id') || null,
@@ -622,6 +636,7 @@
     renderOverrunOptions();
     renderActivity();
     renderStaff();
+    renderCssd();
     if (selected) showDetail(selected);
   }
 
@@ -659,7 +674,7 @@
     }).join('');
     const now = nowMin ? `<div class="g-now" style="left:${pct(nowMin)}"></div>` : '';
     $('#gantt').innerHTML = `
-      <div class="g-labels">${rooms.map(r => `<div class="g-label${r.usable === false ? ' off' : ''}" title="${esc(r.caps.join(', '))}">${esc(r.id)}<small>${esc(r.usable === false ? ROOM_STATUS_TH[r.status] || r.status : ROOM_TYPE_TH[r.type] || r.type)}</small></div>`).join('')}</div>
+      <div class="g-labels">${rooms.map(r => `<div class="g-label${r.usable === false ? ' off' : ''}" title="${esc(r.caps.join(', ') + (r.elective ? ' · elective ' + hhmm(r.elective[0] ?? 0) + '-' + hhmm(r.elective[1] ?? 1440) : ''))}">${esc(r.id)}<small>${esc(r.usable === false ? ROOM_STATUS_TH[r.status] || r.status : ROOM_TYPE_TH[r.type] || r.type)}</small></div>`).join('')}</div>
       <div><div class="g-axis">${axis}</div><div class="g-canvas" style="height:${rooms.length * ROW}px">${ticks}${rows}${closed}${blocks}${now}</div></div>`;
     document.querySelectorAll('.g-block').forEach(b => b.addEventListener('click', () => { selected = b.dataset.case; renderGantt(); showDetail(selected); }));
   }
@@ -1018,6 +1033,44 @@
     const n = ++equipmentRequest;
     const data = await api('/api/equipment');
     if (n === equipmentRequest) renderEquipment(data.units);
+  }
+
+  // Equipment & CSSD Agent: reprocessing jobs, least slack first.
+  const CSSD_STATE = { in_case: 'ยังอยู่ในห้องผ่าตัด', processing: 'กำลังล้าง/อบ', ready: 'พร้อมแล้ว' };
+  function renderCssd() {
+    const jobs = STATE.cssd || [];
+    const edit = can('equipment');
+    const card = j => {
+      const next = j.next_case ? `ใช้ต่อ <b>${esc(j.next_case)}</b> (${esc(j.next_room)}) ${hhmm(j.next_start_min)}` : 'ไม่มีเคสใช้ต่อวันนี้';
+      const slack = j.slack_mins === null ? '' : j.slack_mins < 0 ? ` · <b>ไม่ทัน ${-j.slack_mins} นาที</b>` : ` · เผื่อ ${j.slack_mins} นาที`;
+      return `<div class="row-item cssd-job ${esc(j.level)}" data-unit="${esc(j.unit_id)}">
+        <div class="title"><b>${esc(j.unit_id)}</b><small>${esc(j.type)} · ${esc(CSSD_STATE[j.state] || j.state)}</small></div>
+        <div>${j.from_case ? `กลับจาก <b>${esc(j.from_case)}</b> (${esc(j.from_room)}) ${hhmm(j.back_min)} → ` : 'อยู่ที่ CSSD → '}
+          พร้อม <b>${esc(j.ready)}</b>${j.reported ? ' (CSSD แจ้ง)' : ''} → ${next}${slack}</div>
+        ${edit && j.state !== 'ready' ? `<details><summary>อัปเดตเวลาพร้อม (อบ ${j.reprocess_mins} นาที)</summary><div class="line" style="margin-top:6px">
+          <label style="flex:0 1 150px">พร้อมใช้จริงเวลา<input type="time" name="ready" value="${esc(j.ready.slice(0, 5))}"></label>
+          <button class="btn primary" type="button" data-act="ready-at">บันทึก</button>
+          <button class="btn" type="button" data-act="ready-now">อบเสร็จแล้ว</button></div></details>` : ''}
+      </div>`;
+    };
+    const needed = jobs.filter(j => j.level !== 'free'), spare = jobs.filter(j => j.level === 'free');
+    $('#cssd-queue').innerHTML = (needed.map(card).join('') || '<p class="hint">ไม่มีชุดที่ต้องรีบอบให้ทันเคสถัดไปวันนี้</p>')
+      + (spare.length ? `<details><summary>อีก ${spare.length} ชุดไม่มีเคสใช้ต่อวันนี้</summary><div class="rows" style="margin-top:8px">${spare.map(card).join('')}</div></details>` : '');
+    $('#cssd-queue').querySelectorAll('[data-act]').forEach(b => b.addEventListener('click', () => {
+      const row = b.closest('.row-item');
+      const body = b.dataset.act === 'ready-now' ? { status: 'AVAILABLE', ready_at: null }
+        : { status: 'STERILIZING', ready_at: row.querySelector('[name="ready"]').value };
+      busy(b, async () => {
+        const data = await api('/api/equipment/' + encodeURIComponent(row.dataset.unit), body, 'PATCH');
+        STATE = data.state; render();
+        renderEquipment(data.units);
+        const hit = data.result.warnings;
+        $('#cssd-result').innerHTML = hit.length ? `<div class="fatigue-box"><b>⚠ ${esc(row.dataset.unit)} ไม่ทันเคสที่จองไว้</b><ul>${hit.map(w => '<li>' + esc(w) + '</li>').join('')}</ul>
+          ${can('roster') ? '<button class="btn primary" type="button" id="cssd-replan">จัดตารางวันนี้ใหม่</button>' : 'แจ้งผู้จัดตารางให้จัดตารางใหม่'}</div>`
+          : `<p class="hint">✓ บันทึก ${esc(row.dataset.unit)} แล้ว ไม่กระทบเคสที่จองไว้</p>`;
+        $('#cssd-replan')?.addEventListener('click', e => busy(e.target, async () => { await replanDay(); $('#cssd-result').innerHTML = ''; }));
+      });
+    }));
   }
 
   function renderEquipment(units) {
