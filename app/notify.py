@@ -482,8 +482,9 @@ def build_messages(event: dict, users: list) -> list[Message]:
                     for u in users if u.role in KIND_ROLES["his"]]
     elif event["type"] == "system_error":
         where = {"server": "เซิร์ฟเวอร์", "browser": "หน้าเว็บ", "job": "งานเบื้องหลัง"}.get(event.get("source"), "ระบบ")
-        out += [Message(u.user_id, "feedback", "ระบบมีข้อผิดพลาดใหม่", [f"{where}: {event.get('where', '-')}",
-                                                                      "ดูรายละเอียดที่หน้า ⚙ สถานะระบบ"], "/status#errors")
+        # A browser error's text comes from the page (anyone signed in can send one): not in the push.
+        place = f"{where}: {event.get('where', '-')}" if event.get("source") != "browser" else where
+        out += [Message(u.user_id, "feedback", "ระบบมีข้อผิดพลาดใหม่", [place, "ดูรายละเอียดที่หน้า ⚙ สถานะระบบ"], "/status#errors")
                 for u in users if u.role in KIND_ROLES["feedback"]]
     return out
 

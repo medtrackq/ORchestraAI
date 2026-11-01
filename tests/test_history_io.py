@@ -145,6 +145,19 @@ def test_csv_and_other_headers(store):
     assert out["ready"] == 1 and out["error_count"] == 0
     with pytest.raises(StoreError, match="ไม่พบหัวตาราง"):
         hx.import_history(Inventory(store), "x.csv", b"a,b\n1,2\n", commit=False)
+    too_long = ("Date,Surgeon,Operation,Duration\n" + f"{day.isoformat()},SUR-GEN,Lap,70\n" * 5100).encode()
+    with pytest.raises(StoreError, match="เกิน 5000 แถว"):
+        hx.import_history(Inventory(store), "big.csv", too_long, commit=False)  # not cut off without a word
+    named = hx.import_history(Inventory(store), "ประวัติ นายสมชาย ใจดี HN 1234567.csv", csv, commit=False)
+    assert "สมชาย" not in named["filename"] and "1234567" not in named["filename"]
+
+
+def test_bracketed_text_is_removed_in_linear_time():
+    import time
+
+    started = time.perf_counter()
+    assert hx._norm("Lap. chole (LC)") == "lapchole" and len(hx._person("(" * 60000)) <= 200
+    assert time.perf_counter() - started < 0.5
 
 
 @needs_db

@@ -23,17 +23,21 @@ from __future__ import annotations
 
 import base64
 import binascii
+import json
 import logging
 import re
 import os
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
+import psycopg
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.concurrency import run_in_threadpool
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -91,6 +95,7 @@ async def _lifespan(_app):
 
 
 app = FastAPI(title="ORchestraAI", docs_url="/api/docs", redoc_url=None, openapi_url="/api/openapi.json",
+              redirect_slashes=False,  # no "/x/" -> "http://.../x" hop (an API key could follow it unencrypted)
               lifespan=_lifespan)
 
 PUBLIC = {"/login", "/help", "/api/login", "/api/health", "/api/line/webhook", "/sw.js", "/feedback.js", "/manifest.webmanifest",
@@ -121,6 +126,62 @@ def _address(request: Request) -> str:
 
 
 MAX_BODY = 12 * 1024 * 1024  # an Excel upload (5 MB) as base64 JSON fits; anything bigger is refused unread
+# Smaller limits where no file is sent (the HIS: 200 requests fit in well under 1 MB).
+BODY_LIMITS = ((HIS_PREFIX, 1024 * 1024), ("/api/feedback", 64 * 1024), ("/api/client-errors", 64 * 1024),
+               ("/api/login", 16 * 1024), ("/api/line/webhook", 256 * 1024))
+TOO_LARGE = "ข้อมูลที่ส่งมาใหญ่เกินไป"
+
+
+def _body_limit(path: str) -> int:
+    return next((limit for prefix, limit in BODY_LIMITS if path.startswith(prefix)), MAX_BODY)
+
+
+class BodyLimit:
+    """Bodies over the limit for their path are refused: by Content-Length before anything is read, and
+    while reading when no length is given (chunked), so no more than the limit is ever read."""
+
+    def __init__(self, app) -> None:
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        limit = _body_limit(scope["path"])
+        length = next((v for k, v in scope["headers"] if k == b"content-length"), None)
+        if length is not None:
+            try:
+                too_big = int(length) > limit
+            except ValueError:
+                too_big = True
+            if too_big:
+                return await JSONResponse({"detail": TOO_LARGE}, status_code=413)(scope, receive, send)
+            return await self.app(scope, receive, send)
+        seen, over, replied = 0, False, False
+
+        async def counted():
+            nonlocal seen, over
+            if over:
+                return {"type": "http.disconnect"}
+            message = await receive()
+            if message["type"] == "http.request":
+                seen += len(message.get("body", b""))
+                if seen > limit:  # stop reading: to the app the client has gone (nothing is run)
+                    over = True
+                    return {"type": "http.disconnect"}
+            return message
+
+        async def answer(message):
+            nonlocal replied
+            if not over:
+                return await send(message)
+            if not replied:  # whatever the app answered to the cut-off body, the caller is told why
+                replied = True
+                body = json.dumps({"detail": TOO_LARGE}, ensure_ascii=False).encode()
+                await send({"type": "http.response.start", "status": 413,
+                            "headers": [(b"content-type", b"application/json"), (b"content-length", str(len(body)).encode())]})
+                await send({"type": "http.response.body", "body": body})
+
+        return await self.app(scope, counted, answer)
 # The pages use inline scripts and styles and Google Fonts only; nothing may load from elsewhere or frame them.
 CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' "
        "https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; "
@@ -130,20 +191,19 @@ CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 
 
 @app.middleware("http")
 async def sessions(request: Request, call_next):
-    path = request.url.path
-    try:
-        size = int(request.headers.get("content-length") or 0)
-    except ValueError:
-        size = 0
-    if size > MAX_BODY:
-        return JSONResponse({"detail": "ข้อมูลที่ส่งมาใหญ่เกินไป"}, status_code=413)
-    if _open_mode():
-        user = User("dev", "dev", "โหมดพัฒนา (ไม่มีรหัสผ่าน)", "admin")
-    else:
-        user = await run_in_threadpool(accounts.user_from_token, request.cookies.get(COOKIE))
-    request.state.user = user
-
+    path = request.scope["path"]  # exactly what the router matches (request.url also folds in the Host header)
     machine = path.startswith(HIS_PREFIX)  # the HIS signs in with its API key in each call, not a session
+    if machine:
+        request.state.user = None
+        denied = await run_in_threadpool(_his_gate, request)  # before the body is read or parsed
+        if denied is not None:
+            return denied
+    elif _open_mode():
+        request.state.user = User("dev", "dev", "โหมดพัฒนา (ไม่มีรหัสผ่าน)", "admin")
+    else:
+        request.state.user = await run_in_threadpool(accounts.user_from_token, request.cookies.get(COOKIE))
+    user = request.state.user
+
     if path not in PUBLIC and not machine:
         if user is None:
             if path.startswith("/api/"):
@@ -157,7 +217,11 @@ async def sessions(request: Request, call_next):
         if not request.headers.get("content-type", "").startswith("application/json"):
             return JSONResponse({"detail": "ต้องส่งข้อมูลแบบ JSON"}, status_code=415)
         origin = request.headers.get("origin")
-        if origin and urlparse(origin).netloc != request.headers.get("host"):
+        try:
+            foreign = bool(origin) and urlparse(origin).netloc != request.headers.get("host")
+        except ValueError:  # a malformed Origin is never this site
+            foreign = True
+        if foreign:
             return JSONResponse({"detail": "คำขอมาจากเว็บไซต์อื่น"}, status_code=403)
 
     response = await call_next(request)
@@ -171,6 +235,16 @@ async def sessions(request: Request, call_next):
     if _https(request):
         response.headers["Strict-Transport-Security"] = "max-age=31536000"
     return response
+
+
+app.add_middleware(BodyLimit)  # added last, so it runs first (before the session lookup)
+
+
+@app.exception_handler(RequestValidationError)
+async def invalid_request(request: Request, exc: RequestValidationError) -> JSONResponse:
+    """Which fields are wrong, without sending what was sent back (it may be large, or hold patient data)."""
+    errors = [{"loc": list(e.get("loc", ())), "msg": e.get("msg", ""), "type": e.get("type", "")} for e in exc.errors()[:20]]
+    return JSONResponse({"detail": errors}, status_code=422)
 
 
 def _user(request: Request, permission: str = "view") -> User:
@@ -208,7 +282,8 @@ def _shape(state: dict, user: User) -> dict:
     schedule = dict(state["schedule"])
     if not patients:
         schedule["bookings"] = [{**b, "patient_hn": "•••", "patient_name": None} for b in schedule["bookings"]]
-        state["pending"] = [{**p, "patient_hn": "•••", "patient_name": None} for p in state.get("pending", [])]
+        state["pending"] = [{**p, "patient_hn": "•••", "patient_name": None, "his_ref": None}  # the HIS number finds the patient too
+                            for p in state.get("pending", [])]
         # checklist notes may hold clinical details: these roles see the status only
         hide = lambda r: {**r, "items": {k: {**i, "note": None} for k, i in r["items"].items()}}  # noqa: E731
         state["readiness"] = {cid: hide(r) for cid, r in state.get("readiness", {}).items()}
@@ -511,13 +586,31 @@ def slot_check(body: SlotIn, request: Request, date: str | None = None) -> dict:
     return _run(store.slot_check, body.case.model_dump(), body.start, commit=False, day=date, actor=_actor(user))
 
 
+SEARCHES = threading.BoundedSemaphore(3)  # a search may take ~40 s and holds a connection and a worker thread
+_searching: set[str] = set()
+_searching_lock = threading.Lock()
+
+
 @app.post("/api/slot-search")
 def slot_search(body: SearchIn, request: Request, date: str | None = None) -> dict:
     """The first free days (up to 3) within ``days`` from ``date``; nothing is booked."""
     user = _user(request, "book")
     _own_case(user, body.case)
-    return _run(store.find_slots, body.case.model_dump(), body.start, day=date, days=body.days,
-                skip_weekends=body.skip_weekends, actor=_actor(user))
+    with _searching_lock:  # one search at a time per person
+        if user.username in _searching:
+            raise HTTPException(status_code=429, detail="กำลังค้นหาวันว่างอยู่ รอผลการค้นหาก่อน")
+        _searching.add(user.username)
+    try:
+        if not SEARCHES.acquire(timeout=10):
+            raise HTTPException(status_code=429, detail="มีการค้นหาวันว่างหลายรายการพร้อมกัน กรุณาลองใหม่ในอีกสักครู่")
+        try:
+            return _run(store.find_slots, body.case.model_dump(), body.start, day=date, days=body.days,
+                        skip_weekends=body.skip_weekends, actor=_actor(user))
+        finally:
+            SEARCHES.release()
+    finally:
+        with _searching_lock:
+            _searching.discard(user.username)
 
 
 @app.post("/api/waitlist")
@@ -1454,39 +1547,52 @@ class HisBatchIn(BaseModel):
     requests: list[HisRequestIn] = Field(min_length=1, max_length=his_mod.BATCH_MAX)
 
 
-def _his_client(request: Request, scope: str) -> his_mod.Client:
-    raw = request.headers.get("authorization") or request.headers.get("x-api-key")
+def _his_key(request: Request) -> str | None:
+    bearer = request.headers.get("authorization") or ""
+    if bearer.lower().startswith("bearer " + his_mod.KEY_PREFIX):
+        return bearer
+    return request.headers.get("x-api-key") or bearer or None
+
+
+def _his_gate(request: Request) -> JSONResponse | None:
+    """Every call under the HIS prefix: the key is checked (and counted) before the body is read, so
+    nobody without a key can make the server read or parse anything."""
     try:
-        return his.authenticate(raw, scope)
+        request.state.his_client = his.authenticate(_his_key(request), None, _address(request))
     except his_mod.HisAuthError as exc:
-        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
-    except his_mod.HisUnavailable as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return JSONResponse({"detail": str(exc)}, status_code=exc.status)
+    except StoreError as exc:  # HisUnavailable, or the database cannot be reached
+        return JSONResponse({"detail": str(exc)}, status_code=503)
+    return None
+
+
+def _his_client(request: Request, scope: str) -> his_mod.Client:
+    client = getattr(request.state, "his_client", None)
+    if client is None:  # never: the middleware checked the key
+        raise HTTPException(status_code=401, detail="ต้องส่ง API key")
+    if scope not in client.scopes:
+        raise HTTPException(status_code=403, detail=f"key นี้ไม่มีสิทธิ์ {scope}")
+    return client
 
 
 def _his_run(fn, *args, **kwargs):
     try:
         return fn(*args, **kwargs)
+    except his_mod.HisAuthError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
     except his_mod.HisUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except StoreError as exc:
         raise HTTPException(status_code=404 if "ไม่พบ" in str(exc) else 400, detail=str(exc)) from exc
+    except psycopg.DataError as exc:  # a value the database cannot store as given
+        raise HTTPException(status_code=400, detail="ข้อมูลบางช่องไม่ถูกต้อง (อักขระหรือความยาว)") from exc
 
 
 @app.get("/api/his/v1/ping", tags=["HIS"])
 def his_ping(request: Request) -> dict:
     """Check the key and the connection (any scope)."""
-    raw = request.headers.get("authorization") or request.headers.get("x-api-key")
-    for scope in his_mod.SCOPES:
-        try:
-            client = his.authenticate(raw, scope)
-            return {"ok": True, "key": client.name, "scopes": list(client.scopes)}
-        except his_mod.HisAuthError as exc:
-            if exc.status != 403:
-                raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
-        except his_mod.HisUnavailable as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
-    raise HTTPException(status_code=403, detail="key นี้ไม่มีสิทธิ์ใดเลย")
+    client = _his_client(request, next(iter(request.state.his_client.scopes), ""))
+    return {"ok": True, "key": client.name, "scopes": list(client.scopes)}
 
 
 @app.post("/api/his/v1/surgery-requests", tags=["HIS"])
@@ -1500,7 +1606,21 @@ def his_request(body: HisRequestIn, request: Request) -> dict:
 def his_batch(body: HisBatchIn, request: Request) -> dict:
     """Up to 200 requests at once (each is applied on its own)."""
     client = _his_client(request, "requests:write")
-    return {"results": [_his_run(his.receive, r.model_dump(), client=client) for r in body.requests]}
+    _his_run(his.charge, client, len(body.requests) - 1)  # the volume limit counts requests, not calls
+    results = []
+    for item in body.requests:  # one failing request does not stop the rest
+        try:
+            results.append(_his_run(his.receive, item.model_dump(), client=client))
+        except HTTPException as exc:
+            if exc.status_code == 503:
+                raise
+            results.append({"his_ref": item.his_ref, "status": "REJECTED", "status_label": his_mod.STATUS_TH["REJECTED"],
+                            "detail": exc.detail})
+        except Exception as exc:  # recorded for the admin; the HIS may send this one again later
+            feedback.record_error("server", "POST /api/his/v1/surgery-requests/batch", fb.describe(exc))
+            results.append({"his_ref": item.his_ref, "status": "ERROR", "status_label": "ระบบขัดข้อง ส่งรายการนี้ใหม่ภายหลัง",
+                            "detail": "เกิดข้อผิดพลาดในระบบ"})
+    return {"results": results}
 
 
 @app.get("/api/his/v1/surgery-requests/{his_ref:path}", tags=["HIS"])
@@ -1634,8 +1754,8 @@ def feedback_update(what: Literal["report", "error"], item_id: int, body: Feedba
 async def unexpected_error(request: Request, exc: Exception) -> JSONResponse:
     """Anything not handled: listed for the admin, and a plain message for the person."""
     user = getattr(request.state, "user", None)
-    await run_in_threadpool(feedback.record_error, "server", f"{request.method} {request.url.path}",
-                            f"{type(exc).__name__}: {exc}", user=user)
+    route = getattr(request.scope.get("route"), "path", None) or "(ก่อนถึง route)"  # the pattern, not the caller's path
+    await run_in_threadpool(feedback.record_error, "server", f"{request.method} {route}", fb.describe(exc), user=user)
     return JSONResponse({"detail": "เกิดข้อผิดพลาดในระบบ ผู้ดูแลระบบได้รับบันทึกแล้ว กรุณาลองใหม่อีกครั้ง"}, status_code=500)
 
 
@@ -1697,7 +1817,9 @@ def system_backup(request: Request) -> StreamingResponse:
     out, manifest = _run(backup.dump, store.db.url)
     size = out.seek(0, 2)
     out.seek(0)
-    access.record(user, "backup", None, [], _address(request), patients=backup.patients_in(manifest))
+    if not access.record(user, "backup", None, [], _address(request), patients=backup.patients_in(manifest)):
+        out.close()  # every patient's identity leaves with this file: no record, no file
+        raise HTTPException(status_code=503, detail="บันทึกการเข้าถึงข้อมูลผู้ป่วยไม่ได้ (ต้องรัน SQL ไฟล์ 013) จึงยังดาวน์โหลดสำรองข้อมูลไม่ได้")
     system_status.note_backup(store, manifest, size, _actor(user))
     name = f"orchestra-backup-{store.db.today().isoformat()}.zip"
 

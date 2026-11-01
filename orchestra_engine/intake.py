@@ -169,14 +169,26 @@ def synthetic_history(cards: list[dict], *, days: int = 40, seed: int = 7) -> li
 # Patient identifiers, masked before free text leaves the hospital (Claude API). "HN" may follow Thai
 # text directly (no word boundary), be written "H.N." or in Thai.
 HN_PATTERN = re.compile(r"(?:(?<![A-Za-z])H\.?\s?N\.?|เลขที่ผู้ป่วย|เลขประจำตัวผู้ป่วย|เลข\s*HN)"
-                        r"[\s.:#-]*([A-Za-z0-9][A-Za-z0-9/-]{2,})", re.IGNORECASE)
+                        r"[\s.:#=(（：'\"-]*([A-Za-z0-9][A-Za-z0-9/-]{2,})", re.IGNORECASE)
 LONG_NUMBER = re.compile(r"(?<![\d:.])\d{6,13}(?![\d:.])")
 NUMBER_YEAR = re.compile(r"(?<![\d/])\d{4,10}/\d{2,4}(?![\d/])")  # HN written 54321/66
 ID_NUMBER = re.compile(r"(?<!\d)\d[ -]?\d{4}[ -]?\d{5}[ -]?\d{2}[ -]?\d(?!\d)")  # Thai national ID, with dashes
-PHONE = re.compile(r"(?<!\d)0\d{1,2}[ -]?\d{3}[ -]?\d{3,4}(?!\d)")
-_TH_TITLE = r"(?:นางสาว|นาง|นาย|น\.ส\.|ด\.ช\.|ด\.ญ\.|เด็กชาย|เด็กหญิง|ผู้ป่วยชื่อ|ชื่อผู้ป่วย|ชื่อ)"
-TH_NAME = re.compile(_TH_TITLE + r"\s*([ก-๙]+)(?:(\s+)([ก-๙]+))?")
-EN_NAME = re.compile(r"(?<![A-Za-z])(?:Mr|Mrs|Ms|Miss|Mstr|Master)\.?\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?")
+PHONE = re.compile(r"(?<![\d+])(?:\+66[\s-]?|0[\s-]?)\d{1,2}[\s.-]?\d{3,4}[\s.-]?\d{3,4}(?!\d)")
+# key = value text (error messages, exported rows): the value is the patient's
+KEY_VALUE = re.compile(r"(?<![A-Za-z_])(patient_name|patient_hn|full_name)(['\"]?\s*[:=]\s*)(['\"]?)([^'\",}\n]+)\3", re.IGNORECASE)
+_TH_TITLE = (r"(?:นางสาว|นาง|นาย|น\.ส\.|นส\.?|ด\.ช\.|ด\.ญ\.|เด็กชาย|เด็กหญิง|ผู้ป่วยชื่อ|คนไข้ชื่อ|ชื่อผู้ป่วย"
+             r"|ชื่อ\s*(?:-\s*)?(?:นาม)?สกุล|ชื่อ)")
+# Strict (problem reports, stored error text): also the words after these, which may be a name or a
+# condition ("คุณสมชาย" / "ผู้ป่วยเบาหวาน"); the booking assistant keeps the conditions, so not by default.
+# Not inside words: ขอบคุณ, ขอบพระคุณ, บุญคุณ, คุณภาพ, คุณสมบัติ, คุณค่า; ผู้ป่วยนอก / ใน / รายนี้ ...
+_TH_TITLE_STRICT = (r"(?:(?<!ขอบ)(?<!พระ)(?<!บุญ)คุณ(?!หมอ|พยาบาล|ครู|ภาพ|สมบัติ|ค่า|ครับ|ค่ะ|ประโยชน์|ธรรม|ลักษณ)"
+                    r"|(?:ผู้ป่วย|คนไข้)(?!นอก|ใน|ราย|ที่|ทุก|ทั้ง|หลาย|ฉุกเฉิน|ชื่อ)|" + _TH_TITLE[3:])
+TH_NAME = re.compile(_TH_TITLE + r"\s*(?:[:：-]\s*)?([ก-๙]+)(?:(\s+)([ก-๙]+))?")
+TH_NAME_STRICT = re.compile(_TH_TITLE_STRICT + r"\s*(?:[:：-]\s*)?([ก-๙]+)(?:(\s+)([ก-๙]+))?")
+TH_TITLE_EN_NAME = re.compile(r"(?:นางสาว|นาง|นาย|น\.ส\.|ด\.ช\.|ด\.ญ\.)\s*[A-Za-z][A-Za-z'-]+(?:\s+[A-Z][A-Za-z'-]+)?")
+EN_NAME = re.compile(r"(?<![A-Za-z])(?:Mr|Mrs|Ms|Miss|Mstr|Master)(?:\.\s*|\s+)[A-Z][A-Za-z'-]+(?:\s+[A-Z][A-Za-z'-]+)?")
+EN_NAME_STRICT = re.compile(r"(?<![A-Za-z])(?:Mr|Mrs|Ms|Miss|Mstr|Master)(?:\.\s*|\s+)[A-Za-z][A-Za-z'-]+(?:\s+[A-Za-z][A-Za-z'-]+)?",
+                            re.IGNORECASE)
 # A second Thai word after a name is the surname unless it reads like part of the request.
 _NOT_A_NAME = ("ผ่า", "ตัด", "ส่อง", "ไส้", "ต่อม", "ข้อ", "เข่า", "พรุ่งนี้", "วัน", "เวลา", "โมง", "ด่วน", "นาที",
                "ชั่วโมง", "ชม", "ห้อง", "หมอ", "แพทย์", "เคส", "อายุ", "ปี", "ขอ", "จอง", "นัด", "ฉุกเฉิน", "ไม่")
@@ -227,15 +239,18 @@ THAI_WEEKDAYS = {"จันทร์": 0, "อังคาร": 1, "พุธ": 
 EN_WEEKDAYS = {"monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3, "friday": 4, "saturday": 5, "sunday": 6}
 
 
-def mask_identifiers(text: str) -> tuple[str, str | None]:
+def mask_identifiers(text: str, *, strict: bool = False) -> tuple[str, str | None]:
     """Replace HN, ID / phone numbers and names after a title with placeholders. Returns (masked, first HN).
 
     Best effort for free text: it catches the usual ways staff write these, not every possible one, so
     the request form still asks people not to type more about the patient than the booking needs.
+    ``strict`` (text that is only stored, not read by the booking assistant) also masks what follows
+    คุณ / ผู้ป่วย / คนไข้ and English titles in any case.
     """
     match = HN_PATTERN.search(text or "")
     hn = match.group(1) if match else None
-    masked = HN_PATTERN.sub("HN [HN]", text or "")
+    masked = KEY_VALUE.sub(lambda m: m.group(1) + m.group(2) + m.group(3) + "[ลบแล้ว]" + m.group(3), text or "")
+    masked = HN_PATTERN.sub("HN [HN]", masked)
     masked = ID_NUMBER.sub("[ID]", masked)
     masked = PHONE.sub("[TEL]", masked)
     masked = NUMBER_YEAR.sub("[ID]", masked)
@@ -247,8 +262,9 @@ def mask_identifiers(text: str) -> tuple[str, str | None]:
             return "[ชื่อ]"
         return "[ชื่อ]" + (m.group(2) + surname if surname else "")
 
-    masked = TH_NAME.sub(thai_name, masked)
-    masked = EN_NAME.sub("[NAME]", masked)
+    masked = TH_TITLE_EN_NAME.sub("[ชื่อ]", masked)
+    masked = (TH_NAME_STRICT if strict else TH_NAME).sub(thai_name, masked)
+    masked = (EN_NAME_STRICT if strict else EN_NAME).sub("[NAME]", masked)
     return masked, hn
 
 

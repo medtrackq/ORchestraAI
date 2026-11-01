@@ -92,6 +92,8 @@ def test_search_offers_the_first_free_days_and_books_nothing(store, admin, db_ur
 
     with pytest.raises(StoreError, match="ฉุกเฉิน"):
         store.find_slots({**data, "urgency": "EMERGENCY"}, "09:00")
+    with pytest.raises(StoreError, match="ไม่เกิน 1 ปี"):
+        store.find_slots(data, "09:00", day="9999-12-25")  # was a server error (date overflow)
 
 
 @needs_db
@@ -179,6 +181,13 @@ def test_api_search_and_waiting_list(owner):
     assert r.status_code == 200, r.text
     out = r.json()
     assert out["single_day"] and len(out["found"]) + len(out["skipped"]) == 1
+    import app.main as main
+
+    main._searching.add(OWNER[0])  # a search of this person still running: wait for it
+    try:
+        assert owner.post("/api/slot-search", json={"case": _case(), "start": "09:00"}).status_code == 429
+    finally:
+        main._searching.discard(OWNER[0])
 
     due = (date.today() + timedelta(days=20)).isoformat()
     r = owner.post("/api/waitlist", json={"case": _case(patient_hn="HN-W9", due_date=due)})
@@ -231,6 +240,9 @@ def test_reminder_names_cases_not_patients():
                          "R-3 Laparoscopic cholecystectomy · Dr.B · อีก 3 วัน"]
     assert own.title == "รายการรอผ่าตัดของคุณ: เลยกำหนด 1 เคส" and own.lines == ["R-2 Laparoscopic cholecystectomy · เลยกำหนด 2 วัน"]
     assert all("HN" not in m.body and "ลับ" not in m.body for m in messages.values())
+    typed = [{**r, "procedure": "ไส้ติ่ง HN 7788991 นายสมชาย ใจดี"} for r in _due_rows(today)]
+    procedures = " ".join(c["procedure"] for c in wl.digest_event(today.isoformat(), typed)["cases"])
+    assert "7788991" not in procedures and "สมชาย" not in procedures  # text typed as the procedure is masked
     assert {m.kind for m in messages.values()} == {"waitlist"}
 
 

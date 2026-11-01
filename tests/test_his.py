@@ -257,3 +257,116 @@ def test_admin_pages_are_admin_only(owner):
     assert scheduler.post("/api/admin/his/test", json=_order("T-1")).status_code == 403
     no_key = TestClient(__import__("app.main", fromlist=["app"]).app, base_url="https://testserver")
     assert no_key.get("/api/his/v1/ping").status_code in (401, 503)  # never the login page
+
+
+# ------------------------------------------------------------------ security review (round 2)
+
+@needs_db
+def test_older_waiting_messages_never_undo_newer_ones(his, store, db_url):
+    assert his.receive(_order("OR-70", surgeon_code="D-70"))["status"] == "NEEDS_MAPPING"
+    assert his.receive(_order("OR-70", surgeon_code="D-71"))["status"] == "NEEDS_MAPPING"
+    assert _rows(db_url, "SELECT status, payload IS NULL FROM his_inbox WHERE his_ref = 'OR-70' ORDER BY message_id") \
+        == [("UNCHANGED", True), ("NEEDS_MAPPING", False)]  # only the newest one can still be applied
+    out = his.receive({"his_ref": "OR-70", "action": "cancel"})
+    assert out["status"] == "APPLIED" and "รอจับคู่รหัส" in out["detail"]
+    assert _rows(db_url, "SELECT count(*) FROM his_inbox WHERE his_ref = 'OR-70' AND payload IS NOT NULL") == [(0,)]
+    napat = next(s["id"] for s in his.overview()["targets"]["surgeon"] if s["name"].startswith("Dr.Napat"))
+    assert his.set_mapping("surgeon", "D-70", napat, None, ADMIN)["retried"] == 0  # the cancelled order stays away
+    assert "OR-70" not in {p["his_ref"] for p in store.state()["pending"]}
+
+
+@needs_db
+def test_an_anonymised_case_is_not_given_its_name_back(his, store, db_url):
+    from app import privacy
+
+    assert his.receive(_order("OR-80"))["status"] == "APPLIED"
+    with psycopg.connect(db_url, autocommit=True) as conn:
+        conn.execute("""UPDATE surgery_requests SET status = 'CANCELLED', created_at = NOW() - INTERVAL '400 days'
+                        WHERE his_ref = 'OR-80'""")
+        conn.execute("""INSERT INTO his_inbox (source, kind, his_ref, status, payload, received_at)
+                        VALUES ('api', 'request.upsert', 'OR-81', 'NEEDS_MAPPING', '{"hn": "6612345"}',
+                                NOW() - INTERVAL '31 days')""")
+    privacy.set_retention(store, 365, None, actor=ADMIN)
+    out = privacy.apply(store)
+    assert out["cases"] == 1 and out["his_inbox_cleared"] == 1  # the daily job clears old messages too
+    assert _rows(db_url, "SELECT his_ref FROM surgery_requests WHERE anonymized_at IS NOT NULL") == [(hm.anon_ref("OR-80"),)]
+    assert _rows(db_url, "SELECT count(*) FROM his_inbox WHERE his_ref = 'OR-80'") == [(0,)]  # hashed there too
+    again = his.receive(_order("OR-80"))
+    assert again["status"] == "UNCHANGED" and again["result"] == "anonymized"
+    assert _rows(db_url, "SELECT count(*) FROM surgery_requests WHERE patient_name = 'นายทดสอบ ระบบ'") == [(0,)]
+    client = hm.Client("k", "HOSxP", ("schedule:read",))
+    assert his.request_status("OR-80", client)["status"] == "cancelled"  # still found by its order number
+    with pytest.raises(StoreError, match="ไม่พบ"):
+        his.request_status(hm.anon_ref("OR-80"), client)  # the hash itself is not an order number
+
+
+@needs_db
+def test_wrong_keys_are_limited_per_address(his, monkeypatch):
+    key = his.create_key("HOSxP", ["requests:write"], ADMIN)["key"]
+    monkeypatch.setattr(hm, "FAILS_PER_MINUTE", 3)
+    for raw in ("orc_wrong1", "orc_wrong2", "not-a-key"):
+        with pytest.raises(hm.HisAuthError) as exc:
+            his.authenticate(raw, "requests:write", "203.0.113.9")
+        assert exc.value.status == 401
+    with pytest.raises(hm.HisAuthError) as exc:
+        his.authenticate(key, "requests:write", "203.0.113.9")
+    assert exc.value.status == 429  # that address waits a minute, even with the right key
+    assert his.authenticate(key, "requests:write", "198.51.100.7").name == "HOSxP"  # others are not affected
+    assert his.authenticate(key, None, "198.51.100.7").scopes == ("requests:write",)  # any scope
+
+
+@needs_db
+def test_odd_and_long_values_are_answered_not_crashed(his, db_url):
+    long_name = "นพ. " + "ก" * 150
+    out = his.receive(_order("OR-90", surgeon_code="D-90", surgeon_name=long_name, procedure_code=None,
+                             procedure_name="ผ่าตัด " + "ข" * 190))
+    assert out["status"] == "NEEDS_MAPPING"  # the detail is longer than the column: cut, not an error
+    assert _rows(db_url, "SELECT length(detail) FROM his_inbox WHERE his_ref = 'OR-90'") == [(500,)]
+    bad = his.receive(_order("OR\x0091"))
+    assert bad["status"] == "REJECTED" and "อักขระควบคุม" in bad["detail"]
+    masked = hm.normalize(_order("OR-92", procedure_name="ไส้ติ่ง HN 1234567 นายสมชาย ใจดี"))
+    assert "1234567" not in masked["procedure_name"] and "สมชาย" not in masked["procedure_name"]
+    with pytest.raises(StoreError, match="ไม่พบ"):
+        his.request_status("\x00abc", hm.Client("k", "x", ("schedule:read",)))
+
+
+@needs_db
+def test_alerts_from_a_flood_are_held_back(his, monkeypatch):
+    monkeypatch.setattr(hm, "ALERTS_PER_WINDOW", 3)
+    for i in range(6):
+        his.receive(_order(f"OR-10{i}", surgeon_code=f"D-1{i}"))
+    details = [e["detail"] for e in his.sent]
+    assert len(details) == 4 and "หยุดแจ้งเตือน" in details[-1]
+
+
+@needs_db
+def test_api_checks_the_key_before_reading_the_body(his, monkeypatch):
+    import app.main as main
+
+    monkeypatch.setattr(main, "his", his)
+    key = his.create_key("HOSxP", ["requests:write", "schedule:read"], ADMIN)["key"]
+    c = TestClient(main.app, base_url="https://testserver")
+    auth = {"Authorization": f"Bearer {key}"}
+    assert c.post("/api/his/v1/surgery-requests/batch", json={"requests": "x"}).status_code == 401  # not 422
+    bad = c.post("/api/his/v1/surgery-requests/batch", json={"requests": "x" * 5000}, headers=auth)
+    assert bad.status_code == 422 and "x" * 100 not in bad.text  # what was sent is not echoed back
+    big = b'{"requests": [' + b" " * (1024 * 1024) + b"]}"
+    assert c.post("/api/his/v1/surgery-requests/batch", content=big,
+                  headers={**auth, "Content-Type": "application/json"}).status_code == 413
+
+    def chunks():  # no Content-Length: counted while reading
+        yield b'{"requests": ['
+        for _ in range(64):
+            yield b" " * 32768
+        yield b"]}"
+
+    chunked = c.post("/api/his/v1/surgery-requests/batch", content=chunks(),
+                     headers={**auth, "Content-Type": "application/json"})
+    assert chunked.status_code == 413
+    r = c.post("/api/his/v1/surgery-requests/batch", headers=auth,
+               json={"requests": [_order("OR-110"), _order("OR\x01111"), _order("OR-112")]})
+    assert [x["status"] for x in r.json()["results"]] == ["APPLIED", "REJECTED", "APPLIED"]
+    assert c.get("/api/his/v1/surgery-requests/%00abc", headers=auth).status_code == 404
+    monkeypatch.setattr(hm, "ITEMS_PER_MINUTE", 4)
+    many = c.post("/api/his/v1/surgery-requests/batch", headers=auth, json={"requests": [_order(f"OR-12{i}") for i in range(5)]})
+    assert many.status_code == 429  # a batch counts every request in it

@@ -106,6 +106,16 @@ def test_restore_sql_works_with_psql(store, db_url, target_url, tmp_path):
     assert _counts(target_url) == _counts(db_url)
 
 
+def test_restore_sql_quotes_every_name():
+    manifest = {"tables": [{"name": 'a"b', "file": "tables/01_a'b.csv", "columns": ['c"d']}],
+                "sequences": [{"sequence": "public.x'); DROP TABLE y; --", "column": "id", "table": "t"}]}
+    script = backup.restore_sql(manifest)
+    assert '\\copy public."a""b" ("c""d") FROM \'tables/01_a\'\'b.csv\'' in script
+    assert "setval('public.x''); DROP TABLE y; --'" in script
+    with pytest.raises(StoreError):
+        backup.restore_sql({"tables": [{"name": "t\n\\! id", "file": "f", "columns": []}], "sequences": []})
+
+
 @needs_db
 def test_restore_refuses_wrong_files_and_old_schemas(db_url, target_url, tmp_path):
     bad = tmp_path / "x.zip"
