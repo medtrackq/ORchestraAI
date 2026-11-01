@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo
 import psycopg
 from psycopg.types.json import Jsonb
 
-from orchestra_engine.demo import build_hospital, elective_day
+from orchestra_engine.demo import DEMO_SUPPLIES, build_hospital, elective_day
 from orchestra_engine.intake import synthetic_history
 from orchestra_engine.models import DEFAULT_TEAM, InfectionRisk
 
@@ -124,10 +124,24 @@ def seed_resources(conn: psycopg.Connection, tz: ZoneInfo, today: date) -> dict:
              Jsonb([str(type_ids[t]) for t in equipment])),
         )
 
+    supply_ids: dict[str, uuid.UUID] = {}
+    if _has_column(conn, "supply_items", "item_id"):
+        for code, name, category, unit, stock in DEMO_SUPPLIES:
+            supply_ids[code] = conn.execute(
+                """INSERT INTO supply_items (code, name, category, unit, on_hand, reorder_level)
+                   VALUES (%s, %s, %s, %s, %s, %s) RETURNING item_id""",
+                (code, name, category, unit, stock, 1),
+            ).fetchone()["item_id"]
+
     for c in elective_day():
         pid = procedure(c.procedure, c.duration_mins, c.required_capabilities, c.requires_icu_post_op,
                         c.infection_risk.value, _case_skills(c))
         card(c.surgeon_id, pid, c.duration_mins, c.required_staff_roles, list(c.required_equipment_types))
+        for code, qty in c.required_supplies.items():
+            if code in supply_ids:
+                conn.execute(
+                    "INSERT INTO procedure_supplies (procedure_id, item_id, quantity) VALUES (%s, %s, %s) "
+                    "ON CONFLICT DO NOTHING", (pid, supply_ids[code], qty))
     for name, surgeon, minutes, equipment, infection, icu in EMERGENCY_PROCEDURES:
         pid = procedure(name, minutes, [], icu, InfectionRisk(infection).value)
         card(surgeon, pid, minutes, dict(DEFAULT_TEAM), equipment)
@@ -152,16 +166,16 @@ def demo_catalog() -> tuple[list[dict], list[dict]]:
     procedures: dict[str, dict] = {}
     cards: dict[tuple[str, str], dict] = {}
 
-    def procedure(name, minutes, caps, icu, infection, skills=None) -> str:
+    def procedure(name, minutes, caps, icu, infection, skills=None, supplies=None) -> str:
         pid = "P-" + re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
         procedures.setdefault(pid, {"id": pid, "name": name, "code": None, "duration": minutes,
                                     "caps": sorted(caps), "icu": icu, "infection": infection,
-                                    "skills": skills or {}})
+                                    "skills": skills or {}, "supplies": dict(supplies or {})})
         return pid
 
     for c in elective_day():
         pid = procedure(c.procedure, c.duration_mins, c.required_capabilities, c.requires_icu_post_op,
-                        c.infection_risk.value, _case_skills(c))
+                        c.infection_risk.value, _case_skills(c), c.required_supplies)
         cards.setdefault((c.surgeon_id, pid), {
             "surgeon_id": c.surgeon_id, "procedure_id": pid, "duration": c.duration_mins, "stddev": 15,
             "roles": dict(c.required_staff_roles), "equipment": list(c.required_equipment_types), "notes": None})

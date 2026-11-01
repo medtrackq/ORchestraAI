@@ -13,7 +13,7 @@ from collections import Counter, defaultdict
 from typing import Iterable, Mapping
 
 from .fatigue import fatigue_issues
-from .models import EquipmentUnit, OperatingRoom, RecoveryBed, StaffMember, SurgeryCase
+from .models import EquipmentUnit, OperatingRoom, RecoveryBed, StaffMember, SupplyItem, SurgeryCase
 from .results import Assignment, ScheduleResult
 from .timeutil import MINUTES_PER_DAY, fmt
 
@@ -27,6 +27,7 @@ def validate_schedule(
     beds: Iterable[RecoveryBed] = (),
     *,
     horizon_mins: int = MINUTES_PER_DAY,
+    supplies: Iterable[SupplyItem] = (),
 ) -> list[str]:
     """Return a list of hard-constraint violations (empty = valid)."""
     assignments = schedule.assignments if isinstance(schedule, ScheduleResult) else schedule
@@ -146,6 +147,22 @@ def validate_schedule(
                         f"{kind} {resource} double-booked: {c1} {fmt(s1)}-{fmt(e1)} "
                         f"overlaps {c2} {fmt(s2)}-{fmt(e2)}"
                     )
+
+    # Supplies and implants: what the cases of this horizon hold must be in stock.
+    stock = {s.item_id: s for s in supplies}
+    if stock:
+        held: dict[str, list[int]] = defaultdict(lambda: [0, 0])  # code -> [locked, free]
+        for cid, a in assignments.items():
+            case = case_by_id.get(cid)
+            for code, qty in (case.required_supplies.items() if case else ()):
+                held[code][0 if a.frozen else 1] += qty
+        for code, (locked, free) in sorted(held.items()):
+            item = stock.get(code)
+            if item is None:
+                errors.append(f"supply {code}: not a stocked item")
+            elif free > max(0, item.for_booked - locked):
+                errors.append(f"supply {item.name} ({code}): {locked + free} booked, only {item.for_booked} available"
+                              + (f"; {item.note}" if item.note else ""))
 
     known = {cid: a for cid, a in assignments.items() if cid in case_by_id}
     for issue in fatigue_issues(known, case_by_id, staff_by_id.values(), horizon_mins=horizon_mins):

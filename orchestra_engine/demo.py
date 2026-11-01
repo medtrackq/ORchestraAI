@@ -4,7 +4,7 @@ Run:  python -m orchestra_engine.demo
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 
 from .models import (
     BedType,
@@ -14,6 +14,7 @@ from .models import (
     RecoveryBed,
     StaffMember,
     StaffRole,
+    SupplyItem,
     SurgeryCase,
     Urgency,
 )
@@ -32,18 +33,37 @@ class Hospital:
     staff: list[StaffMember]
     beds: list[RecoveryBed]
     team_synergy: dict[tuple[str, str], float]
+    supplies: list[SupplyItem] = field(default_factory=list)
 
     def optimizer(self, **kwargs) -> ORchestraOptimizer:
         kwargs.setdefault("time_limit_s", 10.0)
         return ORchestraOptimizer(
             self.rooms, self.equipments, self.staff, self.beds,
-            team_synergy=self.team_synergy, **kwargs,
+            team_synergy=self.team_synergy, supplies=self.supplies, **kwargs,
         )
 
     def validate(self, result: ScheduleResult) -> list[str]:
         return validate_schedule(
-            result, result.cases.values(), self.rooms, self.equipments, self.staff, self.beds
+            result, result.cases.values(), self.rooms, self.equipments, self.staff, self.beds,
+            supplies=self.supplies,
         )
+
+
+# Single-use supplies and implants of the demo hospital: (code, name, category, unit, in stock).
+DEMO_SUPPLIES = [
+    ("KNEE-IMP", "Total knee implant set", "IMPLANT", "ชุด", 3),
+    ("BONE-CEM", "Bone cement 40 g", "CONSUMABLE", "ซอง", 10),
+    ("ACL-FIX", "ACL fixation screw set", "IMPLANT", "ชุด", 2),
+    ("ROBO-DRAPE", "Robotic drape kit", "CONSUMABLE", "ชุด", 2),
+    ("STAPLER", "Laparoscopic stapler reload", "CONSUMABLE", "ชิ้น", 12),
+    ("MESH-15", "Hernia mesh 15x15 cm", "IMPLANT", "ชิ้น", 4),
+    ("VASC-GRAFT", "Vascular graft 6 mm", "IMPLANT", "ชิ้น", 1),
+]
+
+
+def demo_supplies() -> list[SupplyItem]:
+    return [SupplyItem(code, name, stock, unit, category, reorder_level=1)
+            for code, name, category, unit, stock in DEMO_SUPPLIES]
 
 
 def _person(staff_id, name, role, start, end, skills=(), used=24.0, more_shifts=()):
@@ -111,36 +131,44 @@ def build_hospital() -> Hospital:
         ("SUR-GEN", "SCR-3"): 3.5,
         ("SUR-VASC", "ANE-4"): 4.2,
     }
-    return Hospital(rooms, equipments, staff, beds, synergy)
+    return Hospital(rooms, equipments, staff, beds, synergy, demo_supplies())
 
 
 def elective_day() -> list[SurgeryCase]:
     return [
         SurgeryCase("C01", "HN-0001", "Total knee arthroplasty (L)", "SUR-ORTHO", 150,
+                    required_supplies={"KNEE-IMP": 1, "BONE-CEM": 2},
                     required_capabilities={"LAMINAR_FLOW"},
                     required_equipment_types=["ORTHO_KNEE_SET", "C_ARM"], preferred_start=hm("08:00")),
         SurgeryCase("C02", "HN-0002", "Total knee arthroplasty (R)", "SUR-ORTHO", 150,
+                    required_supplies={"KNEE-IMP": 1, "BONE-CEM": 2},
                     required_capabilities={"LAMINAR_FLOW"},
                     required_equipment_types=["ORTHO_KNEE_SET", "C_ARM"], preferred_start=hm("11:00")),
         SurgeryCase("C03", "HN-0003", "Arthroscopic ACL reconstruction", "SUR-ORTHO", 90,
+                    required_supplies={"ACL-FIX": 1},
                     required_capabilities={"LAMINAR_FLOW"}, required_equipment_types=["ARTHROSCOPY_SET"]),
         SurgeryCase("C04", "HN-0004", "Robotic radical prostatectomy", "SUR-URO", 210,
+                    required_supplies={"ROBO-DRAPE": 1},
                     required_capabilities={"ROBOTIC_READY"}, required_staff_skills=ROBOTIC,
                     required_equipment_types=["ROBOT_DA_VINCI", "ROBOTIC_INSTRUMENT_SET"],
                     preferred_start=hm("08:00")),
         SurgeryCase("C05", "HN-0005", "Robotic partial nephrectomy", "SUR-URO", 180,
+                    required_supplies={"ROBO-DRAPE": 1},
                     required_capabilities={"ROBOTIC_READY"}, required_staff_skills=ROBOTIC,
                     required_equipment_types=["ROBOT_DA_VINCI", "ROBOTIC_INSTRUMENT_SET"]),
         SurgeryCase("C06", "HN-0006", "Laparoscopic cholecystectomy", "SUR-GEN", 75,
                     required_equipment_types=["LAPAROSCOPY_TRAY"], preferred_start=hm("08:00")),
         SurgeryCase("C07", "HN-0007", "Laparoscopic appendectomy", "SUR-GEN", 60,
+                    required_supplies={"STAPLER": 1},
                     urgency=Urgency.URGENT, required_equipment_types=["LAPAROSCOPY_TRAY"],
                     release_min=hm("08:00"), deadline_min=hm("12:00")),
         SurgeryCase("C08", "HN-0008", "Open inguinal hernia repair", "SUR-GEN", 90,
+                    required_supplies={"MESH-15": 1},
                     required_equipment_types=["MAJOR_GENERAL_TRAY"]),
         SurgeryCase("C09", "HN-0009", "Incision and drainage of abscess", "SUR-GEN", 45,
                     required_equipment_types=["MAJOR_GENERAL_TRAY"], infection_risk=InfectionRisk.DIRTY),
         SurgeryCase("C10", "HN-0010", "Femoral-popliteal bypass", "SUR-VASC", 240,
+                    required_supplies={"VASC-GRAFT": 1},
                     required_capabilities={"LEAD_LINED_XRAY"},
                     required_equipment_types=["VASCULAR_TRAY", "C_ARM"], requires_icu_post_op=True,
                     preferred_start=hm("08:00")),

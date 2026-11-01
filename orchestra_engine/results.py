@@ -82,6 +82,7 @@ class ScheduleResult:
                 "patient_name": case.patient_name,
                 "urgency": case.urgency.value,
                 "airborne": case.airborne,
+                "supplies": dict(case.required_supplies),
                 "infection_risk": case.infection_risk.value,
                 "or_id": a.or_id,
                 "start_min": a.start_min,

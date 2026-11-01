@@ -16,7 +16,7 @@ import uuid
 from collections import Counter
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 from typing import Iterator
 from zoneinfo import ZoneInfo
 
@@ -27,6 +27,7 @@ from psycopg.types.json import Jsonb
 from orchestra_engine import (
     Assignment,
     EquipmentUnit,
+    SupplyItem,
     InfectionRisk,
     OperatingRoom,
     RecoveryBed,
@@ -46,7 +47,8 @@ TABLES = (
     "recovery_beds", "procedures", "surgeon_preference_cards", "surgery_requests", "scheduled_surgeries",
     "resource_allocations",
 )
-OPTIONAL_TABLES = ("room_closures",)  # RLS is checked once the migration that creates them has run
+OPTIONAL_TABLES = ("room_closures", "supply_items", "supply_deliveries", "procedure_supplies",
+                   "supply_reservations")  # RLS is checked once the migration that creates them has run
 
 
 log = logging.getLogger("orchestra.db")
@@ -168,6 +170,7 @@ class World:
     rls_off: list[str] = field(default_factory=list)
     has_actor_col: bool = False
     columns: frozenset = frozenset()  # (table, column) pairs present: optional migrations
+    supply_ids: dict[str, uuid.UUID] = field(default_factory=dict)  # supply code -> item_id
 
     def has(self, table: str, column: str) -> bool:
         return (table, column) in self.columns
@@ -209,6 +212,24 @@ def _merge(windows: list[tuple[int, int]]) -> list[tuple[int, int]]:
         else:
             merged.append([a, b])
     return [(a, b) for a, b in merged]
+
+
+def supply_available(on_hand: int, deliveries: list[tuple[date, int]], held: list[tuple[date, int]],
+                     day: date) -> int:
+    """How many the cases of ``day`` may use: the lowest running balance from
+    ``day`` on, so bookings on later days keep what they hold and deliveries
+    count only from their expected date."""
+    def balance(t: date) -> int:
+        return on_hand + sum(q for d, q in deliveries if d <= t) - sum(q for d, q in held if d <= t)
+
+    points = {day} | {d for d, _ in deliveries + held if d > day}
+    return min(balance(t) for t in points)
+
+
+def supply_for_booked(on_hand: int, deliveries: list[tuple[date, int]], held: list[tuple[date, int]],
+                      day: date) -> int:
+    """What the cases already booked on ``day`` may use: earlier days are served first."""
+    return on_hand + sum(q for d, q in deliveries if d <= day) - sum(q for d, q in held if d < day)
 
 
 def _skills(value) -> dict[str, list[str]]:
@@ -375,6 +396,15 @@ class Database:
             }
             for r in conn.execute("SELECT * FROM procedures ORDER BY name")
         ]
+        if ("procedure_supplies", "item_id") in columns:
+            needs: dict[str, dict[str, int]] = {}
+            for r in conn.execute(
+                """SELECT ps.procedure_id, i.code, ps.quantity FROM procedure_supplies ps
+                   JOIN supply_items i USING (item_id) WHERE i.is_active"""
+            ):
+                needs.setdefault(str(r["procedure_id"]), {})[r["code"]] = r["quantity"]
+            for proc in procedures:
+                proc["supplies"] = needs.get(proc["id"], {})
         cards = [
             {
                 "surgeon_id": str(r["surgeon_id"]), "procedure_id": str(r["procedure_id"]),
@@ -454,6 +484,9 @@ class Database:
 
         staff_by_id = {s.staff_id: s for s in staff}
         self._work_history(conn, staff_by_id, outside, minute)
+        supplies, supply_ids, case_supplies = [], {}, {}
+        if ("supply_items", "item_id") in columns:
+            supplies, supply_ids, case_supplies = self._supplies(conn, day, {r["request_id"] for r in rows})
         unit_by_serial = {u.unit_id: u for u in units}
         assignments, cases, bookings, taken = {}, {}, {}, set()
         for r in rows:
@@ -490,6 +523,7 @@ class Database:
                 infection_risk=infection, requires_icu_post_op=bool(r["icu"]),
                 recovery_mins=recovery, patient_name=r["patient_name"],
                 airborne=bool(r.get("airborne_isolation")),
+                required_supplies=case_supplies.get(r["request_id"], {}),
             )
             cases[cid] = case
             assignments[cid] = Assignment(
@@ -506,14 +540,73 @@ class Database:
             assignments=assignments, unscheduled={}, cases=cases, staff_names=names,
             wall_time_s=0.0, now_min=max(0, min(now_min, HORIZON)),
         )
-        hospital = Hospital(rooms, units, staff, beds, synergy)
+        hospital = Hospital(rooms, units, staff, beds, synergy, supplies)
         return World(
             day, start, result.now_min, hospital, room_ids, unit_ids, bed_ids,
             {key: tid for tid, key in type_keys.items()}, procedures, cards, result, bookings,
             has_recovery_col, has_activity,
             sorted(t for t in TABLES + OPTIONAL_TABLES if not rls.get(t, t in OPTIONAL_TABLES)), has_actor_col,
-            frozenset(columns),
+            frozenset(columns), supply_ids,
         )
+
+    def _supplies(self, conn: psycopg.Connection, day: date, loaded: set) -> tuple[list, dict, dict]:
+        """Stock for ``day``; what the requests loaded for this day hold comes back per request."""
+        today = self.today()
+        items = list(conn.execute("SELECT * FROM supply_items WHERE is_active ORDER BY code"))
+        code = {r["item_id"]: r["code"] for r in items}
+        deliveries: dict = {}
+        for r in conn.execute(
+            "SELECT item_id, expected_date, quantity FROM supply_deliveries "
+            "WHERE status = 'EXPECTED' AND expected_date >= %s", (today,),
+        ):
+            deliveries.setdefault(r["item_id"], []).append((r["expected_date"], r["quantity"]))
+        held: dict = {}
+        case_supplies: dict = {}
+        for r in conn.execute(
+            """SELECT r.request_id, r.item_id, r.quantity, (s.start_time AT TIME ZONE %s)::date AS day
+               FROM supply_reservations r
+               JOIN scheduled_surgeries s ON s.request_id = r.request_id AND s.status IS DISTINCT FROM 'CANCELLED'
+               WHERE r.status = 'RESERVED'""",
+            (str(self.tz),),
+        ):
+            if r["item_id"] not in code:
+                continue
+            if r["request_id"] in loaded:
+                case_supplies.setdefault(r["request_id"], {})[code[r["item_id"]]] = r["quantity"]
+            else:
+                held.setdefault(r["item_id"], []).append((r["day"], r["quantity"]))
+        supplies = []
+        for r in items:
+            due = sorted(d for d in deliveries.get(r["item_id"], []) if d[0] > day)
+            note = (f"ของสั่งไว้เข้า {due[0][0].isoformat()} (+{due[0][1]} {r['unit']})" if due
+                    else "ยังไม่ได้สั่งของเพิ่ม")
+            supplies.append(SupplyItem(
+                r["code"], r["name"],
+                supply_available(r["on_hand"], deliveries.get(r["item_id"], []), held.get(r["item_id"], []), day),
+                r["unit"], r["category"], note, r["reorder_level"],
+                supply_for_booked(r["on_hand"], deliveries.get(r["item_id"], []), held.get(r["item_id"], []), day),
+            ))
+        return supplies, {r["code"]: r["item_id"] for r in items}, case_supplies
+
+    @staticmethod
+    def settle_supplies(conn: psycopg.Connection) -> int:
+        """Cases that have ended used what they held: take it off the stock count."""
+        if not conn.execute("SELECT to_regclass('public.supply_reservations') IS NOT NULL AS ok").fetchone()["ok"]:
+            return 0
+        rows = conn.execute(
+            """WITH used AS (
+                   UPDATE supply_reservations r SET status = 'USED', used_at = NOW()
+                   FROM scheduled_surgeries s
+                   WHERE s.request_id = r.request_id AND r.status = 'RESERVED'
+                     AND s.status IS DISTINCT FROM 'CANCELLED'
+                     AND COALESCE(s.actual_end_time, s.end_time) < NOW()
+                   RETURNING r.item_id, r.quantity)
+               UPDATE supply_items i SET on_hand = GREATEST(0, i.on_hand - u.quantity)
+               FROM (SELECT item_id, sum(quantity) AS quantity FROM used GROUP BY item_id) u
+               WHERE i.item_id = u.item_id
+               RETURNING i.item_id"""
+        ).fetchall()
+        return len(rows)
 
     @staticmethod
     def _work_history(conn: psycopg.Connection, staff_by_id: dict[str, StaffMember], outside: dict, minute) -> None:
@@ -626,11 +719,20 @@ class Database:
                     )
                     if cur.rowcount != 1:
                         raise ConflictError(f"{cid}: the waiting request was booked or cancelled meanwhile")
+                    if world.supply_ids:
+                        conn.execute("DELETE FROM supply_reservations WHERE request_id = %s AND status = 'RESERVED'",
+                                     (request_id,))
                 else:
                     conn.execute(
                         f"INSERT INTO surgery_requests ({', '.join(cols)}) VALUES ({', '.join(['%s'] * len(cols))})",
                         values,
                     )
+                held = [(request_id, world.supply_ids[c], q) for c, q in case.required_supplies.items()
+                        if c in world.supply_ids]
+                if held:
+                    with conn.cursor() as cur:
+                        cur.executemany(
+                            "INSERT INTO supply_reservations (request_id, item_id, quantity) VALUES (%s, %s, %s)", held)
                 self._insert_schedule(conn, world, uuid.uuid4(), request_id, case, a, None)
             if activity is not None:
                 self.log_activity(conn, world, activity)
@@ -688,8 +790,17 @@ class Database:
                          r.preferred_date_start NULLS LAST, r.created_at
                 LIMIT 200"""
         ).fetchall()
+        held: dict = {}
+        if rows and conn.execute("SELECT to_regclass('public.supply_reservations') IS NOT NULL AS ok").fetchone()["ok"]:
+            for h in conn.execute(
+                """SELECT r.request_id, i.code, r.quantity FROM supply_reservations r
+                   JOIN supply_items i USING (item_id) WHERE r.status = 'RESERVED' AND r.request_id = ANY(%s)""",
+                ([r["request_id"] for r in rows],),
+            ):
+                held.setdefault(h["request_id"], {})[h["code"]] = h["quantity"]
         return [
             {"id": str(r["request_id"]), "code": case_code(r["request_id"], r["urgency_level"], set()),
+             "supplies": held.get(r["request_id"], {}),
              "patient_hn": r["patient_hn"], "patient_name": r["patient_name"],
              "surgeon_id": str(r["primary_surgeon_id"]) if r["primary_surgeon_id"] else None,
              "surgeon": r["surgeon_name"], "procedure_id": str(r["procedure_id"]) if r["procedure_id"] else None,
@@ -701,10 +812,14 @@ class Database:
 
     @staticmethod
     def cancel_request(conn: psycopg.Connection, request_id: uuid.UUID) -> dict | None:
-        return conn.execute(
+        row = conn.execute(
             "UPDATE surgery_requests SET status = 'CANCELLED' WHERE request_id = %s AND status = 'PENDING' "
             "RETURNING patient_hn, urgency_level, request_id", (request_id,),
         ).fetchone()
+        if row is not None and conn.execute(
+                "SELECT to_regclass('public.supply_reservations') IS NOT NULL AS ok").fetchone()["ok"]:
+            conn.execute("DELETE FROM supply_reservations WHERE request_id = %s AND status = 'RESERVED'", (request_id,))
+        return row
 
     @staticmethod
     def people(conn: psycopg.Connection) -> list[dict]:

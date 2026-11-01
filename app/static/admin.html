@@ -95,6 +95,14 @@
   .chip.LEAVE { background: var(--leave-soft); color: var(--leave); }
   .chip button { border: 0; background: transparent; cursor: pointer; color: inherit; padding: 0 2px; font-size: .9rem; line-height: 1; }
   .chip input { margin: 0; }
+  .stock { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: .84rem; }
+  .stock b { font-size: 1rem; }
+  .stock .short { color: var(--bad); }
+  .mini { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; }
+  .mini label { flex: 0 1 150px; }
+  .mini input[type="text"] { min-width: 160px; }
+  .delivery { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: .82rem; padding: 4px 0; border-top: 1px dashed var(--border); }
+  .delivery .late { color: var(--bad); font-weight: 600; }
   .people { max-height: 220px; overflow: auto; border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; display: grid; gap: 4px; }
   .people label { display: flex; align-items: center; gap: 8px; color: var(--text); font-size: .84rem; }
 
@@ -110,7 +118,7 @@
 <header class="top">
   <div class="brand">
     <span class="orb" aria-hidden="true"></span>
-    <div><h1>ข้อมูลโรงพยาบาล</h1><p>ห้องผ่าตัด · บุคลากร · เวรและวันลา · เครื่องมือ — ระบบใช้ข้อมูลนี้จัดตารางทันที</p></div>
+    <div><h1>ข้อมูลโรงพยาบาล</h1><p>ห้องผ่าตัด · บุคลากร · เวรและวันลา · เครื่องมือ · วัสดุ/รากเทียม — ระบบใช้ข้อมูลนี้จัดตารางทันที</p></div>
   </div>
   <nav>
     <a class="btn" href="/">← กลับไปตารางผ่าตัด</a>
@@ -121,10 +129,11 @@
 
 <main>
   <div class="tabs" role="tablist">
-    <button class="tab" role="tab" aria-selected="true" data-tab="roster">เวรและวันลา</button>
-    <button class="tab" role="tab" aria-selected="false" data-tab="rooms">ห้องผ่าตัด</button>
-    <button class="tab" role="tab" aria-selected="false" data-tab="staff">บุคลากร</button>
-    <button class="tab" role="tab" aria-selected="false" data-tab="equipment">เครื่องมือ</button>
+    <button class="tab" role="tab" aria-selected="true" data-tab="roster" data-perm="hospital_view">เวรและวันลา</button>
+    <button class="tab" role="tab" aria-selected="false" data-tab="rooms" data-perm="hospital_view">ห้องผ่าตัด</button>
+    <button class="tab" role="tab" aria-selected="false" data-tab="staff" data-perm="hospital_view">บุคลากร</button>
+    <button class="tab" role="tab" aria-selected="false" data-tab="equipment" data-perm="hospital_view">เครื่องมือ</button>
+    <button class="tab" role="tab" aria-selected="false" data-tab="inventory" data-perm="inventory_view">วัสดุ/รากเทียม</button>
   </div>
 
   <div id="affected" hidden></div>
@@ -224,6 +233,23 @@
     <div class="rows" id="units"></div>
     <div id="unit-add-box"><h3>เพิ่มเครื่อง</h3><form id="form-unit" class="row-item"></form></div>
   </section>
+
+  <!-- Supplies and implants -->
+  <section class="card" data-panel="inventory" hidden>
+    <h2>วัสดุสิ้นเปลืองและรากเทียม</h2>
+    <p class="hint">Equipment &amp; Inventory Agent: เคสที่จองไว้จะ "จอง" วัสดุไว้ ระบบไม่ให้จองเคสใหม่ถ้าของไม่พอ (นับของที่สั่งไว้ตั้งแต่วันที่คาดว่าจะมา)
+      · เมื่อเคสผ่าตัดเสร็จ ระบบตัดสต็อกให้เอง · เคสฉุกเฉินใช้ของที่เคสวันหลังจองไว้ได้ (เคสนั้นจะขึ้นเตือนให้สั่งของเพิ่ม)</p>
+    <p class="readonly" id="inventory-missing" hidden>ยังใช้คลังวัสดุไม่ได้: ให้รัน supabase/migrations/20261105000000_supply_inventory.sql ใน Supabase ก่อน</p>
+    <div class="toolbar" style="margin-top:12px">
+      <label>ค้นหา<input type="search" id="supply-q" placeholder="ชื่อหรือรหัส"></label>
+      <label style="display:flex;flex-direction:row;align-items:center;gap:6px;color:var(--text)"><input type="checkbox" id="supply-low">เฉพาะที่ใกล้หมด</label>
+    </div>
+    <div class="rows" id="supplies"></div>
+    <div id="supply-add-box"><h3>เพิ่มวัสดุ / รากเทียม</h3><form id="form-supply" class="row-item"></form></div>
+    <h3>วัสดุที่แต่ละหัตถการใช้ (ใส่ให้อัตโนมัติในฟอร์มจอง แก้ได้รายเคส)</h3>
+    <div class="toolbar"><label style="flex:1 1 320px">หัตถการ<select id="proc-select"></select></label></div>
+    <form id="form-proc-supplies" class="row-item" hidden></form>
+  </section>
 </main>
 <div id="toast" role="alert"></div>
 
@@ -297,7 +323,8 @@
     document.querySelectorAll('.tab').forEach(t => t.setAttribute('aria-selected', String(t.dataset.tab === name)));
     document.querySelectorAll('[data-panel]').forEach(p => { p.hidden = p.dataset.panel !== name; });
     $('#affected').hidden = true;
-    const load = { roster: loadRoster, rooms: loadRooms, staff: loadStaff, equipment: loadEquipment }[name];
+    const load = { roster: loadRoster, rooms: loadRooms, staff: loadStaff, equipment: loadEquipment, inventory: loadInventory }[name];
+    history.replaceState(null, '', '#' + name);
     load().catch(e => toast(e.message));
   }
   document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => selectTab(t.dataset.tab)));
@@ -608,17 +635,162 @@
     }
   }
 
+  // ------------------------------------------------------------- inventory
+  const SUPPLY_CAT_TH = { IMPLANT: 'รากเทียม', CONSUMABLE: 'วัสดุสิ้นเปลือง' };
+  let SUPPLIES = null;
+
+  async function loadInventory() {
+    SUPPLIES = await api('/api/admin/supplies');
+    $('#inventory-missing').hidden = SUPPLIES.ready;
+    renderInventory();
+  }
+
+  function renderInventory() {
+    const data = SUPPLIES, edit = can('inventory') && data.ready;
+    const q = $('#supply-q').value.trim().toLowerCase(), lowOnly = $('#supply-low').checked;
+    const shown = data.items.filter(i => (!lowOnly || i.low) && (!q || (i.code + ' ' + i.name).toLowerCase().includes(q)));
+    const today = localToday();
+    $('#supplies').innerHTML = shown.map(i => `<div class="row-item" data-code="${esc(i.code)}">
+        <div class="title"><span><b>${esc(i.name)}</b> <small class="hint">${esc(i.code)}</small></span>
+          <span><span class="badge">${esc(SUPPLY_CAT_TH[i.category] || i.category)}</span>
+          ${!i.active ? '<span class="badge bad">ปิดใช้งาน</span>' : i.free < 0 ? '<span class="badge bad">ไม่พอสำหรับเคสที่จอง</span>' : i.low ? '<span class="badge warn">ใกล้หมด</span>' : '<span class="badge ok">พอ</span>'}</span></div>
+        <div class="stock">
+          <span>คงคลัง <b>${i.on_hand}</b> ${esc(i.unit)}</span>
+          <span>จองไว้ <b>${i.reserved}</b> (${i.reserved_cases} เคส${i.next_use ? ', เริ่มใช้ ' + esc(i.next_use) : ''})</span>
+          <span class="${i.free < 0 ? 'short' : ''}">ว่างสำหรับเคสใหม่วันนี้ <b>${i.free}</b></span>
+          <span>หลังของที่สั่งเข้า <b>${i.free_later}</b></span>
+          <span class="hint">จุดสั่งซื้อ ${i.reorder_level}</span>
+        </div>
+        ${i.deliveries.map(d => `<div class="delivery"><span class="${d.late ? 'late' : ''}">${d.late ? 'เลยกำหนด · ' : ''}สั่งไว้ +${d.quantity} ${esc(i.unit)} คาดว่ามา ${esc(d.date)}${d.note ? ' · ' + esc(d.note) : ''}</span>
+          ${edit ? `<button class="btn small primary" type="button" data-receive="${esc(d.id)}">รับของนี้แล้ว</button>
+          <button class="btn small danger" type="button" data-cancel-delivery="${esc(d.id)}">ยกเลิกการสั่ง</button>` : ''}</div>`).join('')}
+        ${edit ? `<details><summary>รับของ / นับสต็อก / สั่งของ / แก้ไข</summary>
+          <div class="mini" style="margin-top:8px">
+            <label>รับของเข้า (จำนวน)<input type="number" min="1" name="receive_qty"></label>
+            <button class="btn small primary" type="button" data-act="receive">รับเข้า</button>
+            <label>นับได้จริง<input type="number" min="0" name="count" value="${i.on_hand}"></label>
+            <label>เหตุผล<input type="text" name="count_note" maxlength="200" placeholder="เช่น นับสิ้นเดือน"></label>
+            <button class="btn small" type="button" data-act="count">บันทึกยอดนับ</button>
+          </div>
+          <div class="mini" style="margin-top:8px">
+            <label>สั่งของ (จำนวน)<input type="number" min="1" name="order_qty"></label>
+            <label>คาดว่ามาวันที่<input type="date" name="order_date" value="${today}"></label>
+            <label>หมายเหตุ<input type="text" name="order_note" maxlength="200"></label>
+            <button class="btn small" type="button" data-act="order">บันทึกการสั่ง</button>
+          </div>
+          <div class="mini" style="margin-top:8px">${supplyFields(i, data)}<button class="btn small" type="button" data-act="edit">บันทึกการแก้ไข</button></div>
+        </details>` : ''}
+      </div>`).join('') || `<p class="hint">${data.items.length ? 'ไม่พบวัสดุตามตัวกรอง' : 'ยังไม่มีวัสดุในคลัง'}</p>`;
+    const row = el => el.closest('.row-item');
+    const field = (el, name) => row(el).querySelector(`[name="${name}"]`);
+    $('#supplies').querySelectorAll('[data-receive]').forEach(b => b.addEventListener('click', () => busy(b, async () => {
+      await api(`/api/admin/supplies/${encodeURIComponent(row(b).dataset.code)}/receive`, { delivery_id: b.dataset.receive });
+      showAffected([], 'รับของเข้าคลังแล้ว'); await loadInventory();
+    })));
+    $('#supplies').querySelectorAll('[data-cancel-delivery]').forEach(b => b.addEventListener('click', () => {
+      if (!confirm('ยกเลิกการสั่งของนี้?')) return;
+      busy(b, async () => {
+        const r = await api('/api/admin/deliveries/' + b.dataset.cancelDelivery, {}, 'DELETE');
+        showAffected(r.affected, 'ยกเลิกการสั่งแล้ว'); await loadInventory();
+      });
+    }));
+    $('#supplies').querySelectorAll('[data-act]').forEach(b => b.addEventListener('click', () => busy(b, async () => {
+      const code = encodeURIComponent(row(b).dataset.code);
+      if (b.dataset.act === 'receive') {
+        await api(`/api/admin/supplies/${code}/receive`, { quantity: Number(field(b, 'receive_qty').value) });
+        showAffected([], 'รับของเข้าคลังแล้ว');
+      } else if (b.dataset.act === 'count') {
+        const r = await api(`/api/admin/supplies/${code}/count`, { on_hand: Number(field(b, 'count').value), note: field(b, 'count_note').value || null });
+        showAffected(r.affected, 'บันทึกยอดนับแล้ว');
+      } else if (b.dataset.act === 'order') {
+        await api(`/api/admin/supplies/${code}/deliveries`, { quantity: Number(field(b, 'order_qty').value), expected_date: field(b, 'order_date').value, note: field(b, 'order_note').value || null });
+        showAffected([], 'บันทึกการสั่งของแล้ว ระบบนับของนี้ให้เคสตั้งแต่วันที่คาดว่าจะมา');
+      } else {
+        const r = await api(`/api/admin/supplies/${code}`, readSupply(row(b)), 'PATCH');
+        showAffected(r.affected, 'บันทึกแล้ว');
+      }
+      await loadInventory();
+    })));
+    $('#supply-add-box').hidden = !edit;
+    if (edit && !$('#form-supply').innerHTML) $('#form-supply').innerHTML = `<div class="grid">
+        <label>รหัส<input type="text" name="code" required maxlength="50" placeholder="เช่น KNEE-IMP-5"></label>
+        <label>จำนวนคงคลังตอนนี้<input type="number" name="on_hand" min="0" value="0"></label></div>
+      <div class="mini">${supplyFields({ category: 'CONSUMABLE', unit: 'ชิ้น', reorder_level: 0, active: true }, data)}</div>
+      <div class="actions"><button class="btn primary" type="submit">เพิ่มวัสดุ</button></div>`;
+    renderProcedureSelect();
+  }
+
+  function supplyFields(i, data) {
+    return `<label>ชื่อ<input type="text" name="name" required maxlength="200" value="${esc(i.name || '')}"></label>
+      <label>หมวด<select name="category">${options(SUPPLY_CAT_TH, i.category, data.categories)}</select></label>
+      <label>หน่วย<input type="text" name="unit" maxlength="30" value="${esc(i.unit || 'ชิ้น')}"></label>
+      <label>จุดสั่งซื้อ<input type="number" name="reorder" min="0" value="${i.reorder_level ?? 0}"></label>
+      <label style="display:flex;flex-direction:row;align-items:center;gap:6px;color:var(--text)"><input type="checkbox" name="active" ${i.active === false ? '' : 'checked'}>ใช้งาน</label>`;
+  }
+  function readSupply(root) {
+    const v = n => root.querySelector(`[name="${n}"]`);
+    return { name: v('name').value.trim(), category: v('category').value, unit: v('unit').value.trim() || 'ชิ้น',
+      reorder_level: Number(v('reorder').value), active: v('active').checked };
+  }
+  $('#form-supply').addEventListener('submit', e => {
+    e.preventDefault();
+    const f = e.target;
+    busy(f.querySelector('[type="submit"]'), async () => {
+      const body = { ...readSupply(f), code: f.elements['code'].value.trim(), on_hand: Number(f.elements['on_hand'].value) };
+      await api('/api/admin/supplies', body);
+      showAffected([], `เพิ่ม ${body.name} แล้ว`);
+      f.innerHTML = '';
+      await loadInventory();
+    });
+  });
+  $('#supply-q').addEventListener('input', () => { if (SUPPLIES) renderInventory(); });
+  $('#supply-low').addEventListener('change', () => { if (SUPPLIES) renderInventory(); });
+
+  function renderProcedureSelect() {
+    const sel = $('#proc-select'), keep = sel.value;
+    sel.innerHTML = '<option value="">— เลือกหัตถการ —</option>' + SUPPLIES.procedures.map(p =>
+      `<option value="${esc(p.id)}">${esc(p.name)}${Object.keys(p.supplies).length ? ' · ' + Object.keys(p.supplies).length + ' รายการ' : ''}</option>`).join('');
+    sel.value = keep;
+    renderProcedureSupplies();
+  }
+  function renderProcedureSupplies() {
+    const form = $('#form-proc-supplies'), proc = SUPPLIES.procedures.find(p => p.id === $('#proc-select').value);
+    form.hidden = !proc;
+    if (!proc) return;
+    const edit = can('inventory') && SUPPLIES.ready;
+    const items = SUPPLIES.items.filter(i => i.active || proc.supplies[i.code]);
+    form.innerHTML = `<div class="grid">${items.map(i => `<label>${esc(i.name)} <small>(${esc(i.code)})</small>
+        <input type="number" min="0" max="50" name="${esc(i.code)}" value="${proc.supplies[i.code] || 0}" ${edit ? '' : 'disabled'}></label>`).join('')
+        || '<p class="hint">ยังไม่มีวัสดุในคลัง</p>'}</div>
+      ${edit ? '<div class="actions"><button class="btn primary" type="submit">บันทึกวัสดุของหัตถการนี้</button></div>' : ''}`;
+  }
+  $('#proc-select').addEventListener('change', renderProcedureSupplies);
+  $('#form-proc-supplies').addEventListener('submit', e => {
+    e.preventDefault();
+    const form = e.target, id = $('#proc-select').value;
+    const supplies = Object.fromEntries([...form.querySelectorAll('input[type="number"]')].filter(x => Number(x.value) > 0).map(x => [x.name, Number(x.value)]));
+    busy(form.querySelector('[type="submit"]'), async () => {
+      await api(`/api/admin/procedures/${id}/supplies`, { supplies }, 'PUT');
+      showAffected([], 'บันทึกวัสดุของหัตถการแล้ว ใช้กับการจองครั้งถัดไป');
+      await loadInventory();
+    });
+  });
+
   // ---------------------------------------------------------------- start
   $('#logout').addEventListener('click', async () => { await api('/api/logout', {}).catch(() => {}); location.href = '/login'; });
   (async () => {
     ME = (await api('/api/me')).user;
     if (ME.must_change_password) { location.href = '/'; return; }
     $('#who').innerHTML = `<span>${esc(ME.display_name)}</span><small>${esc(ME.role_label)}</small>`;
-    if (!can('hospital_view')) {
-      document.querySelector('main').innerHTML = '<div class="card"><h2>ไม่มีสิทธิ์</h2><p class="hint">หน้านี้สำหรับผู้ดูแลระบบและผู้จัดตาราง</p></div>';
+    const tabs = [...document.querySelectorAll('.tab')];
+    tabs.forEach(t => { t.hidden = !can(t.dataset.perm); });
+    const allowed = tabs.filter(t => !t.hidden).map(t => t.dataset.tab);
+    if (!allowed.length) {
+      document.querySelector('main').innerHTML = '<div class="card"><h2>ไม่มีสิทธิ์</h2><p class="hint">หน้านี้สำหรับผู้ดูแลระบบ ผู้จัดตาราง และ CSSD/คลังวัสดุ</p></div>';
       return;
     }
-    selectTab('roster');
+    const wanted = location.hash.slice(1);
+    selectTab(allowed.includes(wanted) ? wanted : allowed[0]);
   })().catch(e => {
     document.querySelector('main').innerHTML = `<div class="card"><h2>เปิดหน้านี้ไม่ได้</h2><p class="hint">${esc(e.message)}</p></div>`;
   });

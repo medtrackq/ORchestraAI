@@ -10,7 +10,8 @@ finds the next slot that satisfies all agents at once.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Mapping
 
 from .fatigue import day_minutes, is_late_end
@@ -26,6 +27,7 @@ EQUIPMENT = "Equipment & CSSD Agent"
 FACILITY = "OR Facility Agent"
 
 _FAR = 10**9
+_NO_CASE = SimpleNamespace(required_supplies={})
 OTHER_DAY = "a booking on another day"
 _STATUS_WORDS = {"STERILIZING": "sterilizing at CSSD", "IN_USE": "in use", "MAINTENANCE": "in maintenance"}
 
@@ -105,11 +107,15 @@ class Busy:
     bed: dict[str, list[Span]]
     load: dict[str, int]  # booked minutes per person
     day_load: dict[str, int]  # booked minutes per person inside the planning day
+    supply: dict[str, int] = field(default_factory=dict)  # supplies held by booked cases
 
     @classmethod
-    def from_assignments(cls, assignments: Mapping[str, Assignment]) -> "Busy":
+    def from_assignments(cls, assignments: Mapping[str, Assignment],
+                         cases: Mapping[str, SurgeryCase] | None = None) -> "Busy":
         busy = cls({}, {}, {}, {}, {}, {})
         for a in assignments.values():
+            for code, qty in ((cases or {}).get(a.case_id) or _NO_CASE).required_supplies.items():
+                busy.supply[code] = busy.supply.get(code, 0) + qty
             busy.room.setdefault(a.or_id, []).append((a.start_min, a.cleanup_end_min, a.case_id))
             for sid in a.staff_ids:
                 busy.staff.setdefault(sid, []).append((a.start_min, a.end_min, a.case_id))
@@ -306,6 +312,24 @@ def _equipment(opt, case: SurgeryCase, start: int, busy: Busy) -> AgentVerdict:
         else:
             ok = False
             readies.append(_kth_ready(states, count))
+    # Inventory: single-use supplies and implants (stock is for the whole day, not a time slot).
+    for code, qty in sorted(case.required_supplies.items()):
+        item = opt._supply_by_id.get(code)
+        if item is None:
+            items.append(ResourceStatus(code, False, "not a stocked item"))
+            readies.append(None)
+            ok = False
+            continue
+        shelf = item.for_booked if case.urgency is Urgency.EMERGENCY else item.available  # see _plan_case
+        left = shelf - busy.supply.get(code, 0)
+        label = f"{item.name} ({code})"
+        if left >= qty:
+            items.append(ResourceStatus(label, True, f"need {qty}, {left} {item.unit} left for today", start))
+        else:
+            note = f"need {qty}, only {max(left, 0)} {item.unit} left" + (f"; {item.note}" if item.note else "")
+            items.append(ResourceStatus(label, False, note))
+            readies.append(None)
+            ok = False
     return AgentVerdict(EQUIPMENT, ok, items, _combine(readies))
 
 

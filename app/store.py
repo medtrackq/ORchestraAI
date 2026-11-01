@@ -22,7 +22,6 @@ from orchestra_engine import (
     fmt,
     hm,
     staff_fatigue,
-    validate_schedule,
 )
 from orchestra_engine.demo import Hospital, build_hospital, elective_day
 from orchestra_engine.models import DEFAULT_TEAM
@@ -96,6 +95,19 @@ def room_options(hospital: Hospital) -> list[dict]:
     ]
 
 
+def supply_options(hospital: Hospital, result: ScheduleResult) -> list[dict]:
+    """Stock of each supply for this day: what is free for new cases, and low-stock flags."""
+    booked: Counter[str] = Counter()
+    for cid in result.assignments:
+        booked.update(result.cases[cid].required_supplies)
+    return [
+        {"id": s.item_id, "name": s.name, "unit": s.unit, "category": s.category, "available": s.available,
+         "booked": booked[s.item_id], "left": max(0, s.available - booked[s.item_id]),
+         "low": s.available - booked[s.item_id] <= s.reorder_level, "note": s.note}
+        for s in hospital.supplies
+    ]
+
+
 def staff_skills(hospital: Hospital) -> dict[str, list[str]]:
     """Skills held by active staff, per role (what a booking can ask for)."""
     out: dict[str, set[str]] = {}
@@ -152,6 +164,14 @@ def build_case(hospital: Hospital, data: dict, case_id: str, *, release: int = 0
     if bad:
         raise StoreError(f"บทบาททีมไม่ถูกต้อง: {', '.join(bad)}")
     skills = required_skills(data)
+    stocked = {s.item_id for s in hospital.supplies}
+    supplies: dict[str, int] = {}
+    for code, qty in (data.get("required_supplies") or {}).items():
+        if code not in stocked:
+            raise StoreError(f"ไม่รู้จักวัสดุ/รากเทียม: {code}")
+        if not 0 <= int(qty) <= 50:
+            raise StoreError(f"จำนวน {code} ต้องอยู่ระหว่าง 0-50")
+        supplies[code] = int(qty)
     return SurgeryCase(
         case_id, data["patient_hn"], data["procedure"], surgeon.staff_id, int(data["duration_mins"]),
         urgency=Urgency(data.get("urgency") or "ELECTIVE"),
@@ -162,6 +182,7 @@ def build_case(hospital: Hospital, data: dict, case_id: str, *, release: int = 0
         infection_risk=data.get("infection_risk") or "CLEAN",
         requires_icu_post_op=bool(data.get("requires_icu_post_op")),
         airborne=bool(data.get("airborne")),
+        required_supplies=supplies,
         release_min=release,
         patient_name=(data.get("patient_name") or "").strip() or None,
     )
@@ -230,6 +251,7 @@ class ScheduleStore:
             "procedures": self.procedures,
             "cards": self.cards,
             "skills": staff_skills(h),
+            "supplies": supply_options(h, self.result),
         }
 
     def state(self, day: str | None = None) -> dict:
@@ -268,7 +290,7 @@ class ScheduleStore:
 
     def _commit(self, result: ScheduleResult) -> None:
         h = self.hospital
-        errors = validate_schedule(result, result.cases.values(), h.rooms, h.equipments, h.staff, h.beds)
+        errors = h.validate(result)
         if errors:  # never store a schedule with a conflict
             raise StoreError("ตารางที่คำนวณได้ไม่ผ่านการตรวจ: " + "; ".join(errors[:3]))
         for cid in set(self.result.assignments) - set(result.assignments):
@@ -294,7 +316,7 @@ class ScheduleStore:
             {"id": cid, "code": cid, "patient_hn": c.patient_hn, "patient_name": c.patient_name,
              "surgeon_id": c.surgeon_id, "surgeon": names.get(c.surgeon_id), "procedure_id": by_name.get(c.procedure),
              "procedure": c.procedure, "urgency": c.urgency.value, "duration_mins": c.duration_mins,
-             "airborne": c.airborne, "was_on": None}
+             "airborne": c.airborne, "was_on": None, "supplies": dict(c.required_supplies)}
             for cid, c in sorted(self.pending.items(), key=lambda kv: (rank[kv[1].urgency], kv[0]))
         ]
 
@@ -365,8 +387,7 @@ class ScheduleStore:
                 raise StoreError(f"ไม่พบเครื่องมือ {serial}")
             unit.status, unit.available_at = status, ready or 0
             h = self.hospital
-            problems = [p for p in validate_schedule(self.result, self.result.cases.values(), h.rooms,
-                                                     h.equipments, h.staff, h.beds) if serial in p]
+            problems = [p for p in h.validate(self.result) if serial in p]
             when = f" พร้อม {fmt(ready)}" if ready else ""
             self.activity.append(Activity("equipment", f"{serial}: {status}{when}", problems,
                                           actor=actor_name(actor)))

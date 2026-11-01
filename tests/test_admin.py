@@ -15,9 +15,9 @@ ADMIN = {"name": "Admin A", "username": "a", "role": "admin", "staff_id": None}
 
 @pytest.fixture()
 def admin(store):
-    from app.admin_store import HospitalAdmin
+    from app.admin_store import Inventory
 
-    return HospitalAdmin(store)
+    return Inventory(store)
 
 
 def test_rooms_staff_and_equipment_are_edited(admin, store, db_url):
@@ -201,3 +201,89 @@ def test_app_works_before_migration_005(db_url):
                              "start": "00:00", "end": "00:00", "note": "x"})["created"] == 1
     with pytest.raises(StoreError, match="20261104000000"):
         admin.add_closure({"room": "OR-1", "start_date": day, "end_date": day, "end_time": "12:00"})
+
+
+# ------------------------------------------------------------ supplies and implants
+
+def _stock(state, code):
+    return next(s for s in state["options"]["supplies"] if s["id"] == code)
+
+
+def test_bookings_reserve_supplies_and_deliveries_free_them(admin, store, db_url):
+    today = store.state()
+    drape = _stock(today, "ROBO-DRAPE")
+    assert (drape["available"], drape["booked"], drape["left"]) == (2, 2, 0)  # both demo robotic cases hold one
+    robotic = next(p for p in today["options"]["procedures"] if p["name"] == "Robotic partial nephrectomy")
+    assert robotic["supplies"] == {"ROBO-DRAPE": 1}
+
+    day = _tomorrow(store)
+    data = _request(store.state(day), "Dr.Kittipong", "Robotic partial nephrectomy", "HN-S1",
+                    required_supplies={"ROBO-DRAPE": 1})
+    check = store.slot_check(data, "09:00", commit=False, day=day)
+    equipment = next(v for v in check["verdicts"] if v["agent"] == "Equipment & CSSD Agent")
+    assert not equipment["ok"] and "ยังไม่ได้สั่งของเพิ่ม" in equipment["items"][-1]["note"]
+    assert "Robotic drape kit" in check["result"]["unscheduled"][0]["reasons"][0]
+
+    order = admin.expect_delivery("ROBO-DRAPE", {"quantity": 3, "expected_date": day}, actor=ADMIN)
+    assert store.slot_check(data, "09:00", commit=True, day=day)["booked"]
+    assert _rows(db_url, """SELECT r.quantity, r.status FROM supply_reservations r
+                            JOIN surgery_requests q USING (request_id) WHERE q.patient_hn = 'HN-S1'""") == [(1, "RESERVED")]
+    item = next(i for i in admin.inventory()["items"] if i["code"] == "ROBO-DRAPE")
+    # Today's two cases use the two on the shelf; the three arriving tomorrow cover tomorrow's case.
+    assert (item["on_hand"], item["reserved"], item["free"], item["free_later"]) == (2, 3, 0, 2)
+
+    # Cancelling the order leaves tomorrow's case without a drape kit: reported for re-planning.
+    result = admin.cancel_delivery(order["id"])
+    assert result["affected"][0]["date"] == day and "Robotic drape kit" in result["affected"][0]["problems"][0]
+    admin.receive("ROBO-DRAPE", {"quantity": 5, "note": "ซื้อด่วน"})
+    assert store.state(day)["warnings"] == []
+
+
+def test_ended_cases_use_up_stock_and_counts_are_set(admin, store, db_url):
+    with __import__("psycopg").connect(db_url, autocommit=True) as conn:
+        conn.execute("""UPDATE scheduled_surgeries s SET actual_start_time = NOW() - INTERVAL '3 hours',
+                            actual_end_time = NOW() - INTERVAL '1 minute'
+                        FROM surgery_requests r WHERE r.request_id = s.request_id AND r.patient_hn = 'HN-0010'""")
+    before = _stock(store.state(), "VASC-GRAFT")
+    item = next(i for i in admin.inventory()["items"] if i["code"] == "VASC-GRAFT")  # settles
+    assert item["on_hand"] == 0 and item["reserved"] == 0
+    assert _rows(db_url, "SELECT status FROM supply_reservations r JOIN supply_items i USING (item_id) "
+                         "WHERE i.code = 'VASC-GRAFT'") == [("USED",)]
+    assert _stock(store.state(), "VASC-GRAFT")["left"] == before["left"]  # what is free did not change
+
+    result = admin.count_stock("KNEE-IMP", {"on_hand": 1, "note": "นับสต็อกสิ้นเดือน"})
+    assert result["on_hand"] == 1 and result["affected"]  # two knee cases today hold two
+    admin.set_procedure_supplies(next(p["id"] for p in admin.inventory()["procedures"]
+                                      if p["name"] == "Open inguinal hernia repair"), {"supplies": {"MESH-15": 2}})
+    hernia = next(p for p in store.state()["options"]["procedures"] if p["name"] == "Open inguinal hernia repair")
+    assert hernia["supplies"] == {"MESH-15": 2}
+
+
+def test_supply_items_are_validated(admin):
+    from app.store import StoreError
+
+    admin.save_item({"code": "STENT-3", "name": "Coronary stent 3 mm", "category": "IMPLANT", "on_hand": 4,
+                     "reorder_level": 2})
+    with pytest.raises(StoreError, match="STENT-3"):
+        admin.save_item({"code": "STENT-3", "name": "Again"})
+    with pytest.raises(StoreError):
+        admin.expect_delivery("STENT-3", {"quantity": 2, "expected_date": "2000-01-01"})
+    admin.save_item({"name": "Coronary stent 3 mm", "category": "IMPLANT", "reorder_level": 5}, code="STENT-3")
+    stent = next(i for i in admin.inventory()["items"] if i["code"] == "STENT-3")
+    assert stent["low"] and stent["free"] == 4
+
+
+def test_app_works_before_migration_006(db_url):
+    import psycopg
+
+    from app.db_store import DatabaseStore
+
+    with psycopg.connect(db_url, autocommit=True) as conn:
+        conn.execute("DROP TABLE supply_reservations, procedure_supplies, supply_deliveries, supply_items")
+    store = DatabaseStore(db_url, workers=2, time_limit_s=10)
+    store.seed_demo()
+    state = store.state()
+    assert len(state["schedule"]["bookings"]) == 10 and state["warnings"] == [] and state["options"]["supplies"] == []
+    from app.admin_store import Inventory
+
+    assert Inventory(store).inventory()["ready"] is False
