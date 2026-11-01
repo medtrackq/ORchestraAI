@@ -300,19 +300,29 @@ class DatabaseStore:
                 return None
             return self._readiness_next(conn, self.db.today())
 
-    def claim_digest(self, day: str) -> bool:
-        """True once per target day across restarts and workers (kept in app_settings)."""
+    def claim_digest(self, day: str, kind: str = "readiness") -> bool:
+        """True once per day and kind of reminder across restarts and workers (kept in app_settings)."""
+        key = f"{kind}_digest:{day}"
         with self._transaction(write=False) as conn:
             if not conn.execute("SELECT to_regclass('public.app_settings') IS NOT NULL AS ok").fetchone()["ok"]:
-                if day in self._fallback_digests:
+                if key in self._fallback_digests:
                     return False
-                self._fallback_digests.add(day)
+                self._fallback_digests.add(key)
                 return True
             row = conn.execute(
                 """INSERT INTO app_settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO NOTHING RETURNING key""",
-                (f"readiness_digest:{day}", datetime.now(self.db.tz).isoformat(timespec="minutes")),
+                (key, datetime.now(self.db.tz).isoformat(timespec="minutes")),
             ).fetchone()
         return row is not None
+
+    def waitlist_due(self) -> list[dict]:
+        """Waiting cases past or near the date they should be operated by (for the daily reminder)."""
+        from .waitlist import alerts
+
+        with self._transaction(write=False) as conn:
+            if not self.db.has_waitlist(conn):
+                return []
+            return alerts(self.db.pending(conn))
 
     def readiness_update(self, case_id: str, data: dict, *, day: str | None = None, actor: dict | None = None) -> dict:
         """Tick, clear or flag one checklist item of a case (surgeons: their own cases)."""

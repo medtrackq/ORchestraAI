@@ -201,3 +201,101 @@ def test_api_search_and_waiting_list(owner):
     assert surgeon.post("/api/slot-search", json={"case": _case(surgeon_id="SUR-ORTHO"), "start": "09:00"}).status_code == 403
     assert surgeon.post("/api/waitlist", json={"case": _case(surgeon_id="SUR-ORTHO", patient_hn="HN-W7")}).status_code == 403
     assert surgeon.patch(f"/api/pending/{code}", json={"due_date": due}).status_code == 200  # own (SUR-GEN) request
+
+
+# ------------------------------------------------------------------ daily reminder (phone / LINE)
+
+def _due_rows(today: date) -> list[dict]:
+    row = lambda code, sid, left, urgency="ELECTIVE": {  # noqa: E731
+        "code": code, "procedure": "Laparoscopic cholecystectomy", "surgeon": "Dr.A" if sid == "S1" else "Dr.B",
+        "surgeon_id": sid, "urgency": urgency, "patient_hn": "HN-SECRET", "patient_name": "นาย ลับ",
+        **wl.due_info(today + timedelta(days=left) if left is not None else None, today)}
+    return [row("R-1", "S1", 20), row("R-2", "S1", -2), row("R-3", "S2", 3), row("R-4", "S2", None), row("R-5", "S2", 0)]
+
+
+def test_reminder_names_cases_not_patients():
+    from app.auth import User
+    from app.notify import build_messages
+
+    today = date(2026, 11, 2)
+    event = wl.digest_event(today.isoformat(), _due_rows(today))
+    assert [c["code"] for c in event["cases"]] == ["R-2", "R-5", "R-3"]  # overdue first, then by days left
+    users = [User("u-sch", "sch", "Scheduler", "scheduler"), User("u-s1", "s1", "Dr.A", "surgeon", "S1"),
+             User("u-s9", "s9", "Dr.Z", "surgeon", "S9"), User("u-n", "n", "Nurse", "staff", "N1")]
+    messages = {m.user_id: m for m in build_messages(event, users)}
+    assert set(messages) == {"u-sch", "u-s1"}  # no own cases: nothing; nurses do not get it
+    sch, own = messages["u-sch"], messages["u-s1"]
+    assert sch.title == "รายการรอผ่าตัด: เลยกำหนด 1 เคส · ใกล้ครบกำหนด 2 เคส" and sch.url == "/#pending"
+    assert sch.lines == ["R-2 Laparoscopic cholecystectomy · Dr.A · เลยกำหนด 2 วัน",
+                         "R-5 Laparoscopic cholecystectomy · Dr.B · ครบกำหนดวันนี้",
+                         "R-3 Laparoscopic cholecystectomy · Dr.B · อีก 3 วัน"]
+    assert own.title == "รายการรอผ่าตัดของคุณ: เลยกำหนด 1 เคส" and own.lines == ["R-2 Laparoscopic cholecystectomy · เลยกำหนด 2 วัน"]
+    assert all("HN" not in m.body and "ลับ" not in m.body for m in messages.values())
+    assert {m.kind for m in messages.values()} == {"waitlist"}
+
+
+def test_reminder_goes_out_once_a_day_after_the_hour():
+    from datetime import datetime
+    from types import SimpleNamespace
+
+    from app.readiness import DigestTimer
+
+    sent, claims, rows = [], set(), _due_rows(date(2026, 11, 2))
+
+    class Fake:
+        db = SimpleNamespace(tz=None)
+
+        def readiness_next(self):
+            return None
+
+        def waitlist_due(self):
+            return wl.alerts(rows)
+
+        def claim_digest(self, day, kind="readiness"):
+            if (kind, day) in claims:
+                return False
+            claims.add((kind, day))
+            return True
+
+    timer = DigestTimer(Fake(), sent.append, hour=14)
+    timer._heartbeat = lambda now: None
+    timer.tick(datetime(2026, 11, 2, 13, 0))
+    assert sent == []  # before the hour
+    timer.tick(datetime(2026, 11, 2, 14, 5))
+    timer.tick(datetime(2026, 11, 2, 16, 0))
+    assert [e["type"] for e in sent] == ["waitlist_digest"] and ("waitlist", "2026-11-02") in claims
+    other = DigestTimer(Fake(), sent.append, hour=14)  # another worker or a restart: already claimed
+    other._heartbeat = lambda now: None
+    other.tick(datetime(2026, 11, 2, 17, 0))
+    timer.tick(datetime(2026, 11, 3, 14, 0))
+    assert len(sent) == 2 and sent[-1]["day"] == "2026-11-03"  # the next day again (still due)
+    rows.clear()
+    timer.tick(datetime(2026, 11, 4, 14, 0))
+    assert len(sent) == 2  # nothing due: nothing sent
+
+
+@needs_db
+def test_store_lists_due_cases_for_the_reminder(store, db_url):
+    today = store.db.today()
+    base = _request(store.state(), "Dr.Napat", "Laparoscopic cholecystectomy", "HN-D0")
+    for hn, left in (("HN-D1", 30), ("HN-D2", -1), ("HN-D3", 5), ("HN-D4", None)):
+        store.add_waiting({**base, "patient_hn": hn, "patient_name": f"Test {hn}",
+                           "due_date": (today + timedelta(days=left)).isoformat() if left is not None else None})
+    due = store.waitlist_due()
+    assert [(r["patient_hn"], r["due_status"]) for r in due] == [("HN-D2", "overdue"), ("HN-D3", "soon")]
+    day = today.isoformat()
+    assert store.claim_digest(day) and store.claim_digest(day, kind="waitlist")  # separate per kind
+    assert not store.claim_digest(day, kind="waitlist") and not store.claim_digest(day)
+    with psycopg.connect(db_url, autocommit=True) as conn:
+        conn.execute("ALTER TABLE surgery_requests DROP COLUMN due_date, DROP COLUMN waitlisted_at")
+    assert store.waitlist_due() == []  # before migration 015: no due dates, no reminder
+
+
+def test_demo_store_reminder_rows(owner):
+    due = (date.today() + timedelta(days=2)).isoformat()
+    assert owner.post("/api/waitlist", json={"case": _case(patient_hn="HN-W5", due_date=due)}).status_code == 200
+    from app.main import store
+
+    [row] = store.waitlist_due()
+    assert row["due_status"] == "soon" and store.claim_digest("2026-11-02", kind="waitlist")
+    assert store.claim_digest("2026-11-02")  # the readiness digest of that day is separate

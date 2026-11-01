@@ -47,9 +47,11 @@ KINDS = {
     "cssd": "CSSD อบเครื่องมือไม่ทันเคสที่จองไว้",
     "readiness": "เคสยังไม่พร้อมผ่าตัด (มีปัญหา และสรุปเคสวันถัดไปวันละครั้ง)",
     "feedback": "ผู้ใช้แจ้งปัญหาหรือข้อเสนอแนะ และข้อผิดพลาดใหม่ของระบบ (ผู้ดูแลระบบ)",
+    "waitlist": "เคสในรายการรอเลยหรือใกล้วันที่ควรผ่าตัด (สรุปวันละครั้ง)",
 }
 KIND_ROLES = {"case": None, "emergency": {"admin", "scheduler"}, "cssd": {"admin", "scheduler", "cssd"},
-              "readiness": {"admin", "scheduler", "surgeon"}, "feedback": {"admin"}}
+              "readiness": {"admin", "scheduler", "surgeon"}, "feedback": {"admin"},
+              "waitlist": {"admin", "scheduler", "surgeon"}}
 FEEDBACK_KINDS = {"PROBLEM": "แจ้งปัญหา", "IDEA": "ข้อเสนอแนะ", "QUESTION": "สอบถาม"}
 MAX_LINES = 6
 CODE_MINUTES = 15
@@ -444,6 +446,29 @@ def build_messages(event: dict, users: list) -> list[Message]:
                 "อ่านได้ที่หน้า ⚙ สถานะระบบ"]
         out += [Message(u.user_id, "feedback", f"มีผู้ใช้{kind}ใหม่", body, "/status#feedback")
                 for u in users if u.role in KIND_ROLES["feedback"] and u.user_id != actor]
+    elif event["type"] == "waitlist_digest":  # case codes, procedure and surgeon only (no patient identity)
+        cases = event.get("cases", [])
+
+        def when(c) -> str:
+            if c["status"] == "overdue":
+                return f"เลยกำหนด {-c['days_left']} วัน"
+            return "ครบกำหนดวันนี้" if c["days_left"] == 0 else f"อีก {c['days_left']} วัน"
+
+        for u in users:
+            if u.role in ("admin", "scheduler"):
+                mine, whose = cases, ""
+            elif u.role == "surgeon" and u.staff_id:
+                mine, whose = [c for c in cases if c.get("surgeon_id") == u.staff_id], "ของคุณ"
+            else:
+                continue
+            if not mine:
+                continue
+            late = sum(1 for c in mine if c["status"] == "overdue")
+            soon = len(mine) - late
+            parts = ([f"เลยกำหนด {late} เคส"] if late else []) + ([f"ใกล้ครบกำหนด {soon} เคส"] if soon else [])
+            lines = [f"{c['code']} {c['procedure']}" + ("" if whose else f" · {c.get('surgeon') or '-'}") + f" · {when(c)}"
+                     for c in mine]
+            out.append(Message(u.user_id, "waitlist", f"รายการรอผ่าตัด{whose}: " + " · ".join(parts), lines, "/#pending"))
     elif event["type"] == "system_error":
         where = {"server": "เซิร์ฟเวอร์", "browser": "หน้าเว็บ", "job": "งานเบื้องหลัง"}.get(event.get("source"), "ระบบ")
         out += [Message(u.user_id, "feedback", "ระบบมีข้อผิดพลาดใหม่", [f"{where}: {event.get('where', '-')}",

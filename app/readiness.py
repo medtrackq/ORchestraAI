@@ -93,7 +93,8 @@ def digest_event(next_day: dict) -> dict:
 
 
 class DigestTimer:
-    """Once a day, at or after ``hour`` (local time of the store), send the next day's not-ready cases.
+    """Once a day, at or after ``hour`` (local time of the store), send the next day's not-ready cases,
+    and the waiting-list cases past or near the date they should be operated by.
 
     The store claims each target day once (``claim_digest``), so restarts and several
     workers do not send it twice. On a server that sleeps, it goes out on the next wake.
@@ -103,6 +104,7 @@ class DigestTimer:
         self.store, self.send, self.hour, self.every_s = store, send, hour, every_s
         self._stop = threading.Event()
         self._done: set[str] = set()  # target days this process has already handled
+        self._waitlist_done: set[str] = set()  # days this process has already sent the waiting-list reminder
         self._checked = None  # the day this process last noted its check
 
     def start(self) -> None:
@@ -134,6 +136,7 @@ class DigestTimer:
             if now.hour < self.hour or not hasattr(self.store, "readiness_next"):
                 return False
             self._heartbeat(now)
+            self.waitlist(now)
             nxt = self.store.readiness_next()
             if not nxt or not nxt["cases"] or nxt["date"] in self._done:
                 return False
@@ -144,6 +147,26 @@ class DigestTimer:
             return True
         except Exception:  # reminders must never take the server down
             log.exception("readiness digest failed")
+            return False
+
+    def waitlist(self, now: datetime) -> bool:
+        """Once a day: waiting cases past or near their due date (nothing when there are none)."""
+        if not hasattr(self.store, "waitlist_due"):
+            return False
+        day = now.date().isoformat()
+        if day in self._waitlist_done:
+            return False
+        try:
+            from .waitlist import digest_event as waitlist_event
+
+            rows = self.store.waitlist_due()
+            self._waitlist_done.add(day)
+            if not rows or not self.store.claim_digest(day, kind="waitlist"):
+                return False
+            self.send(waitlist_event(day, rows))
+            return True
+        except Exception:  # reminders must never take the server down
+            log.exception("waiting list reminder failed")
             return False
 
 
