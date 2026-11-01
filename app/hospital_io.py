@@ -892,14 +892,15 @@ def _demo_where() -> tuple[str, tuple]:
 
 
 WIPE_ORDER = (  # children before parents
-    "resource_allocations", "supply_reservations", "scheduled_surgeries", "surgery_requests",
+    "case_history", "case_history_imports", "resource_allocations", "supply_reservations", "scheduled_surgeries", "surgery_requests",
     "surgeon_preference_cards", "procedure_supplies", "supply_deliveries", "supply_items", "procedures",
     "equipment_maintenance", "equipment_units", "equipment_types", "room_closures", "operating_rooms",
     "recovery_beds", "team_synergy", "staff_schedules", "staff",
 )
 COUNTED = {"operating_rooms": "ห้องผ่าตัด", "recovery_beds": "เตียงพักฟื้น", "staff": "บุคลากร",
            "equipment_units": "เครื่องมือ", "procedures": "หัตถการ", "surgeon_preference_cards": "preference card",
-           "supply_items": "วัสดุ", "surgery_requests": "คำขอผ่าตัด", "scheduled_surgeries": "เคสในตาราง"}
+           "supply_items": "วัสดุ", "surgery_requests": "คำขอผ่าตัด", "scheduled_surgeries": "เคสในตาราง",
+           "case_history": "ประวัติผ่าตัดย้อนหลัง"}
 
 
 def _tables(conn) -> set[str]:

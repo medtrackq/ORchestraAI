@@ -721,6 +721,9 @@ class DatabaseStore:
             earlier_cancel = self._cancellations(conn, *before)
             stages, stages_ready = self._stage_cases(conn, first, last)
             block_use = self._block_usage(conn, first, last)
+            from . import history_io
+
+            history = history_io.compare(conn, cases, first, last, self.db.tz)
         extra = {
             "waiting": waiting, "cancelled": cancelled, "fatigue_overrides": overrides,
             "emergencies_inserted": counts.get("emergency", 0), "replans": counts.get("replan", 0),
@@ -732,6 +735,7 @@ class DatabaseStore:
         report["cancellations_ready"] = cancellations is not None
         report["stages"], report["stages_ready"] = ms.segment_stats(stages), stages_ready
         report["blocks"], report["blocks_ready"] = block_use or [], block_use is not None
+        report["history"], report["history_ready"] = history or [], history is not None
         report["previous"] = {**earlier["kpi"], "cases": earlier["cases"]}
         if earlier_cancel is not None:
             report["previous"]["cancellations"] = cx.summarize(earlier_cancel[0], earlier["cases"], waiting=earlier_cancel[1])

@@ -38,7 +38,7 @@ from pydantic import BaseModel, Field
 
 from .auth import (COOKIE, ROLES, SESSION_HOURS, Accounts, AuthError, DbUserStore, MemoryUserStore,
                    ServiceUnavailable, TooManyAttempts, User, can)
-from . import backup, hospital_io, privacy, roster_io, system_status
+from . import backup, history_io, hospital_io, privacy, roster_io, system_status
 from .admin_store import require_supabase
 from .intake_service import IntakeService
 from .notify import DbNotifyStore, MemoryNotifyStore, Notifier, NotifyUnavailable
@@ -1433,3 +1433,42 @@ def system_backup(request: Request) -> StreamingResponse:
     return StreamingResponse(chunks(), media_type="application/zip",
                              headers={"Content-Disposition": f'attachment; filename="{name}"',
                                       "Content-Length": str(size)})
+
+
+# ------------------------------------------------------------- past surgeries from Excel (forecast)
+
+def _file(body: ImportIn) -> bytes:
+    text = body.content.split(",", 1)[1] if body.content.startswith("data:") else body.content
+    try:
+        return base64.b64decode(text, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="อ่านไฟล์ไม่ได้ (ข้อมูลไฟล์ไม่ถูกต้อง)") from exc
+
+
+@app.get("/api/admin/history")
+def admin_history(request: Request) -> dict:
+    """Past surgeries imported for the duration forecast: totals and each imported file."""
+    _, admin = _admin(request, "hospital_data")
+    return _run(history_io.overview, admin)
+
+
+@app.get("/api/admin/history.xlsx")
+def admin_history_template(request: Request) -> Response:
+    _, admin = _admin(request, "hospital_data")
+    data = _run(history_io.template, admin)
+    return Response(data, media_type=XLSX, headers={
+        "Content-Disposition": 'attachment; filename="orchestra-surgical-history.xlsx"', "Cache-Control": "no-store"})
+
+
+@app.post("/api/admin/history/import")
+def admin_history_import(body: ImportIn, request: Request) -> dict:
+    """Check an uploaded history file; with ``commit`` save its right rows (wrong ones are listed, not saved)."""
+    user, admin = _admin(request, "hospital_data")
+    return _run(history_io.import_history, admin, body.filename, _file(body), commit=body.commit, actor=_actor(user))
+
+
+@app.delete("/api/admin/history/{batch_id}")
+def admin_history_delete(batch_id: str, request: Request) -> dict:
+    """Remove one imported file's cases (e.g. the wrong file was uploaded)."""
+    user, admin = _admin(request, "hospital_data")
+    return _run(history_io.delete_batch, admin, batch_id, actor=_actor(user))

@@ -156,6 +156,9 @@
     <section class="card" style="margin-top:16px"><h2>เวลาแต่ละช่วงของเคส</h2>
       <p class="sub">จากเวลาที่บันทึกในรายละเอียดเคส (ห้องเตรียม เข้าห้อง ลงมีด เย็บแผลเสร็จ ออกห้อง ออกจากห้องพักฟื้น) · นับเฉพาะเคสที่บันทึกครบทั้งสองขั้นของช่วงนั้น</p>
       <div class="table-scroll" id="table-stages"></div></section>
+    <section class="card" style="margin-top:16px"><h2>เวลาผ่าตัดจริง: ก่อนใช้ระบบ เทียบกับช่วงนี้</h2>
+      <p class="sub">ก่อนใช้ระบบ = ประวัติผ่าตัดย้อนหลัง 2 ปีที่นำเข้าจาก Excel · ช่วงนี้ = เคสในระบบที่บันทึกเวลาจริง (ไม่รวมข้อมูลตัวอย่าง) · ต่าง = มัธยฐานช่วงนี้ − ก่อนใช้ระบบ (ค่าลบ = เร็วขึ้น)</p>
+      <div class="table-scroll" id="table-history"></div></section>
     <section class="card" style="margin-top:16px"><h2>สรุปรายห้อง</h2><div class="table-scroll" id="table-rooms"></div></section>
   </div>
 </main>
@@ -355,6 +358,13 @@
       ? 'บันทึกได้เฉพาะเข้าห้อง/ออกห้อง จนกว่าจะรัน migration 011 · ' : ''}ยังไม่มีเคสที่บันทึกเวลาแต่ละขั้นในช่วงนี้</p>`;
     else table('#table-stages', [['ช่วง'], ['เคส', 1], ['เฉลี่ย (นาที)', 1], ['มัธยฐาน (นาที)', 1]],
       stages.map(x => [x.label, x.n, fmt(x.mean, 0), fmt(x.median, 0)]));
+    const history = r.history || [];
+    if (!history.length) $('#table-history').innerHTML = `<p class="empty">${r.history_ready === false
+      ? 'ต้องรัน SQL ไฟล์ 014 (ประวัติผ่าตัดย้อนหลัง) ก่อน · ดูได้ที่หน้าสถานะระบบ'
+      : 'ยังไม่ได้นำเข้าประวัติผ่าตัดย้อนหลัง · นำเข้าได้ที่หน้าข้อมูลโรงพยาบาล แท็บ "นำเข้า/ส่งออก Excel"'}</p>`;
+    else table('#table-history', [['หัตถการ'], ['ก่อน (เคส)', 1], ['ก่อน มัธยฐาน (นาที)', 1], ['ช่วงนี้ (เคส)', 1], ['ช่วงนี้ มัธยฐาน (นาที)', 1], ['ต่าง (นาที)', 1]],
+      history.map(x => [x.procedure, x.before_n, fmt(x.before_median), x.now_n, fmt(x.now_median),
+        x.change === null ? '–' : (x.change > 0 ? '+' : x.change < 0 ? '−' : '') + fmt(Math.abs(x.change))]));
 
     const days = r.per_day.map(d => ({ ...d, label: d.date, tick: shortDate(d.date) }));
     columns('#chart-util', days.filter(d => d.utilization !== null), { parts: [{ key: 'utilization', name: 'อัตราการใช้ห้อง', color: 'var(--series-1)' }], max: 100, percent: true });

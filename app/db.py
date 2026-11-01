@@ -780,19 +780,26 @@ class Database:
 
     @staticmethod
     def history(conn: psycopg.Connection):
-        """Recorded actual durations (last two years) for the duration forecast."""
+        """Actual durations of the last two years for the duration forecast: cases recorded in the app,
+        and past cases imported from Excel (``case_history``, migration 014)."""
         from orchestra_engine.intake import HistoryRecord
 
+        imported = ""
+        if conn.execute("SELECT to_regclass('public.case_history') IS NOT NULL AS ok").fetchone()["ok"]:
+            imported = """UNION ALL
+                   SELECT surgeon_id, procedure_id, actual_mins::float AS minutes FROM case_history
+                   WHERE surgery_date > (NOW() - INTERVAL '2 years')::date"""
         return [
             HistoryRecord(str(r["surgeon_id"]), str(r["procedure_id"]), float(r["minutes"]))
             for r in conn.execute(
-                """SELECT r.primary_surgeon_id AS surgeon_id, r.procedure_id,
+                f"""SELECT r.primary_surgeon_id AS surgeon_id, r.procedure_id,
                           EXTRACT(EPOCH FROM (s.actual_end_time - s.actual_start_time)) / 60 AS minutes
                    FROM scheduled_surgeries s JOIN surgery_requests r ON r.request_id = s.request_id
                    WHERE s.actual_start_time IS NOT NULL AND s.actual_end_time > s.actual_start_time
                      AND r.procedure_id IS NOT NULL AND r.primary_surgeon_id IS NOT NULL
                      AND s.status IS DISTINCT FROM 'CANCELLED'
-                     AND s.actual_start_time > NOW() - INTERVAL '2 years'"""
+                     AND s.actual_start_time > NOW() - INTERVAL '2 years'
+                   {imported}"""
             )
         ]
 
