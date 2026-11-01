@@ -376,7 +376,10 @@ def test_procedures_and_recovery_time(admin, store):
 
 
 def test_cssd_queue_is_in_the_state(store):
-    jobs = store.state()["cssd"]
+    day = _tomorrow(store)  # late in the day every set used today may already be reprocessed (an empty queue)
+    data = _request(store.state(day), "Dr.Napat", "Laparoscopic cholecystectomy", "HN-C1")
+    assert store.slot_check(data, "09:00", commit=True, day=day)["booked"]
+    jobs = store.state(day)["cssd"]
     assert jobs and {"unit_id", "ready", "next_case", "slack_mins", "level"} <= set(jobs[0])
     assert all(j["reprocess_mins"] > 0 for j in jobs)
 

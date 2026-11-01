@@ -174,6 +174,14 @@
   .badge.ok { background: var(--ok-soft); color: var(--ok); border-color: transparent; }
   .badge.bad { background: var(--bad-soft); color: var(--bad); border-color: transparent; }
   .badge.warn { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
+  .row-item.due-overdue { border-left: 4px solid var(--bad); }
+  .row-item.due-soon { border-left: 4px solid var(--warn); }
+  .book-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .book-actions .checks { margin: 0; }
+  .slot-days { display: grid; gap: 8px; margin: 10px 0; }
+  .slot-days .proposal { margin: 0; }
+  .due-edit { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .due-edit input { width: auto; flex: 0 1 170px; }
   .secret { font: .9rem ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--warn-soft); color: var(--warn); padding: 8px 10px; border-radius: 8px; overflow-wrap: anywhere; }
   #notify-dialog { width: min(460px, calc(100% - 32px)); }
   .notify-sec { border-top: 1px solid var(--border); padding: 10px 0; display: grid; gap: 8px; font-size: .86rem; }
@@ -338,7 +346,19 @@
           </label>
           <label>เวลาที่ต้องการ<input type="time" name="start" value="09:00" required></label>
         </div>
-        <button class="btn primary" type="submit">ตรวจสอบช่วงเวลา</button>
+        <div class="row2" data-role="due-row" hidden>
+          <label>ควรผ่าตัดภายในวันที่ (ไม่บังคับ)<input type="date" name="due_date"></label>
+          <label>หรือเลือกระยะจากวันนี้
+            <select data-role="due-preset"><option value="">—</option><option value="14">2 สัปดาห์</option>
+              <option value="28">4 สัปดาห์ (เช่น มะเร็ง)</option><option value="56">8 สัปดาห์</option><option value="90">3 เดือน</option></select>
+          </label>
+        </div>
+        <div class="book-actions">
+          <button class="btn primary" type="submit">ตรวจสอบช่วงเวลา</button>
+          <button class="btn" type="button" id="slot-search">หาวันว่าง 14 วัน</button>
+          <button class="btn" type="button" id="waitlist-add" data-role="waitlist-add">เพิ่มเข้ารายการรอ</button>
+          <label class="checks" title="นับเฉพาะวันจันทร์ถึงศุกร์"><input type="checkbox" id="skip-weekends" checked>ข้ามเสาร์-อาทิตย์</label>
+        </div>
       </form>
       <div class="result" id="result-book"></div>
     </section>
@@ -434,7 +454,7 @@
     <label>รายละเอียด (ไม่บังคับ ยกเว้น "อื่น ๆ" · ไม่ต้องใส่ชื่อหรือ HN ผู้ป่วย)
       <input type="text" name="note" maxlength="200" placeholder="เช่น K 2.9 รอแก้ไข, ญาติขอเลื่อนไปสัปดาห์หน้า"></label>
     <fieldset id="cancel-outcome"><legend>หลังงด</legend>
-      <label class="opt"><input type="radio" name="outcome" value="POSTPONED" checked> เลื่อน: ไปอยู่รายการรอจัดวันใหม่</label>
+      <label class="opt"><input type="radio" name="outcome" value="POSTPONED" checked> เลื่อน: ไปอยู่รายการรอผ่าตัด</label>
       <label class="opt"><input type="radio" name="outcome" value="CANCELLED"> ยกเลิกคำขอ (ไม่ผ่าตัดแล้ว)</label>
     </fieldset>
     <p class="hint" id="cancel-err" role="alert" style="color:var(--bad);margin:0" hidden></p>
@@ -489,6 +509,7 @@
   const ACTIVITY_KIND = {
     reset: 'เริ่มต้น', seed: 'ข้อมูลตัวอย่าง', booking: 'จองเคส', emergency: 'แทรกเคสฉุกเฉิน', overrun: 'ผ่าตัดเกินเวลา',
     replan: 'จัดตารางใหม่', cancel: 'งดผ่าตัด', actual: 'บันทึกเวลาจริง', equipment: 'สถานะเครื่องมือ', admin: 'ข้อมูลโรงพยาบาล',
+    waitlist: 'รายการรอผ่าตัด',
   };
 
   // Staffing Agent fatigue issue -> Thai sentence.
@@ -728,6 +749,7 @@
       patient_name: (f.get('patient_name') || '').trim() || null,
       procedure_id: f.get('procedure_id') || null,
       required_staff_roles: form.dataset.roles ? JSON.parse(form.dataset.roles) : null,
+      due_date: (f.get('due_date') || '') || null,
     };
   }
 
@@ -776,7 +798,7 @@
     const groups = [['patient', 'ผู้ป่วย'], ['hospital', 'โรงพยาบาล (ป้องกันได้)'], ['other', 'อื่น ๆ']];
     $('#cancel-title').textContent = b ? `งดผ่าตัด ${b.case_id}` : `ยกเลิกคำขอ ${p.code}`;
     $('#cancel-sub').textContent = b ? `${b.procedure} · ${b.or_id} ${b.start}-${b.end}${STATE.date ? ' · ' + STATE.date : ''}`
-      : `${p.procedure} · รอจัดวันใหม่`;
+      : `${p.procedure} · ในรายการรอผ่าตัด`;
     $('#cancel-reasons').innerHTML = groups.map(([g, label]) => {
       const list = reasons.filter(r => r.group === g);
       return list.length ? `<div class="group">${label}</div>` + list.map(r => `<label class="opt"><input type="radio" name="reason" value="${esc(r.key)}"
@@ -807,7 +829,7 @@
       if (p && REBOOK && REBOOK.id === p.id) endRebook();
       if (b) selected = null;
       STATE = data.state; render();
-      toast(b ? (body.outcome === 'POSTPONED' ? `งด ${b.case_id} แล้ว · ไปอยู่รายการรอจัดวันใหม่` : `งด ${b.case_id} และยกเลิกคำขอแล้ว`)
+      toast(b ? (body.outcome === 'POSTPONED' ? `งด ${b.case_id} แล้ว · ไปอยู่รายการรอผ่าตัด` : `งด ${b.case_id} และยกเลิกคำขอแล้ว`)
         : 'ยกเลิกคำขอแล้ว', true);
     })().catch(err => { $('#cancel-err').textContent = err.message; $('#cancel-err').hidden = false; })
       .finally(() => { button.disabled = false; });
@@ -1067,6 +1089,15 @@
         <ul>${low.slice(0, 5).map(x => `<li>${esc(x.name)} (${esc(x.id)}): เหลือให้เคสใหม่ ${x.left} ${esc(x.unit)}${x.note ? ' · ' + esc(x.note) : ''}</li>`).join('')}</ul>
         ${STATE.mode === 'supabase' ? '<a class="btn" href="/admin#inventory">ไปที่คลังวัสดุ</a>' : ''}</div>`);
     }
+    const waiting = (STATE.pending || []).filter(p => p.due_status === 'overdue' || p.due_status === 'soon');
+    if (waiting.length && can('book')) {
+      const late = waiting.filter(p => p.due_status === 'overdue');
+      parts.push(`<div class="banner ${late.length ? 'bad' : 'warn'}"><b>รายการรอผ่าตัด: ${late.length ? `เลยวันที่ควรผ่าตัด ${late.length} เคส` : ''}${
+        late.length && waiting.length > late.length ? ' · ' : ''}${waiting.length > late.length ? `ใกล้ครบกำหนด (ภายใน 7 วัน) ${waiting.length - late.length} เคส` : ''}</b>
+        <ul>${waiting.slice(0, 5).map(p => `<li>${esc(p.code)} ${esc(p.procedure)} · ${esc(p.surgeon || '-')} · ${p.due_status === 'overdue'
+          ? 'เลยกำหนด ' + (-p.days_left) + ' วัน' : p.days_left ? 'อีก ' + p.days_left + ' วัน' : 'ครบกำหนดวันนี้'}</li>`).join('')}</ul>
+        <button class="btn" type="button" data-show-waiting>ดูรายการรอ</button></div>`);
+    }
     const notStarted = new Set(STATE.schedule.bookings.filter(b => !b.frozen).map(b => b.case_id));
     const rd = Object.entries(STATE.readiness || {}).filter(([cid]) => notStarted.has(cid));
     const problems = rd.filter(([, r]) => r.status === 'problem'), open = rd.filter(([, r]) => r.status === 'pending');
@@ -1095,6 +1126,9 @@
     $('#banners').querySelectorAll('[data-show-ready]').forEach(b => b.addEventListener('click', () => {
       selectTab('ready'); document.querySelector('[data-panel="ready"]').scrollIntoView({ behavior: 'smooth', block: 'start' });
     }));
+    $('#banners').querySelector('[data-show-waiting]')?.addEventListener('click', () => {
+      $('#pending').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
     $('#replan')?.addEventListener('click', e => busy(e.target, replanDay));
     const seed = $('#seed');
     if (seed) seed.addEventListener('click', () => busy(seed, async () => {
@@ -1115,21 +1149,52 @@
   // Cases taken off the schedule (re-plan, emergency) wait here until rebooked or cancelled.
   let REBOOK = null;
 
+  const thaiDate = iso => { const [y, m, d] = iso.split('-').map(Number); return `${d}/${m}/${y + 543}`; };
+  function dueBadge(p) {
+    if (!p.due_date) return '';
+    if (p.due_status === 'overdue') return `<span class="badge bad">เลยกำหนด ${-p.days_left} วัน (${thaiDate(p.due_date)})</span>`;
+    if (p.due_status === 'soon') return `<span class="badge warn">${p.days_left ? 'อีก ' + p.days_left + ' วัน' : 'ครบกำหนดวันนี้'} (ภายใน ${thaiDate(p.due_date)})</span>`;
+    return `<span class="badge">ภายใน ${thaiDate(p.due_date)} · อีก ${p.days_left} วัน</span>`;
+  }
+  const mayBook = p => can('book') && (STATE.me.role !== 'surgeon' || p.surgeon_id === STATE.me.staff_id);
+
   function renderPending() {
     const list = STATE.pending || [];
-    $('#pending').innerHTML = list.length ? `<h3>รอจัดวันใหม่ (${list.length})</h3>
-      <p class="hint">เคสที่ถูกเอาออกจากตารางเพราะจัดตารางใหม่หรือมีเคสฉุกเฉินแทรก และยังไม่ได้ผ่าตัด: กดจองใหม่ (เลือกวันที่ด้านบนได้) หรือยกเลิกคำขอ</p>
-      <div class="rows" style="margin-top:8px">${list.map(p => `<div class="row-item">
-        <div class="title"><b>${esc(p.code)} · ${esc(p.procedure)}</b><span class="triage ${esc(p.urgency)}">${esc(urgencyText(p.urgency))}</span></div>
-        <small class="hint">${esc(p.patient_hn)}${p.patient_name ? ' · ' + esc(p.patient_name) : ''} · ${esc(p.surgeon || '-')} · ${p.duration_mins} นาที${p.was_on ? ' · เดิมวันที่ ' + esc(p.was_on) : ''}${p.airborne ? ' · ติดเชื้อทางอากาศ' : ''}</small>
-        ${can('book') && (STATE.me.role !== 'surgeon' || p.surgeon_id === STATE.me.staff_id) ? `<div class="line">
+    const late = list.filter(p => p.due_status === 'overdue').length, soon = list.filter(p => p.due_status === 'soon').length;
+    $('#pending').innerHTML = list.length ? `<h3>รายการรอผ่าตัด (${list.length})${late ? ` <span class="chip bad">เลยกำหนด ${late}</span>` : ''}${soon ? ` <span class="chip" style="background:var(--warn-soft);color:var(--warn);border-color:transparent">ใกล้ครบกำหนด ${soon}</span>` : ''}</h3>
+      <p class="hint">เคสที่ยังไม่มีวันผ่าตัด (เพิ่มเข้ารายการรอ หรือถูกเลื่อนออกจากตาราง) เรียงตามความเร่งด่วน วันที่ควรผ่าตัด และเวลาที่รอ · กดจองใหม่ แล้วใช้ปุ่ม "หาวันว่าง 14 วัน" ได้</p>
+      <div class="rows" style="margin-top:8px">${list.map(p => `<div class="row-item${p.due_status === 'overdue' ? ' due-overdue' : p.due_status === 'soon' ? ' due-soon' : ''}">
+        <div class="title"><b>${esc(p.code)} · ${esc(p.procedure)}</b><span>${dueBadge(p)} <span class="triage ${esc(p.urgency)}">${esc(urgencyText(p.urgency))}</span></span></div>
+        <small class="hint">${esc(p.patient_hn)}${p.patient_name ? ' · ' + esc(p.patient_name) : ''} · ${esc(p.surgeon || '-')} · ${p.duration_mins} นาที${p.was_on ? ' · เดิมวันที่ ' + esc(p.was_on) : ''}${p.waiting_days !== null && p.waiting_days !== undefined ? ' · รอมา ' + p.waiting_days + ' วัน' : ''}${p.airborne ? ' · ติดเชื้อทางอากาศ' : ''}</small>
+        ${mayBook(p) ? `<div class="line">
           <button class="btn primary" type="button" data-rebook="${esc(p.id)}">จองใหม่</button>
-          <button class="btn" type="button" data-cancel="${esc(p.id)}">ยกเลิกคำขอ</button></div>` : ''}
+          ${STATE.waitlist_ready ? `<button class="btn" type="button" data-due="${esc(p.id)}">${p.due_date ? 'แก้วันที่ควรผ่าตัด' : 'กำหนดวันที่ควรผ่าตัด'}</button>` : ''}
+          <button class="btn" type="button" data-cancel="${esc(p.id)}">ยกเลิกคำขอ</button></div>
+          <div class="due-edit" data-due-edit="${esc(p.id)}" hidden>
+            <label>ควรผ่าตัดภายใน <input type="date" value="${esc(p.due_date || '')}" aria-label="วันที่ควรผ่าตัด ${esc(p.code)}"></label>
+            <button class="btn primary" type="button" data-due-save>บันทึก</button>
+            ${p.due_date ? '<button class="btn" type="button" data-due-clear>ไม่กำหนด</button>' : ''}
+          </div>` : ''}
       </div>`).join('')}</div>` : '';
     $('#pending').querySelectorAll('[data-rebook]').forEach(b => b.addEventListener('click', () => {
       REBOOK = list.find(p => p.id === b.dataset.rebook);
       applyRebook(true);
     }));
+    $('#pending').querySelectorAll('[data-due]').forEach(b => b.addEventListener('click', () => {
+      const box = $('#pending').querySelector(`[data-due-edit="${CSS.escape(b.dataset.due)}"]`);
+      box.hidden = !box.hidden;
+      if (!box.hidden) box.querySelector('input').focus();
+    }));
+    $('#pending').querySelectorAll('[data-due-edit]').forEach(box => {
+      const save = due => async e => busy(e.target, async () => {
+        const data = await api('/api/pending/' + encodeURIComponent(box.dataset.dueEdit), { due_date: due() }, 'PATCH');
+        STATE = data.state;
+        render();
+        toast(data.result.due_date ? 'บันทึกวันที่ควรผ่าตัดแล้ว' : 'ยกเลิกวันที่ควรผ่าตัดแล้ว', true);
+      });
+      box.querySelector('[data-due-save]').addEventListener('click', save(() => box.querySelector('input').value || null));
+      box.querySelector('[data-due-clear]')?.addEventListener('click', save(() => null));
+    });
     $('#pending').querySelectorAll('[data-cancel]').forEach(b => b.addEventListener('click', () => {
       const p = (STATE.pending || []).find(x => x.id === b.dataset.cancel);
       openCancel(null, p);
@@ -1144,17 +1209,22 @@
     fillForm(form, { surgeon_id: p.surgeon_id, procedure_id: p.procedure_id, procedure: p.procedure, patient_hn: p.patient_hn,
       duration_mins: p.duration_mins, duration_source: 'ระบุในคำขอ', airborne: p.airborne, required_supplies: p.supplies || {} });
     form.elements['patient_name'].value = p.patient_name || '';
-    if (!emergency) form.elements['urgency'].value = p.urgency === 'URGENT' ? 'URGENT' : 'ELECTIVE';
+    if (!emergency) {
+      form.elements['urgency'].value = p.urgency === 'URGENT' ? 'URGENT' : 'ELECTIVE';
+      form.elements['due_date'].value = p.due_date || '';
+      $('#waitlist-add').hidden = true;
+    }
     form.dataset.pending = p.id;
     const hint = form.querySelector('[data-role="pending-hint"]');
     hint.hidden = false;
-    hint.innerHTML = `กำลังจองใหม่ให้คำขอเดิม <b>${esc(p.code)}</b> (${esc(p.patient_hn)}) · เลือกวันที่ด้านบนขวาและเวลา แล้วกดตรวจสอบ <button class="btn" type="button">ไม่ใช่</button>`;
+    hint.innerHTML = `กำลังจองใหม่ให้คำขอเดิม <b>${esc(p.code)}</b> (${esc(p.patient_hn)}) · เลือกวันที่ด้านบนขวาและเวลา แล้วกดตรวจสอบ${emergency ? '' : ' หรือกด "หาวันว่าง 14 วัน"'} <button class="btn" type="button">ไม่ใช่</button>`;
     hint.querySelector('button').addEventListener('click', endRebook);
     if (focus) form.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
   function endRebook() {
     REBOOK = null;
+    $('#waitlist-add').hidden = false;
     [$('#form-book'), $('#form-er')].forEach(form => {
       delete form.dataset.pending;
       const hint = form.querySelector('[data-role="pending-hint"]');
@@ -1245,6 +1315,75 @@
     busy(form.querySelector('[type="submit"]'), async () => renderSlotResult(await api('/api/slot-check', body), body));
   });
 
+  // ---- several days at once: the first days every agent accepts (books nothing), and the waiting list
+  const bookBody = form => ({ case: readCase(form, new FormData(form).get('urgency')), start: new FormData(form).get('start') });
+
+  async function searchDays(button, from) {
+    const form = $('#form-book');
+    if (!form.reportValidity()) return;
+    const body = { ...bookBody(form), days: 14, skip_weekends: $('#skip-weekends').checked };
+    await busy(button, async () => {
+      $('#result-book').innerHTML = '<p class="hint">กำลังให้ Agent ตรวจทีละวัน…</p>';
+      renderSearch(await api('/api/slot-search' + (from ? '?date=' + from : ''), body), body);
+    });
+  }
+
+  function renderSearch(r, body) {
+    const range = r.single_day ? 'โหมดข้อมูลจำลองมีวันเดียว'
+      : `ตรวจ ${thaiDate(r.from)} – ${thaiDate(r.to)} (${r.searched} วัน${body.skip_weekends ? ' ไม่รวมเสาร์-อาทิตย์' : ''})`;
+    const days = r.found.map((f, i) => `<div class="proposal">
+        <b>${esc(f.label)}</b> · ห้อง ${esc(f.or_id)} ${esc(f.start)}–${esc(f.end)}${f.as_requested ? '' : ` <small>(${esc(r.requested)} ไม่ว่าง เร็วที่สุด ${esc(f.start)})</small>`}
+        ${f.after_due ? `<br><span class="badge bad">หลังวันที่ควรผ่าตัด (${thaiDate(r.due_date)})</span>` : ''}
+        <br><small>ทีม: ${esc(f.team.map(t => t.name).join(', '))}${f.bed_id ? ' · เตียง ' + esc(f.bed_id) : ''}</small>
+        <div style="margin-top:8px"><button class="btn primary" type="button" data-pick="${i}">จอง ${esc(f.label)} ${esc(f.start)}</button></div></div>`).join('');
+    const more = r.single_day ? '' : `<button class="btn" type="button" id="search-more">ค้นต่อ 14 วัน (ตั้งแต่ ${thaiDate(r.next_from)})</button>`;
+    const wait = body.case.pending_id ? '' : '<button class="btn" type="button" id="search-wait">เพิ่มเข้ารายการรอ</button>';
+    $('#result-book').innerHTML = `<h3>วันว่างแรก${r.found.length ? ` (${r.found.length} วัน)` : ''}</h3>
+      <p class="hint">${esc(range)} · เวลาที่ขอ ${esc(r.requested)} เป็นต้นไป · แต่ละวันตรวจด้วย Agent ทั้ง 3 เหมือนปุ่มตรวจสอบช่วงเวลา</p>
+      ${r.carry_on ? `<p class="hint pending-hint">ค้นหายังไม่ครบ (ใช้เวลานาน) ตรวจถึงก่อนวันที่ ${thaiDate(r.carry_on)} · กดค้นต่อได้</p>` : ''}
+      ${days ? `<div class="slot-days">${days}</div>` : `<div class="proposal none">ไม่พบวันที่จองได้ในช่วงนี้${r.single_day ? '' : ' · ลองค้นต่อ เปลี่ยนเวลาที่ขอ หรือเพิ่มเข้ารายการรอ'}</div>`}
+      ${more || wait ? `<div class="book-actions">${more}${wait}</div>` : ''}
+      ${r.skipped.length ? `<details><summary>วันที่จองไม่ได้ (${r.skipped.length})</summary><ul>${r.skipped.map(k =>
+        `<li>${esc(k.label)}: ${esc(k.reason)}</li>`).join('')}</ul></details>` : ''}`;
+    $('#result-book').querySelectorAll('[data-pick]').forEach(b => b.addEventListener('click', () => busy(b, async () => {
+      const f = r.found[Number(b.dataset.pick)];
+      const req = { case: body.case, start: f.start };
+      const data = await api('/api/bookings' + (f.date ? '?date=' + f.date : ''), req);
+      if (data.result.booked && req.case.pending_id) endRebook();
+      STATE = data.state;
+      if (data.result.booked) { highlight = new Set([data.result.case_id]); selected = data.result.case_id; }
+      render();
+      renderSlotResult(data.result, req);
+      if (!data.result.booked) toast('วันนี้ไม่ว่างแล้ว ดูผลตรวจล่าสุดด้านล่าง');
+    })));
+    $('#search-more')?.addEventListener('click', e => searchDays(e.target, r.next_from));
+    $('#search-wait')?.addEventListener('click', e => addWaiting(e.target));
+  }
+
+  async function addWaiting(button) {
+    const form = $('#form-book');
+    if (!form.reportValidity()) return;
+    const body = { case: readCase(form, new FormData(form).get('urgency')) };
+    await busy(button, async () => {
+      const data = await api('/api/waitlist', body);
+      STATE = data.state;
+      render();
+      $('#result-book').innerHTML = `<div class="proposal">✅ เพิ่ม <b>${esc(data.result.code)}</b> เข้ารายการรอผ่าตัดแล้ว${data.result.due_date
+        ? ' · ควรผ่าตัดภายใน ' + thaiDate(data.result.due_date) : ''} · ดูได้ที่ "รายการรอผ่าตัด" ใต้ตาราง</div>`;
+    });
+  }
+
+  $('#slot-search').addEventListener('click', e => searchDays(e.target, null));
+  $('#waitlist-add').addEventListener('click', e => addWaiting(e.target));
+  $('[data-role="due-preset"]').addEventListener('change', e => {
+    const n = Number(e.target.value);
+    if (!n) return;
+    const d = new Date();
+    d.setDate(d.getDate() + n);
+    $('#form-book').elements['due_date'].value = new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+    e.target.value = '';
+  });
+
   $('#form-er').addEventListener('submit', e => {
     e.preventDefault();
     const form = e.target;
@@ -1315,6 +1454,8 @@
     er.elements['now'].value = now;
     $('#form-over').elements['now'].value = now;
     if (REBOOK && !(STATE.pending || []).some(p => p.id === REBOOK.id)) REBOOK = null;  // booked or cancelled elsewhere
+    $('[data-role="due-row"]').hidden = !STATE.waitlist_ready;
+    if (!STATE.waitlist_ready) book.elements['due_date'].value = '';
     applyRebook(false);
   }
 

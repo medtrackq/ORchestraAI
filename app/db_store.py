@@ -8,6 +8,7 @@ are the final guard.
 from __future__ import annotations
 
 import threading
+import time as clock
 import uuid
 from contextlib import contextmanager
 from dataclasses import replace
@@ -25,11 +26,15 @@ from . import cancellations as cx
 from . import milestones as ms
 from . import readiness as rd
 from . import seed
+from . import waitlist as wl
 from .db import ConflictError, Database, DatabaseUnavailable, World, case_code
 from .intake_service import IntakeContext
 from .store import (Activity, StoreError, actor_name, build_case, check_own_case, check_team, cssd_event, equipment_rows,
                     facility_view, fatigue_log, fatigue_view, parse_time, ready_minute, room_options, staff_skills,
                     schedule_event, supply_options, with_roles)
+
+
+NEED_WAITLIST = "ต้องรัน SQL ไฟล์ 015 (รายการรอผ่าตัด) ก่อน จึงจะกำหนดวันที่ควรผ่าตัดได้ (หน้า ⚙ สถานะระบบ → รัน SQL ที่ยังขาด)"
 
 
 class DatabaseStore:
@@ -110,11 +115,11 @@ class DatabaseStore:
         except ValueError as exc:
             raise StoreError(f"วันที่ไม่ถูกต้อง: {text!r} (ใช้ YYYY-MM-DD)") from exc
 
-    def _optimizer(self, world: World) -> ORchestraOptimizer:
+    def _optimizer(self, world: World, time_limit_s: float | None = None) -> ORchestraOptimizer:
         h = world.hospital
         return ORchestraOptimizer(
             h.rooms, h.equipments, h.staff, h.beds, team_synergy=h.team_synergy, supplies=h.supplies,
-            time_limit_s=self.time_limit_s, num_workers=self.workers,
+            time_limit_s=time_limit_s or self.time_limit_s, num_workers=self.workers,
         )
 
     @staticmethod
@@ -157,7 +162,7 @@ class DatabaseStore:
         except ValueError as exc:
             raise StoreError("รหัสหัตถการไม่ถูกต้อง") from exc
         return {"request_id": request_id, "patient_name": name, "procedure_id": procedure_id,
-                "raw_text": data.get("procedure")}
+                "raw_text": data.get("procedure"), "due_date": wl.parse_due(data.get("due_date"))}
 
     def _record(self, conn, world: World, activity: Activity) -> dict:
         record = {"kind": activity.kind, "title": activity.title, "log": activity.log,
@@ -179,7 +184,8 @@ class DatabaseStore:
             following = self._readiness_next(conn, world.day, world) if readiness is not None else None
             steps, steps_ready = self._milestones(conn, world)
             blocks = self.db.day_blocks(conn, world.day, self.db.today())
-        return {**self._state(world, activity), "pending": pending, "readiness": readiness or {},
+            waitlist_ready = self.db.has_waitlist(conn)
+        return {**self._state(world, activity), "pending": pending, "waitlist_ready": waitlist_ready, "readiness": readiness or {},
                 "readiness_ready": readiness is not None, "readiness_next": following, "cancel_reasons": cx.options(),
                 "milestones": steps, "milestones_ready": steps_ready,
                 "blocks": [b.to_dict() for b in blocks or []], "blocks_ready": blocks is not None}
@@ -477,14 +483,10 @@ class DatabaseStore:
             if start < world.now_min:
                 raise StoreError(f"เวลาที่ขอผ่านไปแล้ว (ตอนนี้ {fmt(world.now_min)} ของวันที่ {world.day})")
             request_id, existing = self._request_id(conn, data, actor)
-            case = build_case(world.hospital, data,
-                              case_code(request_id, data.get("urgency") or "ELECTIVE", set(world.result.cases)))
-            blocks = self.db.day_blocks(conn, world.day, self.db.today())
-            if blocks:  # a new elective case keeps out of other owners' OR blocks and prefers its own
-                surgeon = next((s for s in world.hospital.staff if s.staff_id == case.surgeon_id), None)
-                held, own = bk.case_limits(blocks, case.urgency, case.surgeon_id, surgeon.specialty if surgeon else None)
-                case = replace(case, room_blocks=held, preferred_rooms=own)
+            case = self._new_case(conn, world, data, request_id)
             request = {**self._request(data, request_id), "existing": existing} if commit else None
+            if request and request["due_date"] and not world.has("surgery_requests", "due_date"):
+                raise StoreError(NEED_WAITLIST)
             check = self._optimizer(world).check_slot(world.result, case, start, verbose=False)
             out = check.to_dict()
             out["booked"] = False
@@ -500,6 +502,104 @@ class DatabaseStore:
                 out["booked"] = True
                 self._emit(schedule_event("booking", world.day, check.result, case.case_id, actor))
             return out
+
+    def _new_case(self, conn, world: World, data: dict, request_id: uuid.UUID):
+        case = build_case(world.hospital, data,
+                          case_code(request_id, data.get("urgency") or "ELECTIVE", set(world.result.cases)))
+        blocks = self.db.day_blocks(conn, world.day, self.db.today())
+        if blocks:  # a new elective case keeps out of other owners' OR blocks and prefers its own
+            surgeon = next((s for s in world.hospital.staff if s.staff_id == case.surgeon_id), None)
+            held, own = bk.case_limits(blocks, case.urgency, case.surgeon_id, surgeon.specialty if surgeon else None)
+            case = replace(case, room_blocks=held, preferred_rooms=own)
+        return case
+
+    def find_slots(self, data: dict, start_text: str, *, day: str | None = None, days: int = wl.SEARCH_DAYS,
+                   skip_weekends: bool = True, actor: dict | None = None) -> dict:
+        """The first days (up to ``wl.WANT``) on which every agent accepts the case, from ``day`` on; books nothing.
+
+        Each day is the same check as ``slot_check`` (the earliest time at or after the requested one).
+        The search stops after ``wl.SEARCH_SECONDS`` and says where to carry on.
+        """
+        requested = parse_time(start_text)
+        today = self.db.today()
+        first = max(self._day(day), today)
+        due = wl.parse_due(data.get("due_date"), today)
+        if data.get("urgency") == "EMERGENCY":
+            raise StoreError("เคสฉุกเฉินใช้แท็บฉุกเฉิน (แทรกในวันนี้ทันที)")
+        plan = wl.search_days(first, days, skip_weekends)
+        deadline = clock.monotonic() + wl.SEARCH_SECONDS
+        found, skipped, searched, carry_on, checked = [], [], 0, None, None
+        with self._transaction(write=False) as conn:
+            request_id, _ = self._request_id(conn, data, actor)
+            for d in plan:
+                if len(found) >= wl.WANT:
+                    break
+                if searched and clock.monotonic() > deadline:  # at least one day per click
+                    carry_on = d.isoformat()
+                    break
+                world = self.db.load(conn, d)
+                searched, checked = searched + 1, d
+                start = wl.search_start(requested, world.now_min if d == today else 0)
+                if start is None:
+                    skipped.append({"date": d.isoformat(), "label": wl.thai_date(d), "reason": "เลยเวลาของวันนี้แล้ว"})
+                    continue
+                case = self._new_case(conn, world, data, request_id)
+                check = self._optimizer(world, wl.SEARCH_SOLVE_S).check_slot(world.result, case, start, verbose=False)
+                row = wl.found_row(d, check, world.hospital, requested, due)
+                if row:
+                    found.append(row)
+                else:
+                    skipped.append(wl.not_found(d, check))
+        checked = checked or (plan[-1] if plan else first)
+        return {"from": (plan[0] if plan else first).isoformat(), "to": checked.isoformat(), "days": len(plan),
+                "searched": searched, "found": found, "skipped": skipped, "carry_on": carry_on,
+                "next_from": carry_on or (checked + timedelta(days=1)).isoformat(),
+                "due_date": due.isoformat() if due else None,
+                "requested": fmt(requested), "single_day": False}
+
+    def add_waiting(self, data: dict, *, actor: dict | None = None) -> dict:
+        """Put a request on the waiting list without a day (e.g. no free day yet, or the patient is not ready)."""
+        urgency = data.get("urgency") or "ELECTIVE"
+        if urgency == "EMERGENCY":
+            raise StoreError("เคสฉุกเฉินต้องแทรกในตารางทันที ไม่เข้ารายการรอ")
+        if data.get("pending_id"):
+            raise StoreError("คำขอนี้อยู่ในรายการรออยู่แล้ว")
+        with self._transaction(write=True) as conn:
+            world = self.db.load(conn, self.db.today())
+            request_id = uuid.uuid4()
+            case = build_case(world.hospital, data, case_code(request_id, urgency, set()))
+            check_own_case(actor, case.surgeon_id)
+            request = self._request(data, request_id)
+            if request["due_date"] and not world.has("surgery_requests", "due_date"):
+                raise StoreError(NEED_WAITLIST)
+            self.db.add_waiting(conn, world, case, request, request["due_date"])
+            due = f" · ควรผ่าตัดภายใน {wl.thai_date(request['due_date'])}" if request["due_date"] else ""
+            self.db.log_activity(conn, world, self._record(conn, world, Activity(
+                "waitlist", f"เพิ่มเข้ารายการรอผ่าตัด {case.case_id} {case.procedure}{due}", [],
+                actor=actor_name(actor))))
+        return {"id": str(request_id), "code": case.case_id, "due_date": request["due_date"].isoformat() if request["due_date"] else None}
+
+    def set_due(self, pending_id: str, due_text: str | None, *, actor: dict | None = None) -> dict:
+        """Set or clear the date a waiting request should be operated by."""
+        try:
+            request_id = uuid.UUID(pending_id)
+        except ValueError as exc:
+            raise StoreError("รหัสคำขอไม่ถูกต้อง") from exc
+        due = wl.parse_due(due_text, self.db.today())
+        with self._transaction(write=True) as conn:
+            if not self.db.has_waitlist(conn):
+                raise StoreError(NEED_WAITLIST)
+            row = conn.execute("SELECT status, primary_surgeon_id, urgency_level FROM surgery_requests WHERE request_id = %s",
+                               (request_id,)).fetchone()
+            if row is None or row["status"] != "PENDING":
+                raise StoreError("คำขอนี้ถูกจองหรือยกเลิกไปแล้ว กรุณาโหลดใหม่")
+            check_own_case(actor, str(row["primary_surgeon_id"]))
+            conn.execute("UPDATE surgery_requests SET due_date = %s WHERE request_id = %s", (due, request_id))
+            code = case_code(request_id, row["urgency_level"], set())
+            world = self.db.load(conn, self.db.today())
+            title = f"กำหนดวันที่ควรผ่าตัด {code}: {wl.thai_date(due)}" if due else f"ยกเลิกกำหนดวันที่ควรผ่าตัด {code}"
+            self.db.log_activity(conn, world, self._record(conn, world, Activity("waitlist", title, [], actor=actor_name(actor))))
+        return {"id": pending_id, "due_date": due.isoformat() if due else None}
 
     def emergency(self, data: dict, now_text: str, *, day: str | None = None, actor: dict | None = None) -> dict:
         now = parse_time(now_text)

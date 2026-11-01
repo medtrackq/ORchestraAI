@@ -338,7 +338,7 @@
       tile('เวลาทำความสะอาดห้องจริง', `${fmt(k.turnover_avg, 0)}<small> นาที</small>`,
         `ตามแผน ${fmt(k.turnover_planned, 0)} นาที · วัดได้ ${fmt(k.turnovers_measured)} ครั้ง`),
       cancelTile(r),
-      tile('รอจัดวันใหม่ตอนนี้', fmt(r.waiting), `ยกเลิกจากรายการรอในช่วงนี้ ${fmt((r.cancellations || {}).waiting_given_up ?? r.cancelled)} · แทรกฉุกเฉิน ${fmt(r.emergencies_inserted)} · จัดตารางใหม่ ${fmt(r.replans)} · เกินเกณฑ์ความเหนื่อยล้า ${fmt(r.fatigue_overrides)} ครั้ง`),
+      tile('ในรายการรอผ่าตัดตอนนี้', fmt(r.waiting), `ยกเลิกจากรายการรอในช่วงนี้ ${fmt((r.cancellations || {}).waiting_given_up ?? r.cancelled)} · แทรกฉุกเฉิน ${fmt(r.emergencies_inserted)} · จัดตารางใหม่ ${fmt(r.replans)} · เกินเกณฑ์ความเหนื่อยล้า ${fmt(r.fatigue_overrides)} ครั้ง`),
     ].join('');
     renderCancellations(r);
     const blocks = r.blocks || [];
