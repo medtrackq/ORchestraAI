@@ -4,6 +4,11 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ORchestraAI</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<meta name="theme-color" content="#0e7490">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="ORchestraAI">
 <link href="https://fonts.googleapis.com/css2?family=Prompt:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
   :root {
@@ -161,6 +166,13 @@
   .badge.bad { background: var(--bad-soft); color: var(--bad); border-color: transparent; }
   .badge.warn { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
   .secret { font: .9rem ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--warn-soft); color: var(--warn); padding: 8px 10px; border-radius: 8px; overflow-wrap: anywhere; }
+  #notify-dialog { width: min(460px, calc(100% - 32px)); }
+  .notify-sec { border-top: 1px solid var(--border); padding: 10px 0; display: grid; gap: 8px; font-size: .86rem; }
+  .notify-sec h4 { margin: 0; font-size: .9rem; }
+  .notify-code { font: 600 1.8rem ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .2em; text-align: center;
+    background: var(--accent-soft); border-radius: 10px; padding: 8px; }
+  .notify-sec ol { margin: 0; padding-left: 20px; }
+  .notify-recent { font-size: .76rem; color: var(--muted); margin: 0; padding-left: 18px; }
   dialog { border: 1px solid var(--border); border-radius: 14px; background: var(--surface); color: var(--text); padding: 20px; width: min(380px, calc(100% - 32px)); }
   dialog::backdrop { background: rgba(15,23,42,.5); }
   .intake { border: 1px dashed var(--accent); border-radius: 12px; padding: 12px; margin-bottom: 14px; display: grid; gap: 8px; background: var(--accent-soft); }
@@ -208,6 +220,7 @@
     <a class="btn" href="/flow" target="_blank" rel="noopener">ดู Flow สาธิต</a>
     <button class="btn" id="reset" type="button" hidden>รีเซ็ตข้อมูลตัวอย่าง</button>
     <span class="who" id="who"></span>
+    <button class="btn" id="notify-open" type="button">🔔 แจ้งเตือน</button>
     <button class="btn" id="change-pass" type="button">เปลี่ยนรหัสผ่าน</button>
     <button class="btn" id="logout" type="button">ออกจากระบบ</button>
   </nav>
@@ -344,6 +357,12 @@
   </aside>
 </main>
 <div id="toast" role="alert"></div>
+<dialog id="notify-dialog" aria-labelledby="notify-title">
+  <h3 style="margin-top:0" id="notify-title">แจ้งเตือนทางมือถือ</h3>
+  <div id="notify-body"><p class="hint">กำลังโหลด…</p></div>
+  <div class="row2" style="margin-top:12px"><button class="btn" type="button" id="notify-close">ปิด</button>
+    <button class="btn primary" type="button" id="notify-test">ส่งข้อความทดสอบ</button></div>
+</dialog>
 <dialog id="pass-dialog">
   <form id="pass-form">
     <h3 style="margin-top:0">เปลี่ยนรหัสผ่าน</h3>
@@ -1170,6 +1189,117 @@
       await loadUsers();
     });
   });
+
+  // ------------------------------------------------------------- phone notifications
+  const NOTIFY_STATUS = { sent: 'ส่งแล้ว', failed: 'ส่งไม่สำเร็จ', removed: 'อุปกรณ์เลิกรับแล้ว' };
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const standalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+  const pushSupported = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+  let swReady = null;
+  if ('serviceWorker' in navigator) swReady = navigator.serviceWorker.register('/sw.js').catch(() => null);
+
+  function keyBytes(base64url) {
+    const s = (base64url + '='.repeat((4 - base64url.length % 4) % 4)).replace(/-/g, '+').replace(/_/g, '/');
+    return Uint8Array.from(atob(s), c => c.charCodeAt(0));
+  }
+  function deviceLabel() {
+    const ua = navigator.userAgent;
+    const os = /Android/.test(ua) ? 'Android' : isIOS ? 'iPhone/iPad' : /Windows/.test(ua) ? 'Windows' : /Mac/.test(ua) ? 'Mac' : 'อุปกรณ์';
+    const browser = /Edg\//.test(ua) ? 'Edge' : /Chrome\//.test(ua) ? 'Chrome' : /Firefox\//.test(ua) ? 'Firefox' : /Safari\//.test(ua) ? 'Safari' : '';
+    return `${os} ${browser}`.trim();
+  }
+
+  async function currentSubscription() {
+    if (!pushSupported) return null;
+    const reg = await (swReady || navigator.serviceWorker.ready);
+    return reg ? reg.pushManager.getSubscription() : null;
+  }
+
+  async function renderNotify(status) {
+    const box = $('#notify-body');
+    $('#notify-test').hidden = !status.ready;
+    if (!status.ready) {
+      box.innerHTML = `<p class="hint">ระบบแจ้งเตือนยังไม่พร้อม${can('users') ? ': ให้รัน supabase/migrations/20261107000000_notifications.sql ใน Supabase ก่อน' : ' กรุณาแจ้งผู้ดูแลระบบ'}</p>`;
+      return;
+    }
+    const sub = await currentSubscription().catch(() => null);
+    const here = sub && status.webpush.endpoints.includes(sub.endpoint);
+    let device;
+    if (!pushSupported && isIOS && !standalone) {
+      device = `<p>iPhone / iPad (iOS 16.4 ขึ้นไป) ต้องติดตั้งเป็นแอปก่อน:</p>
+        <ol><li>แตะปุ่ม <b>แชร์</b> (สี่เหลี่ยมมีลูกศรขึ้น) ใน Safari</li><li>เลือก <b>เพิ่มไปยังหน้าจอโฮม</b></li>
+        <li>เปิด ORchestraAI จากไอคอนบนหน้าจอโฮม แล้วกลับมาที่ 🔔 แจ้งเตือน</li></ol>`;
+    } else if (!pushSupported) {
+      device = '<p class="hint">เบราว์เซอร์นี้ไม่รองรับการแจ้งเตือน ลองใช้ Chrome, Edge, Firefox หรือ Safari รุ่นใหม่ หรือใช้ LINE แทน</p>';
+    } else if (Notification.permission === 'denied') {
+      device = '<p class="hint">คุณปิดสิทธิ์การแจ้งเตือนของเว็บนี้ไว้ เปิดได้ในการตั้งค่าของเบราว์เซอร์ (รูปแม่กุญแจข้างที่อยู่เว็บ)</p>';
+    } else if (here) {
+      device = '<p>✅ เปิดอยู่บนอุปกรณ์นี้</p><button class="btn" type="button" id="push-off">ปิดบนอุปกรณ์นี้</button>';
+    } else {
+      device = '<button class="btn primary" type="button" id="push-on">เปิดการแจ้งเตือนบนอุปกรณ์นี้</button>';
+    }
+    const others = status.webpush.devices.length - (here ? 1 : 0);
+    let lineHtml;
+    if (!status.line.enabled) {
+      lineHtml = `<p class="hint">ผู้ดูแลยังไม่ได้ตั้งค่า LINE Official Account${can('users') ? ' (ใส่ LINE_CHANNEL_ACCESS_TOKEN และ LINE_CHANNEL_SECRET ใน Render)' : ''}</p>`;
+    } else if (status.line.linked) {
+      lineHtml = '<p>✅ เชื่อม LINE แล้ว</p><button class="btn" type="button" id="line-off">ยกเลิกการเชื่อม LINE</button>';
+    } else {
+      lineHtml = '<button class="btn primary" type="button" id="line-on">เชื่อม LINE</button><div id="line-code"></div>';
+    }
+    const unlinked = ['surgeon', 'staff'].includes(STATE.me.role) && !STATE.me.staff_id;
+    box.innerHTML = `
+      <p class="hint">ข้อความแจ้งเตือนมีแค่รหัสเคส เวลา และห้อง ไม่มีชื่อหรือ HN ผู้ป่วย</p>
+      <div class="notify-sec"><h4>บนอุปกรณ์นี้ (เบราว์เซอร์)</h4>${device}
+        ${others > 0 ? `<p class="hint">เปิดไว้บนอุปกรณ์อื่นอีก ${others} เครื่อง</p>` : ''}</div>
+      <div class="notify-sec"><h4>LINE</h4>${lineHtml}</div>
+      <div class="notify-sec"><h4>รับแจ้งเตือนเรื่อง</h4>
+        ${Object.entries(status.kinds).map(([k, label]) => `<label style="display:flex;flex-direction:row;gap:8px;align-items:center;color:var(--text)">
+          <input type="checkbox" data-kind="${esc(k)}" ${status.prefs[k] ? 'checked' : ''}>${esc(label)}</label>`).join('')}
+        ${unlinked ? '<p class="hint">บัญชีนี้ยังไม่ได้ผูกกับรายชื่อบุคลากร จึงยังไม่ได้รับแจ้งเตือนเคสของตัวเอง (ให้ผู้ดูแลผูกในแท็บผู้ใช้)</p>' : ''}</div>
+      ${status.recent.length ? `<div class="notify-sec"><h4>ส่งล่าสุด</h4><ul class="notify-recent">${status.recent.slice(0, 5).map(r =>
+        `<li>${esc(new Date(r.created_at).toLocaleString('th-TH'))} · ${r.channel === 'line' ? 'LINE' : 'เบราว์เซอร์'} · ${esc(r.title)} · ${esc(NOTIFY_STATUS[r.status] || r.status)}${r.error ? ' (' + esc(r.error) + ')' : ''}</li>`).join('')}</ul></div>` : ''}`;
+    $('#push-on')?.addEventListener('click', e => busy(e.target, async () => {
+      if (await Notification.requestPermission() !== 'granted') { toast('ไม่ได้รับอนุญาตให้แจ้งเตือน'); return renderNotify(status); }
+      const reg = await (swReady || navigator.serviceWorker.ready);
+      const subscription = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(status.webpush.public_key) });
+      renderNotify(await api('/api/notify/subscribe', { subscription: subscription.toJSON(), label: deviceLabel() }));
+      toast('เปิดการแจ้งเตือนบนอุปกรณ์นี้แล้ว กด "ส่งข้อความทดสอบ" เพื่อลอง', true);
+    }));
+    $('#push-off')?.addEventListener('click', e => busy(e.target, async () => {
+      const current = await currentSubscription();
+      const next = await api('/api/notify/unsubscribe', { endpoint: current.endpoint });
+      await current.unsubscribe().catch(() => {});
+      renderNotify(next);
+    }));
+    $('#line-on')?.addEventListener('click', e => busy(e.target, async () => {
+      const r = await api('/api/notify/line-code', {});
+      $('#line-code').innerHTML = `<ol><li>${r.add_friend_url ? `เพิ่มเพื่อน <a href="${esc(r.add_friend_url)}" target="_blank" rel="noopener">LINE ของโรงพยาบาล</a>` : 'เพิ่มเพื่อน LINE Official Account ของโรงพยาบาล'}</li>
+        <li>พิมพ์รหัสนี้ในแชท (ใช้ได้ ${r.minutes} นาที)</li></ol><div class="notify-code">${esc(r.code)}</div>
+        <button class="btn" type="button" id="line-check" style="margin-top:8px">ส่งรหัสแล้ว ตรวจสถานะ</button>`;
+      $('#line-check').addEventListener('click', ev => busy(ev.target, async () => {
+        const st = await api('/api/notify');
+        if (!st.line.linked) toast('ยังไม่พบการเชื่อม ส่งรหัสใน LINE แล้วรอข้อความตอบกลับ');
+        renderNotify(st);
+      }));
+    }));
+    $('#line-off')?.addEventListener('click', e => busy(e.target, async () => renderNotify(await api('/api/notify/line-unlink', {}))));
+    box.querySelectorAll('[data-kind]').forEach(x => x.addEventListener('change', async () => {
+      const prefs = Object.fromEntries([...box.querySelectorAll('[data-kind]')].map(i => [i.dataset.kind, i.checked]));
+      try { await api('/api/notify/prefs', { prefs }); toast('บันทึกแล้ว', true); } catch (err) { toast(err.message); }
+    }));
+  }
+
+  $('#notify-open').addEventListener('click', async () => {
+    $('#notify-dialog').showModal();
+    try { await renderNotify(await api('/api/notify')); } catch (e) { $('#notify-body').innerHTML = `<p class="hint">${esc(e.message)}</p>`; }
+  });
+  $('#notify-close').addEventListener('click', () => $('#notify-dialog').close());
+  $('#notify-test').addEventListener('click', e => busy(e.target, async () => {
+    const r = await api('/api/notify/test', {});
+    toast(r.failed ? `ส่งได้ ${r.sent} ไม่สำเร็จ ${r.failed} (ดูรายละเอียดใน "ส่งล่าสุด")` : `ส่งข้อความทดสอบแล้ว ${r.sent} ช่องทาง`, !r.failed);
+    renderNotify(r.status);
+  }));
 
   // ------------------------------------------------------------------ account
   $('#logout').addEventListener('click', async () => { await api('/api/logout', {}).catch(() => {}); location.href = '/login'; });

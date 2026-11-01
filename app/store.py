@@ -157,6 +157,20 @@ def fatigue_view(hospital: Hospital, result: ScheduleResult) -> dict:
     }
 
 
+def schedule_event(cause: str, day, result: ScheduleResult, case_id: str, actor: dict | None, *,
+                   fatigue: int = 0) -> dict:
+    """What changed, for phone notifications (see ``notify``)."""
+    return {"type": "schedule", "cause": cause, "day": day.isoformat() if day else None, "changes": list(result.changes),
+            "cases": dict(result.cases), "unscheduled": list(result.unscheduled), "new_case": case_id,
+            "fatigue": fatigue, "actor_id": (actor or {}).get("user_id")}
+
+
+def cssd_event(day, serial: str, status: str, ready: int | None, problems: list[str], actor: dict | None) -> dict:
+    return {"type": "cssd", "day": day.isoformat() if day else None, "unit": serial, "status": status,
+            "ready": fmt(ready) if ready is not None else None,
+            "cases": sorted({p.split(":")[0] for p in problems if ":" in p}), "actor_id": (actor or {}).get("user_id")}
+
+
 def fatigue_log(issues) -> list[str]:
     return [f"[Staffing Agent] FATIGUE OVERRIDE: {i.detail()}" for i in issues if i.override]
 
@@ -223,6 +237,7 @@ class ScheduleStore:
     mode = "demo"
 
     def __init__(self, *, workers: int = 2, time_limit_s: float = 10.0) -> None:
+        self.listener = None  # notify.Notifier.handle: told about every saved change
         self._lock = threading.Lock()
         self.workers = workers
         self.time_limit_s = time_limit_s
@@ -411,6 +426,8 @@ class ScheduleStore:
             when = f" พร้อม {fmt(ready)}" if ready else ""
             self.activity.append(Activity("equipment", f"{serial}: {status}{when}", problems,
                                           actor=actor_name(actor)))
+            if problems:
+                self._emit(cssd_event(date.today(), serial, status, ready, problems, actor))
             return {"unit": equipment_rows([unit])[0], "warnings": problems}
 
     def slot_check(self, data: dict, start_text: str, *, commit: bool, day: str | None = None,
@@ -428,6 +445,7 @@ class ScheduleStore:
                 if not data.get("pending_id"):
                     self._next_id("R", commit=True)
                 out["booked"] = True
+                self._emit(schedule_event("booking", date.today(), check.result, case.case_id, actor))
                 self.activity.append(Activity(
                     "booking", f"จอง {case.case_id} {case.procedure}", check.log,
                     [{"case_id": c.case_id, "details": c.details} for c in check.result.changes],
@@ -527,8 +545,13 @@ class ScheduleStore:
         report["previous"], report["previous_range"] = None, None
         return report
 
+    def _emit(self, event: dict) -> None:
+        if self.listener is not None:
+            self.listener(event)
+
     def _record_change(self, kind: str, title: str, after: ScheduleResult, case_id: str,
                        actor: dict | None = None, tired=()) -> dict:
+        self._emit(schedule_event(kind, date.today(), after, case_id, actor, fatigue=len({i.staff_id for i in tired})))
         data = after.to_dict()
         log = [f"[Master Orchestrator] {c['case_id']}: {'; '.join(c['details'])}" for c in data["changes"]]
         log += [f"[Master Orchestrator] NOT SCHEDULED {u['case_id']}: {'; '.join(u['reasons'])}"
