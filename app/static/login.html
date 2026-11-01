@@ -3,18 +3,20 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="theme-color" content="#060c1c">
+<meta name="theme-color" content="#c4dce1">
 <title>เข้าสู่ระบบ ORchestraAI</title>
 <link href="https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <style>
+  /* Light clinical theme: pale aqua to mist (the colours of an operating suite wall) */
   :root {
-    color-scheme: dark;
-    --ink: #e9eefc; --ink-2: #b4c0dc; --ink-3: #8592b2;
-    --bg-0: #050a17; --bg-1: #0b1834; --line: rgba(148, 170, 220, .14);
-    --edge: rgba(150, 190, 255, .22); --field: rgba(7, 14, 34, .62);
-    --accent: #22d3ee; --indigo: #6366f1; --violet: #a78bfa;
-    --elective: #3b82f6; --urgent: #f59e0b; --emergency: #ef4444; --ok: #34d399;
-    --bad: #fecaca; --bad-soft: rgba(239, 68, 68, .18);
+    color-scheme: light;
+    --aqua: #c4dce1; --mist: #d6e5e7;
+    --ink: #0f2a3a; --ink-2: #2f4a59; --ink-3: #3f5967;
+    --line: rgba(15, 70, 90, .07);
+    --edge: rgba(255, 255, 255, .85); --field: rgba(255, 255, 255, .88); --field-edge: rgba(15, 70, 90, .2);
+    --accent: #0e7490; --indigo: #4f46e5; --violet: #7c3aed;
+    --elective: #2563eb; --urgent: #b45309; --emergency: #dc2626; --ok: #047857;
+    --bad: #991b1b; --bad-soft: #fee2e2;
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; }
@@ -22,18 +24,17 @@
     min-height: 100vh; display: flex; flex-direction: column; overflow-x: hidden; color: var(--ink);
     font: 15px/1.55 'Prompt', 'Noto Sans Thai', system-ui, sans-serif;
     background:
-      radial-gradient(1100px 680px at 80% 28%, rgba(99, 102, 241, .24), transparent 62%),
-      radial-gradient(900px 620px at 12% 85%, rgba(34, 211, 238, .13), transparent 62%),
-      radial-gradient(700px 420px at 50% 110%, rgba(167, 139, 250, .14), transparent 70%),
-      linear-gradient(165deg, var(--bg-1), var(--bg-0) 62%);
-    background-color: var(--bg-0);
+      radial-gradient(900px 600px at 78% 22%, rgba(255, 255, 255, .55), transparent 65%),
+      radial-gradient(700px 500px at 10% 90%, rgba(255, 255, 255, .28), transparent 65%),
+      linear-gradient(105deg, var(--aqua) 0%, #c8dfe4 48%, var(--mist) 100%);
+    background-color: var(--mist);
   }
   body::before {  /* faint planning grid */
-    content: ""; position: fixed; inset: 0; pointer-events: none; opacity: .5;
+    content: ""; position: fixed; inset: 0; pointer-events: none; opacity: .9;
     background-image: linear-gradient(var(--line) 1px, transparent 1px), linear-gradient(90deg, var(--line) 1px, transparent 1px);
     background-size: 56px 56px;
-    -webkit-mask-image: radial-gradient(ellipse at 50% 38%, #000 25%, transparent 75%);
-    mask-image: radial-gradient(ellipse at 50% 38%, #000 25%, transparent 75%);
+    -webkit-mask-image: radial-gradient(ellipse at 50% 38%, #000 25%, transparent 78%);
+    mask-image: radial-gradient(ellipse at 50% 38%, #000 25%, transparent 78%);
   }
   [hidden] { display: none !important; }
   svg { display: block; }
@@ -42,11 +43,11 @@
   /* ---------------------------------------------------------------- header */
   .top { position: relative; z-index: 2; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px clamp(16px, 4vw, 44px); }
   .logo { display: flex; align-items: center; gap: 14px; text-decoration: none; color: inherit; }
-  .logo svg { width: 46px; height: 46px; filter: drop-shadow(0 6px 18px rgba(34, 211, 238, .25)); }
+  .logo svg { width: 46px; height: 46px; filter: drop-shadow(0 6px 16px rgba(14, 116, 144, .28)); }
   .logo b { display: block; font-size: 1.15rem; font-weight: 600; letter-spacing: .02em; }
   .logo small { display: block; font-size: .68rem; letter-spacing: .22em; color: var(--ink-3); text-transform: uppercase; }
   .clock { text-align: right; font-variant-numeric: tabular-nums; }
-  .clock .t { font-size: clamp(1.3rem, 2.4vw, 1.9rem); font-weight: 500; letter-spacing: .08em; }
+  .clock .t { font-size: clamp(1.3rem, 2.4vw, 1.9rem); font-weight: 500; letter-spacing: .08em; color: var(--ink); }
   .clock .d { font-size: .78rem; color: var(--ink-3); }
 
   /* ---------------------------------------------------------------- stage */
@@ -54,52 +55,53 @@
          display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(320px, 470px); gap: clamp(28px, 5vw, 72px);
          align-items: center; padding: clamp(8px, 2vw, 20px) clamp(16px, 4vw, 44px) 24px; }
   .eyebrow { margin: 0 0 14px; font-size: .74rem; font-weight: 500; letter-spacing: .26em; text-transform: uppercase; color: var(--ink-3); }
-  .hero h1 { margin: 0 0 18px; font-size: clamp(2rem, 4.3vw, 3.4rem); line-height: 1.22; font-weight: 600; letter-spacing: -.01em; }
-  .hero h1 .grad { color: #a5b4fc; background: linear-gradient(90deg, #67e8f9, #a5b4fc 55%, #c4b5fd); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+  .hero h1 { margin: 0 0 18px; font-size: clamp(2rem, 4.3vw, 3.4rem); line-height: 1.22; font-weight: 600; letter-spacing: -.01em; color: var(--ink); }
+  .hero h1 .grad { color: var(--accent); background: linear-gradient(90deg, #0e7490, #4f46e5 55%, #7c3aed); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
   .nw { white-space: nowrap; }
-  .lead { margin: 0 0 26px; max-width: 640px; color: var(--ink-2); font-size: 1.02rem; font-weight: 300; }
+  .lead { margin: 0 0 26px; max-width: 640px; color: var(--ink-2); font-size: 1.02rem; font-weight: 400; }
   .steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; max-width: 760px; }
-  .steps li { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 14px; border: 1px solid rgba(150, 180, 255, .14);
-              background: rgba(14, 24, 52, .55); transition: border-color .4s, background .4s, box-shadow .4s, transform .4s; }
-  .steps li.on { border-color: rgba(103, 232, 249, .55); background: rgba(30, 50, 100, .6); box-shadow: 0 0 0 1px rgba(103, 232, 249, .15), 0 10px 30px rgba(34, 211, 238, .12); transform: translateY(-2px); }
+  .steps li { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 14px; border: 1px solid rgba(15, 70, 90, .12);
+              background: rgba(255, 255, 255, .45); color: var(--ink);
+              transition: border-color .4s, background .4s, box-shadow .4s, transform .4s; }
+  .steps li.on { border-color: rgba(14, 116, 144, .55); background: rgba(255, 255, 255, .85); box-shadow: 0 10px 26px rgba(14, 116, 144, .16); transform: translateY(-2px); }
   .steps .ic { width: 38px; height: 38px; border-radius: 10px; display: grid; place-items: center; color: var(--c); flex: none;
-               background: rgba(148, 170, 220, .1); border: 1px solid rgba(148, 170, 220, .2);
-               background: color-mix(in srgb, var(--c) 18%, transparent); border-color: color-mix(in srgb, var(--c) 35%, transparent); }
+               background: rgba(255, 255, 255, .7); border: 1px solid rgba(15, 70, 90, .15);
+               background: color-mix(in srgb, var(--c) 12%, white); border-color: color-mix(in srgb, var(--c) 30%, transparent); }
   .steps .name { flex: 1; font-size: .9rem; line-height: 1.3; }
   .steps .num { font-size: .78rem; color: var(--ink-3); font-variant-numeric: tabular-nums; }
 
   /* ---------------------------------------------------------------- card */
   .card { position: relative; padding: clamp(26px, 3.2vw, 40px); border-radius: 24px; border: 1px solid var(--edge);
-          background: linear-gradient(155deg, rgba(56, 100, 200, .34), rgba(16, 26, 62, .62) 55%, rgba(60, 40, 120, .4));
+          background: linear-gradient(155deg, rgba(255, 255, 255, .78), rgba(240, 248, 250, .62) 55%, rgba(232, 236, 252, .66));
           -webkit-backdrop-filter: blur(18px) saturate(140%); backdrop-filter: blur(18px) saturate(140%);
-          box-shadow: 0 30px 80px rgba(0, 0, 0, .45), inset 0 1px 0 rgba(255, 255, 255, .08); }
-  .card h2 { margin: 0; font-size: 2rem; font-weight: 600; }
+          box-shadow: 0 30px 70px rgba(15, 70, 90, .18), inset 0 1px 0 rgba(255, 255, 255, .9); }
+  .card h2 { margin: 0; font-size: 2rem; font-weight: 600; color: var(--ink); }
   .card .sub { margin: 4px 0 26px; color: var(--ink-2); font-size: .95rem; }
   form { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; }
   .field { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
-  .field > label { font-size: .88rem; font-weight: 500; }
-  .input { position: relative; display: flex; align-items: center; height: 54px; border-radius: 14px; border: 1px solid rgba(150, 180, 255, .24);
+  .field > label { font-size: .88rem; font-weight: 500; color: var(--ink); }
+  .input { position: relative; display: flex; align-items: center; height: 54px; border-radius: 14px; border: 1px solid var(--field-edge);
            background: var(--field); transition: border-color .2s, box-shadow .2s; }
-  .input:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(34, 211, 238, .2); }
+  .input:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(14, 116, 144, .18); }
   .input > .ico { margin-left: 16px; color: var(--ink-3); }
   .input input { flex: 1; min-width: 0; width: 100%; height: 100%; border: 0; outline: 0; background: transparent; color: var(--ink); font: inherit; font-size: 1rem; padding: 0 14px; }
-  .input input::placeholder { color: #7a87a8; }
+  .input input::placeholder { color: #587080; }
   .peek { height: 100%; padding: 0 16px; border: 0; background: transparent; color: var(--ink-3); cursor: pointer; border-radius: 0 14px 14px 0; }
   .peek:hover { color: var(--ink); }
   .primary { position: relative; overflow: hidden; display: flex; align-items: center; justify-content: center; gap: 10px; height: 56px; margin-top: 6px;
              border: 0; border-radius: 14px; cursor: pointer; color: #fff; font: inherit; font-size: 1.05rem; font-weight: 600;
-             background: linear-gradient(90deg, #2563eb, #4f46e5 60%, #7c3aed); box-shadow: 0 12px 30px rgba(79, 70, 229, .35), inset 0 1px 0 rgba(255, 255, 255, .25);
+             background: linear-gradient(90deg, #0e7490, #2563eb 55%, #4f46e5); box-shadow: 0 12px 26px rgba(37, 99, 235, .28), inset 0 1px 0 rgba(255, 255, 255, .25);
              transition: transform .15s, box-shadow .15s, filter .15s; }
-  .primary::after { content: ""; position: absolute; inset: 0; background: linear-gradient(110deg, transparent 30%, rgba(255, 255, 255, .22) 50%, transparent 70%); transform: translateX(-100%); transition: transform .7s; }
-  .primary:hover { transform: translateY(-1px); filter: brightness(1.07); }
+  .primary::after { content: ""; position: absolute; inset: 0; background: linear-gradient(110deg, transparent 30%, rgba(255, 255, 255, .25) 50%, transparent 70%); transform: translateX(-100%); transition: transform .7s; }
+  .primary:hover { transform: translateY(-1px); filter: brightness(1.06); }
   .primary:hover::after { transform: translateX(100%); }
   .primary:disabled { opacity: .65; cursor: progress; transform: none; }
   .primary .ico { width: 20px; height: 20px; }
-  .error { background: var(--bad-soft); color: var(--bad); border: 1px solid rgba(239, 68, 68, .35); border-radius: 12px; padding: 10px 12px; font-size: .88rem; }
+  .error { background: var(--bad-soft); color: var(--bad); border: 1px solid #fca5a5; border-radius: 12px; padding: 10px 12px; font-size: .88rem; }
   .card-foot { margin: 22px 0 0; display: grid; gap: 8px; justify-items: center; text-align: center; font-size: .84rem; color: var(--ink-3); }
   .card-foot .safe { display: flex; align-items: center; gap: 8px; }
   .card-foot .safe .ico { width: 17px; height: 17px; color: var(--ok); }
-  .card-foot a { color: var(--ink-2); }
+  .card-foot a { color: var(--accent); }
   :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .input :focus-visible { outline: none; }
 
@@ -108,25 +110,25 @@
   .lanes { position: relative; display: grid; gap: 7px; padding: 14px 0 6px; cursor: pointer; user-select: none; -webkit-user-select: none; }
   .lane { display: grid; grid-template-columns: 54px minmax(0, 1fr); align-items: center; }
   .lane-name { font-size: .72rem; letter-spacing: .12em; color: var(--ink-3); font-variant-numeric: tabular-nums; }
-  .track { position: relative; height: 26px; overflow: hidden; border-radius: 8px; background: rgba(148, 170, 220, .05);
+  .track { position: relative; height: 26px; overflow: hidden; border-radius: 8px; background: rgba(255, 255, 255, .42);
            -webkit-mask-image: linear-gradient(90deg, transparent, #000 6%, #000 94%, transparent); mask-image: linear-gradient(90deg, transparent, #000 6%, #000 94%, transparent); }
   .strip { position: absolute; inset: 0; will-change: transform; }
   .blk { position: absolute; top: 3px; bottom: 3px; display: flex; transition: left .7s cubic-bezier(.2, .8, .2, 1); }
   .blk.fresh { transition: none; }
   .blk .case { display: flex; align-items: center; gap: 6px; padding: 0 8px; border-radius: 6px; overflow: hidden; white-space: nowrap;
-               font-size: .68rem; color: rgba(255, 255, 255, .92); background: var(--c);
-               background: linear-gradient(90deg, var(--c), color-mix(in srgb, var(--c) 55%, #312e81));
-               box-shadow: inset 0 1px 0 rgba(255, 255, 255, .18); }
+               font-size: .68rem; color: #fff; background: var(--c);
+               background: linear-gradient(90deg, var(--c), color-mix(in srgb, var(--c) 75%, #1e1b4b));
+               box-shadow: inset 0 1px 0 rgba(255, 255, 255, .22), 0 2px 6px rgba(15, 70, 90, .15); }
   .blk .case b { font-weight: 600; letter-spacing: .03em; }
-  .blk .clean { border-radius: 0 6px 6px 0; background: repeating-linear-gradient(135deg, rgba(148, 163, 184, .28) 0 3px, transparent 3px 6px); }
-  .blk.E .case { box-shadow: 0 0 0 1px rgba(255, 255, 255, .35), 0 0 18px rgba(239, 68, 68, .65); animation: pulse 1.6s ease-in-out 3; }
-  @keyframes pulse { 50% { box-shadow: 0 0 0 1px rgba(255, 255, 255, .5), 0 0 28px rgba(239, 68, 68, .9); } }
-  .now { position: absolute; top: 4px; bottom: 0; width: 2px; background: linear-gradient(var(--accent), rgba(34, 211, 238, .1)); box-shadow: 0 0 12px var(--accent); pointer-events: none; }
-  .now span { position: absolute; top: -4px; left: 8px; font-size: .68rem; color: var(--accent); white-space: nowrap; letter-spacing: .06em; }
+  .blk .clean { border-radius: 0 6px 6px 0; background: repeating-linear-gradient(135deg, rgba(71, 85, 105, .3) 0 3px, transparent 3px 6px); }
+  .blk.E .case { box-shadow: 0 0 0 1px rgba(255, 255, 255, .7), 0 0 16px rgba(220, 38, 38, .55); animation: pulse 1.6s ease-in-out 3; }
+  @keyframes pulse { 50% { box-shadow: 0 0 0 1px rgba(255, 255, 255, .9), 0 0 24px rgba(220, 38, 38, .8); } }
+  .now { position: absolute; top: 4px; bottom: 0; width: 2px; background: linear-gradient(var(--accent), rgba(14, 116, 144, .15)); box-shadow: 0 0 10px rgba(14, 116, 144, .5); pointer-events: none; }
+  .now span { position: absolute; top: -4px; left: 8px; font-size: .68rem; color: var(--accent); font-weight: 500; white-space: nowrap; letter-spacing: .06em; }
   .lanes-foot { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-top: 6px; font-size: .78rem; color: var(--ink-3); }
   .lanes-foot .legend { display: flex; gap: 14px; flex-wrap: wrap; }
   .lanes-foot .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
-  .news { color: #fca5a5; min-height: 1.2em; }
+  .news { color: #b91c1c; min-height: 1.2em; }
 
   /* ---------------------------------------------------------------- smaller screens */
   @media (max-width: 980px) {
@@ -177,12 +179,12 @@
     <h1 id="hero-title"><span class="nw">ทุกห้อง</span> <span class="nw">ทุกทีม</span> <span class="nw">ทุกเครื่องมือ</span><br><span class="grad nw">ประสานกันในตารางเดียว</span></h1>
     <p class="lead">Agent แต่ละด้านตรวจบุคลากร เครื่องมือ CSSD และห้องผ่าตัดพร้อมกัน แล้วหาเวลาที่ทุกฝ่ายพร้อม จองได้ในไม่กี่วินาที และไม่มีตารางชนกัน</p>
     <ol class="steps" id="steps" aria-label="ขั้นตอนการจัดตาราง">
-      <li style="--c:#22d3ee"><span class="ic"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="4" width="12" height="17" rx="2"/><path d="M9.5 4h5v3h-5zM9 11.5h6M9 15.5h4"/></svg></span><span class="name">รับคำขอผ่าตัด</span><span class="num">01</span></li>
-      <li style="--c:#a78bfa"><span class="ic"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><circle cx="17" cy="9" r="2.4"/><path d="M15.6 14.2c2.9.3 5.4 2.6 5.4 5.8"/></svg></span><span class="name">ทีมและเวร</span><span class="num">02</span></li>
-      <li style="--c:#f59e0b"><span class="ic"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="7" r="2.5"/><circle cx="6" cy="17" r="2.5"/><path d="M8.2 8.4 20 18M8.2 15.6 20 6"/></svg></span><span class="name">เครื่องมือและ CSSD</span><span class="num">03</span></li>
-      <li style="--c:#34d399"><span class="ic"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 18V7M3 14h18v4M21 14v-1.5A3.5 3.5 0 0 0 17.5 9H11v5"/><circle cx="7" cy="11" r="2"/></svg></span><span class="name">ห้องและเตียง</span><span class="num">04</span></li>
-      <li style="--c:#818cf8"><span class="ic"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="2.6"/><path d="M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M5.6 18.4l2.8-2.8M15.6 8.4l2.8-2.8"/></svg></span><span class="name">หาเวลาที่ลงตัว</span><span class="num">05</span></li>
-      <li style="--c:#f472b6"><span class="ic"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 10a6 6 0 0 1 12 0c0 5 2 6.5 2 6.5H4S6 15 6 10"/><path d="M10 20a2 2 0 0 0 4 0"/></svg></span><span class="name">ล็อกตารางและแจ้งทีม</span><span class="num">06</span></li>
+      <li style="--c:#0e7490"><span class="ic"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="4" width="12" height="17" rx="2"/><path d="M9.5 4h5v3h-5zM9 11.5h6M9 15.5h4"/></svg></span><span class="name">รับคำขอผ่าตัด</span><span class="num">01</span></li>
+      <li style="--c:#7c3aed"><span class="ic"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><circle cx="17" cy="9" r="2.4"/><path d="M15.6 14.2c2.9.3 5.4 2.6 5.4 5.8"/></svg></span><span class="name">ทีมและเวร</span><span class="num">02</span></li>
+      <li style="--c:#b45309"><span class="ic"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="7" r="2.5"/><circle cx="6" cy="17" r="2.5"/><path d="M8.2 8.4 20 18M8.2 15.6 20 6"/></svg></span><span class="name">เครื่องมือและ CSSD</span><span class="num">03</span></li>
+      <li style="--c:#047857"><span class="ic"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 18V7M3 14h18v4M21 14v-1.5A3.5 3.5 0 0 0 17.5 9H11v5"/><circle cx="7" cy="11" r="2"/></svg></span><span class="name">ห้องและเตียง</span><span class="num">04</span></li>
+      <li style="--c:#4f46e5"><span class="ic"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="2.6"/><path d="M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M5.6 18.4l2.8-2.8M15.6 8.4l2.8-2.8"/></svg></span><span class="name">หาเวลาที่ลงตัว</span><span class="num">05</span></li>
+      <li style="--c:#be185d"><span class="ic"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 10a6 6 0 0 1 12 0c0 5 2 6.5 2 6.5H4S6 15 6 10"/><path d="M10 20a2 2 0 0 0 4 0"/></svg></span><span class="name">ล็อกตารางและแจ้งทีม</span><span class="num">06</span></li>
     </ol>
   </section>
 
@@ -235,7 +237,7 @@
   <div class="lanes" id="lanes" title="แตะเพื่อลองแทรกเคสฉุกเฉิน"></div>
   <div class="lanes-foot">
     <span class="news" id="news">แตะที่ตารางเพื่อลองแทรกเคสฉุกเฉิน</span>
-    <span class="legend"><span><i style="background:var(--elective)"></i>นัดล่วงหน้า</span><span><i style="background:var(--urgent)"></i>ด่วน</span><span><i style="background:var(--emergency)"></i>ฉุกเฉิน</span><span><i style="background:repeating-linear-gradient(135deg,rgba(148,163,184,.5) 0 2px,transparent 2px 4px)"></i>ทำความสะอาดห้อง</span></span>
+    <span class="legend"><span><i style="background:var(--elective)"></i>นัดล่วงหน้า</span><span><i style="background:var(--urgent)"></i>ด่วน</span><span><i style="background:var(--emergency)"></i>ฉุกเฉิน</span><span><i style="background:repeating-linear-gradient(135deg,rgba(71,85,105,.55) 0 2px,transparent 2px 4px)"></i>ทำความสะอาดห้อง</span></span>
   </div>
 </div>
 
