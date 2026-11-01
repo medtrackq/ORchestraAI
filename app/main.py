@@ -724,11 +724,26 @@ def replan(request: Request, date: str | None = None) -> dict:
     return {"result": result, "state": _state(user, date)}
 
 
+class CancelIn(BaseModel):
+    reason: str = Field(default="", max_length=30)
+    note: str | None = Field(default=None, max_length=200)
+    outcome: Literal["POSTPONED", "CANCELLED"] = "POSTPONED"
+
+
 @app.post("/api/pending/{pending_id}/cancel")
-def cancel_pending(pending_id: str, request: Request, date: str | None = None) -> dict:
-    """Give up a request that was taken off the schedule and is waiting for a new slot."""
+def cancel_pending(pending_id: str, request: Request, body: CancelIn | None = None, date: str | None = None) -> dict:
+    """Give up a request that was taken off the schedule and is waiting for a new slot (with a reason)."""
     user = _user(request, "book")
-    result = _run(store.cancel_pending, pending_id, actor=_actor(user))
+    data = body.model_dump() if body is not None else None
+    result = _run(store.cancel_pending, pending_id, data=data, actor=_actor(user))
+    return {"result": result, "state": _state(user, date)}
+
+
+@app.post("/api/cases/{case_id}/cancel")
+def cancel_booking(case_id: str, body: CancelIn, request: Request, date: str | None = None) -> dict:
+    """Call off a booked case (งดผ่าตัด) with a reason: postpone it to the waiting list or give it up."""
+    user = _user(request, "book")
+    result = _run(store.cancel_booking, case_id, body.model_dump(), day=date, actor=_actor(user))
     return {"result": result, "state": _state(user, date)}
 
 

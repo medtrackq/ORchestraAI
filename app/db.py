@@ -679,8 +679,13 @@ class Database:
         new_requests: dict[str, dict],
         *,
         activity: dict | None = None,
+        cancel: dict | None = None,
     ) -> None:
         """Write ``after`` over ``world.result`` in the open transaction.
+
+        Cases that come off the day wait for a new day (status PENDING) and the reason
+        is recorded (``cancel``: reason / note / outcome / by from a person; otherwise
+        from the activity: emergency, overrun or re-plan).
 
         Changed bookings are deleted and re-inserted with the same
         schedule_id (deletes first, so a ripple never trips the exclusion
@@ -714,6 +719,8 @@ class Database:
                     "UPDATE surgery_requests SET status = 'PENDING' WHERE request_id = %s",
                     (world.bookings[cid]["request_id"],),
                 )
+            if removed:
+                self._record_removed(conn, world, removed, activity, cancel)
             for cid, request in new_requests.items():
                 a = after.assignments.get(cid)
                 if a is None:
@@ -875,6 +882,49 @@ class Database:
              "was_on": r["preferred_date_start"].isoformat() if r["preferred_date_start"] else None}
             for r in rows
         ]
+
+    @staticmethod
+    def has_cancellations(conn: psycopg.Connection) -> bool:
+        return conn.execute("SELECT to_regclass('public.case_cancellations') IS NOT NULL AS ok").fetchone()["ok"]
+
+    def _record_removed(self, conn, world: World, removed: list[str], activity: dict | None, cancel: dict | None) -> None:
+        """One cancellation record per case taken off the day (before migration 010: nothing)."""
+        from .cancellations import AUTO
+
+        if not self.has_cancellations(conn):
+            return
+        kind = (activity or {}).get("kind")
+        reason = cancel["reason"] if cancel else AUTO.get(kind, "UNSPECIFIED")
+        for cid in removed:
+            a, case = world.result.assignments[cid], world.result.cases[cid]
+            try:
+                surgeon = uuid.UUID(case.surgeon_id)
+            except ValueError:
+                surgeon = None
+            conn.execute(
+                """INSERT INTO case_cancellations (request_id, case_code, planned_start, room_code, surgeon_id,
+                       procedure_name, reason, note, outcome, cancelled_by)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                (world.bookings[cid]["request_id"], cid, world.ts(a.start_min), a.or_id, surgeon, case.procedure[:200],
+                 reason, (cancel or {}).get("note"), (cancel or {}).get("outcome", "POSTPONED"),
+                 (cancel or {}).get("by") or (activity or {}).get("actor")),
+            )
+
+    def record_given_up(self, conn, request_id: uuid.UUID, code: str, reason: str, note: str | None,
+                        by: str | None) -> None:
+        """A waiting request given up: no planned day."""
+        if not self.has_cancellations(conn):
+            return
+        row = conn.execute(
+            """SELECT r.primary_surgeon_id, COALESCE(p.name, r.raw_nlp_input) AS procedure_name
+               FROM surgery_requests r LEFT JOIN procedures p USING (procedure_id) WHERE r.request_id = %s""",
+            (request_id,)).fetchone()
+        conn.execute(
+            """INSERT INTO case_cancellations (request_id, case_code, surgeon_id, procedure_name, reason, note, outcome,
+                   cancelled_by) VALUES (%s, %s, %s, %s, %s, %s, 'CANCELLED', %s)""",
+            (request_id, code, row["primary_surgeon_id"] if row else None,
+             ((row or {}).get("procedure_name") or "")[:200] or None, reason, note, by),
+        )
 
     @staticmethod
     def cancel_request(conn: psycopg.Connection, request_id: uuid.UUID) -> dict | None:

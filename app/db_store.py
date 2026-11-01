@@ -18,7 +18,9 @@ import psycopg
 
 from orchestra_engine import ORchestraOptimizer, ScheduleResult, fmt, hm
 from orchestra_engine.demo import elective_day
+from orchestra_engine.results import ScheduleChange
 
+from . import cancellations as cx
 from . import readiness as rd
 from . import seed
 from .db import ConflictError, Database, DatabaseUnavailable, World, case_code
@@ -174,7 +176,7 @@ class DatabaseStore:
             readiness = self._readiness(conn, world)
             following = self._readiness_next(conn, world.day, world) if readiness is not None else None
         return {**self._state(world, activity), "pending": pending, "readiness": readiness or {},
-                "readiness_ready": readiness is not None, "readiness_next": following}
+                "readiness_ready": readiness is not None, "readiness_next": following, "cancel_reasons": cx.options()}
 
     # ---------------------------------------------------- pre-op readiness
 
@@ -484,12 +486,41 @@ class DatabaseStore:
             title = f"จัดตารางวันที่ {world.day} ใหม่" + (f" (แก้ {len(problems)} จุดขัดกัน)" if problems else "")
             return self._save_change(conn, world, after, "replan", title, "", {}, actor)
 
-    def cancel_pending(self, pending_id: str, *, actor: dict | None = None) -> dict:
+    def cancel_booking(self, case_id: str, data: dict, *, day: str | None = None, actor: dict | None = None) -> dict:
+        """Call off a booked case with a reason: it waits for a new day, or the request is given up."""
+        reason, note, outcome = cx.parse(data)
+        with self._transaction(write=True) as conn:
+            world = self.db.load(conn, self._day(day))
+            a = world.result.assignments.get(case_id)
+            if a is None:
+                raise StoreError(f"ไม่พบเคส {case_id} ในวันที่ {world.day}")
+            case = world.result.cases[case_id]
+            check_own_case(actor, case.surgeon_id)
+            if a.frozen or world.bookings[case_id].get("actual_start_time"):
+                raise StoreError(f"{case_id} เริ่มผ่าตัดแล้ว งดไม่ได้ (ถ้าหยุดกลางคัน ให้บันทึกเวลาเสร็จจริง)")
+            after = replace(world.result, assignments={k: v for k, v in world.result.assignments.items() if k != case_id},
+                            changes=[ScheduleChange(case_id, ["งดผ่าตัด: " + cx.LABELS[reason]], a, None)],
+                            notifications=[], unscheduled={})
+            what = "เลื่อน (รอจัดวันใหม่)" if outcome == "POSTPONED" else "ยกเลิกคำขอ"
+            title = f"งดผ่าตัด {case_id}: {cx.LABELS[reason]} · {what}"
+            record = self._record(conn, world, Activity("cancel", title, [note or ""], highlight=[case_id],
+                                                       actor=actor_name(actor)))
+            kept = self.db.has_cancellations(conn)
+            self.db.save(conn, world, after, {}, activity=record,
+                         cancel={"reason": reason, "note": note, "outcome": outcome, "by": actor_name(actor)})
+            request_id = world.bookings[case_id]["request_id"]
+            if outcome == "CANCELLED":
+                self.db.cancel_request(conn, request_id)
+            self._emit(schedule_event("cancel", world.day, after, case_id, actor))
+        return {"case_id": case_id, "reason": reason, "outcome": outcome, "reason_kept": kept}
+
+    def cancel_pending(self, pending_id: str, *, data: dict | None = None, actor: dict | None = None) -> dict:
         """Give up a request waiting to be rebooked (e.g. the patient went elsewhere)."""
         try:
             request_id = uuid.UUID(pending_id)
         except ValueError as exc:
             raise StoreError("รหัสคำขอไม่ถูกต้อง") from exc
+        reason, note, _ = cx.parse(data, outcome_needed=False) if data and data.get("reason") else ("UNSPECIFIED", None, "")
         with self._transaction(write=True) as conn:
             owner = conn.execute("SELECT primary_surgeon_id FROM surgery_requests WHERE request_id = %s",
                                  (request_id,)).fetchone()
@@ -500,9 +531,10 @@ class DatabaseStore:
                 raise StoreError("คำขอนี้ถูกจองหรือยกเลิกไปแล้ว")
             world = self.db.load(conn, self.db.today())
             code = case_code(request_id, row["urgency_level"], set())
+            self.db.record_given_up(conn, request_id, code, reason, note, actor_name(actor))
             self.db.log_activity(conn, world, self._record(conn, world, Activity(
-                "cancel", f"ยกเลิกคำขอที่รอจัด {code}", [], actor=actor_name(actor))))
-        return {"cancelled": pending_id}
+                "cancel", f"ยกเลิกคำขอที่รอจัด {code}: {cx.LABELS[reason]}", [note or ""], actor=actor_name(actor))))
+        return {"cancelled": pending_id, "reason": reason}
 
     # ------------------------------------------------------------- reports
 
@@ -597,6 +629,8 @@ class DatabaseStore:
                     )
                 ]
             waiting = len(self.db.pending(conn))
+            cancellations = self._cancellations(conn, first, last)
+            earlier_cancel = self._cancellations(conn, *before)
         extra = {
             "waiting": waiting, "cancelled": cancelled, "fatigue_overrides": overrides,
             "emergencies_inserted": counts.get("emergency", 0), "replans": counts.get("replan", 0),
@@ -604,9 +638,34 @@ class DatabaseStore:
         }
         report = build_report(cases, rooms, first, last, self.db.tz, extra=extra)
         earlier = build_report(cases, rooms, *before, self.db.tz)
+        report["cancellations"] = cancellations and cx.summarize(cancellations[0], report["cases"], waiting=cancellations[1])
+        report["cancellations_ready"] = cancellations is not None
         report["previous"] = {**earlier["kpi"], "cases": earlier["cases"]}
+        if earlier_cancel is not None:
+            report["previous"]["cancellations"] = cx.summarize(earlier_cancel[0], earlier["cases"], waiting=earlier_cancel[1])
         report["previous_range"] = [before[0].isoformat(), before[1].isoformat()]
         return report
+
+    def _cancellations(self, conn, first: date, last: date) -> tuple[list[dict], int] | None:
+        """Cases called off that were planned in ``first``..``last``, and waiting requests given up then."""
+        if not self.db.has_cancellations(conn):
+            return None
+        tz = str(self.db.tz)
+        rows = [
+            {"case_code": r["case_code"], "planned": r["planned_day"].isoformat(), "procedure": r["procedure_name"],
+             "surgeon": r["full_name"], "reason": r["reason"], "outcome": r["outcome"], "note": r["note"],
+             "same_day": r["cancelled_day"] == r["planned_day"]}
+            for r in conn.execute(
+                """SELECT c.*, s.full_name, (c.planned_start AT TIME ZONE %s)::date AS planned_day,
+                          (c.cancelled_at AT TIME ZONE %s)::date AS cancelled_day
+                   FROM case_cancellations c LEFT JOIN staff s ON s.staff_id = c.surgeon_id
+                   WHERE c.planned_start IS NOT NULL AND (c.planned_start AT TIME ZONE %s)::date BETWEEN %s AND %s""",
+                (tz, tz, tz, first, last))
+        ]
+        given_up = conn.execute(
+            """SELECT count(*) AS n FROM case_cancellations WHERE planned_start IS NULL
+               AND (cancelled_at AT TIME ZONE %s)::date BETWEEN %s AND %s""", (tz, first, last)).fetchone()["n"]
+        return rows, given_up
 
     def report_cases(self, date_from: str | None = None, date_to: str | None = None) -> list:
         first, last = self._report_period(date_from, date_to)

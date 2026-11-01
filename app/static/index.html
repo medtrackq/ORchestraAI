@@ -222,6 +222,14 @@
   @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .seg button[aria-pressed="true"] { color: #04121a; } }
   @media (max-width: 640px) { .ready-item { grid-template-columns: minmax(0, 1fr); } .seg { justify-content: flex-start; } }
   .ready-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+  #cancel-dialog { width: min(520px, calc(100% - 32px)); }
+  #cancel-form { display: grid; gap: 10px; }
+  #cancel-form fieldset { border: 1px solid var(--border); border-radius: 10px; padding: 6px 10px 10px; margin: 0; }
+  #cancel-form legend { font-size: .78rem; color: var(--muted); padding: 0 4px; }
+  #cancel-form .group { font-size: .74rem; color: var(--muted); margin: 6px 0 2px; }
+  #cancel-form label.opt { display: flex; gap: 8px; align-items: flex-start; font-size: .86rem; padding: 3px 0; cursor: pointer; }
+  #cancel-form label.opt input { margin-top: 4px; }
+  #cancel-form .suggest { font-size: .7rem; color: var(--warn); }
   .rchip { font-size: .72rem; padding: 2px 8px; border-radius: 99px; border: 1px solid var(--border); background: var(--surface-2); color: var(--muted); cursor: default; }
   button.rchip { cursor: pointer; }
   .rchip.DONE { background: var(--ok-soft); color: var(--ok); border-color: transparent; }
@@ -405,6 +413,25 @@
   <div class="row2" style="margin-top:12px"><button class="btn" type="button" id="notify-close">ปิด</button>
     <button class="btn primary" type="button" id="notify-test">ส่งข้อความทดสอบ</button></div>
 </dialog>
+<dialog id="cancel-dialog" aria-labelledby="cancel-title">
+  <form id="cancel-form">
+    <h3 style="margin-top:0" id="cancel-title">งดผ่าตัด</h3>
+    <p class="hint" id="cancel-sub"></p>
+    <fieldset class="reasons"><legend>เหตุผล</legend><div id="cancel-reasons"></div></fieldset>
+    <label>รายละเอียด (ไม่บังคับ ยกเว้น "อื่น ๆ" · ไม่ต้องใส่ชื่อหรือ HN ผู้ป่วย)
+      <input type="text" name="note" maxlength="200" placeholder="เช่น K 2.9 รอแก้ไข, ญาติขอเลื่อนไปสัปดาห์หน้า"></label>
+    <fieldset id="cancel-outcome"><legend>หลังงด</legend>
+      <label class="opt"><input type="radio" name="outcome" value="POSTPONED" checked> เลื่อน: ไปอยู่รายการรอจัดวันใหม่</label>
+      <label class="opt"><input type="radio" name="outcome" value="CANCELLED"> ยกเลิกคำขอ (ไม่ผ่าตัดแล้ว)</label>
+    </fieldset>
+    <p class="hint" id="cancel-err" role="alert" style="color:var(--bad);margin:0" hidden></p>
+    <div class="row2">
+      <button class="btn" type="button" id="cancel-close">ไม่งด</button>
+      <button class="btn danger" type="submit">ยืนยันงดผ่าตัด</button>
+    </div>
+  </form>
+</dialog>
+
 <dialog id="pass-dialog">
   <form id="pass-form">
     <h3 style="margin-top:0">เปลี่ยนรหัสผ่าน</h3>
@@ -716,6 +743,53 @@
     if (selected) showDetail(selected);
   }
 
+  // --------------------------------------------- cancel / postpone a case
+  let CANCEL = null;  // { booking } or { pending }
+  const canCancel = b => can('book') && !b.frozen && !b.actual_start && (STATE.me.role !== 'surgeon' || surgeonOf(b) === STATE.me.staff_id);
+  function openCancel(b, p) {
+    CANCEL = { b, p };
+    const reasons = STATE.cancel_reasons || [];
+    const suggested = b ? suggestReason(readyOf(b.case_id)) : null;
+    const groups = [['patient', 'ผู้ป่วย'], ['hospital', 'โรงพยาบาล (ป้องกันได้)'], ['other', 'อื่น ๆ']];
+    $('#cancel-title').textContent = b ? `งดผ่าตัด ${b.case_id}` : `ยกเลิกคำขอ ${p.code}`;
+    $('#cancel-sub').textContent = b ? `${b.procedure} · ${b.or_id} ${b.start}-${b.end}${STATE.date ? ' · ' + STATE.date : ''}`
+      : `${p.procedure} · รอจัดวันใหม่`;
+    $('#cancel-reasons').innerHTML = groups.map(([g, label]) => {
+      const list = reasons.filter(r => r.group === g);
+      return list.length ? `<div class="group">${label}</div>` + list.map(r => `<label class="opt"><input type="radio" name="reason" value="${esc(r.key)}"
+        ${r.key === suggested ? 'checked' : ''} required> <span>${esc(r.label)}${r.key === suggested ? ' <span class="suggest">(ตามรายการเช็กความพร้อม)</span>' : ''}</span></label>`).join('') : '';
+    }).join('');
+    $('#cancel-outcome').hidden = !b;
+    $('#cancel-form').elements['note'].value = '';
+    $('#cancel-form').elements['outcome'][0].checked = true;
+    $('#cancel-err').hidden = true;
+    $('#cancel-dialog').showModal();
+  }
+  const suggestReason = r => {
+    const map = { npo: 'NPO', labs: 'PATIENT_UNFIT', anesthesia: 'PATIENT_UNFIT', consent: 'PAPERWORK', blood: 'BLOOD' };
+    return ((r && r.problems) || []).map(k => map[k]).find(Boolean) || null;
+  };
+  $('#cancel-close').addEventListener('click', () => $('#cancel-dialog').close());
+  $('#cancel-form').addEventListener('submit', e => {
+    e.preventDefault();
+    const f = e.target, { b, p } = CANCEL;
+    const body = { reason: f.elements['reason'].value, note: f.elements['note'].value.trim() || null,
+      outcome: b ? f.querySelector('input[name="outcome"]:checked').value : 'CANCELLED' };
+    const button = f.querySelector('[type="submit"]');
+    button.disabled = true;
+    (async () => {
+      const path = b ? '/api/cases/' + encodeURIComponent(b.case_id) + '/cancel' : '/api/pending/' + encodeURIComponent(p.id) + '/cancel';
+      const data = await api(path, body);
+      $('#cancel-dialog').close();
+      if (p && REBOOK && REBOOK.id === p.id) endRebook();
+      if (b) selected = null;
+      STATE = data.state; render();
+      toast(b ? (body.outcome === 'POSTPONED' ? `งด ${b.case_id} แล้ว · ไปอยู่รายการรอจัดวันใหม่` : `งด ${b.case_id} และยกเลิกคำขอแล้ว`)
+        : 'ยกเลิกคำขอแล้ว', true);
+    })().catch(err => { $('#cancel-err').textContent = err.message; $('#cancel-err').hidden = false; })
+      .finally(() => { button.disabled = false; });
+  });
+
   // ------------------------------------------------------- pre-op readiness
   const READY_ITEMS = [['consent', 'ใบยินยอมผ่าตัด', 'ยินยอม'], ['anesthesia', 'ประเมินก่อนระงับความรู้สึก', 'วิสัญญี'],
     ['labs', 'ผลแล็บ/ผลตรวจก่อนผ่าตัด', 'แล็บ'], ['npo', 'งดน้ำงดอาหาร', 'NPO'], ['blood', 'จองเลือด', 'เลือด'],
@@ -872,8 +946,10 @@
       ${b.reasoning.length ? '<ul class="why">' + b.reasoning.map(r => '<li>' + esc(r) + '</li>').join('') + '</ul>' : ''}
       ${fatigueBox((STATE.fatigue || []).filter(i => i.case_id === b.case_id), 'เกณฑ์ความเหนื่อยล้าของทีมในเคสนี้')}
       ${readinessBox(b)}
-      ${actualTimes(b)}`;
+      ${actualTimes(b)}
+      ${canCancel(b) ? '<div style="margin-top:10px"><button class="btn" type="button" id="cancel-case" style="color:var(--bad)">งดผ่าตัด / ยกเลิกเคสนี้</button></div>' : ''}`;
     wireReadiness(box, b);
+    box.querySelector('#cancel-case')?.addEventListener('click', () => openCancel(b));
     const form = box.querySelector('.actual-form');
     if (form) form.addEventListener('submit', e => {
       e.preventDefault();
@@ -1003,13 +1079,8 @@
       applyRebook(true);
     }));
     $('#pending').querySelectorAll('[data-cancel]').forEach(b => b.addEventListener('click', () => {
-      if (!confirm('ยกเลิกคำขอนี้? (เช่น ผู้ป่วยไปรักษาที่อื่นหรือไม่ผ่าตัดแล้ว)')) return;
-      busy(b, async () => {
-        const data = await api('/api/pending/' + encodeURIComponent(b.dataset.cancel) + '/cancel', {});
-        if (REBOOK && REBOOK.id === b.dataset.cancel) endRebook();
-        STATE = data.state; render();
-        toast('ยกเลิกคำขอแล้ว', true);
-      });
+      const p = (STATE.pending || []).find(x => x.id === b.dataset.cancel);
+      openCancel(null, p);
     }));
   }
 

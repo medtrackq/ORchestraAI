@@ -27,6 +27,7 @@ from orchestra_engine import (
 from orchestra_engine.demo import Hospital, build_hospital, elective_day
 from orchestra_engine.models import DEFAULT_TEAM
 
+from . import cancellations as cx
 from . import readiness as rd
 
 
@@ -269,6 +270,7 @@ class ScheduleStore:
                             for r in synthetic_history(self.cards)]
             self.actuals: dict[str, list[int | None]] = {}  # case_id -> [start, end] minutes
             self.readiness: dict[str, dict[str, dict]] = {}  # case_id -> checked pre-op items
+            self.cancellations: list[dict] = []  # cases called off / given up, with the reason
             self.digests: set[str] = set()
             self.pending: dict[str, SurgeryCase] = {}  # taken off the schedule, waiting for a new slot
             self._ids = Counter()
@@ -326,6 +328,7 @@ class ScheduleStore:
             "readiness": self._readiness(),
             "readiness_ready": True,
             "readiness_next": None,  # the demo has one day
+            "cancel_reasons": cx.options(),
             **fatigue_view(self.hospital, self.result),
             **facility_view(self.hospital, self.result),
         }
@@ -408,15 +411,55 @@ class ScheduleStore:
             for cid, c in sorted(self.pending.items(), key=lambda kv: (rank[kv[1].urgency], kv[0]))
         ]
 
-    def cancel_pending(self, pending_id: str, *, actor: dict | None = None) -> dict:
+    def cancel_pending(self, pending_id: str, *, data: dict | None = None, actor: dict | None = None) -> dict:
+        reason, note, _ = cx.parse(data, outcome_needed=False) if data and data.get("reason") else ("UNSPECIFIED", None, "")
         with self._lock:
             case = self.pending.get(pending_id)
             if case is None:
                 raise StoreError("คำขอนี้ถูกจองหรือยกเลิกไปแล้ว")
             check_own_case(actor, case.surgeon_id)
             del self.pending[pending_id]
-            self.activity.append(Activity("cancel", f"ยกเลิกคำขอที่รอจัด {pending_id}", [], actor=actor_name(actor)))
-        return {"cancelled": pending_id}
+            self._cancelled(pending_id, case, None, reason, note, "CANCELLED", actor)
+            self.activity.append(Activity("cancel", f"ยกเลิกคำขอที่รอจัด {pending_id}: {cx.LABELS[reason]}", [note or ""],
+                                          actor=actor_name(actor)))
+        return {"cancelled": pending_id, "reason": reason}
+
+    def _cancelled(self, cid: str, case: SurgeryCase, a, reason: str, note: str | None, outcome: str,
+                   actor: dict | None) -> None:
+        from datetime import datetime
+
+        names = {s.staff_id: s.name for s in self.hospital.staff}
+        self.cancellations.append({
+            "case_code": cid, "planned": date.today().isoformat() if a is not None else None,
+            "procedure": case.procedure, "surgeon": names.get(case.surgeon_id), "reason": reason, "outcome": outcome,
+            "note": note, "same_day": a is not None, "at": datetime.now().isoformat(timespec="minutes"),
+            "by": actor_name(actor)})
+
+    def cancel_booking(self, case_id: str, data: dict, *, day: str | None = None, actor: dict | None = None) -> dict:
+        """Call off a booked case with a reason: it waits for a new day, or the request is given up."""
+        reason, note, outcome = cx.parse(data)
+        with self._lock:
+            a = self.result.assignments.get(case_id)
+            if a is None:
+                raise StoreError(f"ไม่พบเคส {case_id} ในตาราง")
+            case = self.result.cases[case_id]
+            check_own_case(actor, case.surgeon_id)
+            if a.frozen or (self.actuals.get(case_id) or [None])[0] is not None:
+                raise StoreError(f"{case_id} เริ่มผ่าตัดแล้ว งดไม่ได้ (ถ้าหยุดกลางคัน ให้บันทึกเวลาเสร็จจริง)")
+            from dataclasses import replace
+
+            from orchestra_engine.results import ScheduleChange
+
+            after = replace(self.result, assignments={k: v for k, v in self.result.assignments.items() if k != case_id},
+                            changes=[ScheduleChange(case_id, ["งดผ่าตัด: " + cx.LABELS[reason]], a, None)],
+                            notifications=[], unscheduled={})
+            self._commit(after)
+            if outcome == "CANCELLED":
+                self.pending.pop(case_id, None)
+            self._cancelled(case_id, case, a, reason, note, outcome, actor)
+            what = "เลื่อน (รอจัดวันใหม่)" if outcome == "POSTPONED" else "ยกเลิกคำขอ"
+            self._record_change("cancel", f"งดผ่าตัด {case_id}: {cx.LABELS[reason]} · {what}", after, case_id, actor)
+        return {"case_id": case_id, "reason": reason, "outcome": outcome, "reason_kept": True}
 
     # ------------------------------------------------------------- intake
 
@@ -595,6 +638,9 @@ class ScheduleStore:
                  "fatigue_overrides": sum("FATIGUE OVERRIDE" in line for a in self.activity for line in a.log)}
         today = date.today()
         report = build_report(self.report_cases(), rooms, today, today, ZoneInfo("Asia/Bangkok"), extra=extra)
+        planned = [c for c in self.cancellations if c["planned"]]
+        report["cancellations"] = cx.summarize(planned, report["cases"], waiting=len(self.cancellations) - len(planned))
+        report["cancellations_ready"] = True
         report["previous"], report["previous_range"] = None, None
         return report
 
@@ -605,6 +651,11 @@ class ScheduleStore:
     def _record_change(self, kind: str, title: str, after: ScheduleResult, case_id: str,
                        actor: dict | None = None, tired=()) -> dict:
         self._emit(schedule_event(kind, date.today(), after, case_id, actor, fatigue=len({i.staff_id for i in tired})))
+        if kind in cx.AUTO:
+            for change in after.changes:
+                if change.after is None and change.before is not None:
+                    self._cancelled(change.case_id, after.cases[change.case_id], change.before, cx.AUTO[kind], None,
+                                    "POSTPONED", actor)
         data = after.to_dict()
         log = [f"[Master Orchestrator] {c['case_id']}: {'; '.join(c['details'])}" for c in data["changes"]]
         log += [f"[Master Orchestrator] NOT SCHEDULED {u['case_id']}: {'; '.join(u['reasons'])}"

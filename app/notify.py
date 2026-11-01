@@ -319,7 +319,7 @@ def _when(a) -> str:
     return f"{fmt(a.start_min)}-{fmt(a.end_min)} ห้อง {a.or_id}"
 
 
-def describe_change(change, staff_id: str, cases: dict) -> str | None:
+def describe_change(change, staff_id: str, cases: dict, cause: str | None = None) -> str | None:
     """One line for one person about one changed case (no patient identifiers)."""
     b, a = change.before, change.after
     in_b = b is not None and staff_id in b.staff_ids
@@ -327,7 +327,9 @@ def describe_change(change, staff_id: str, cases: dict) -> str | None:
     case = cases.get(change.case_id)
     tag = change.case_id + (" (ฉุกเฉิน)" if case is not None and case.urgency.value == "EMERGENCY" else "")
     if a is None:
-        return f"{tag}: ถูกเอาออกจากตาราง (รอจัดวันใหม่)" if in_b else None
+        if not in_b:
+            return None
+        return f"{tag}: งดผ่าตัด ({_when(b)})" if cause == "cancel" else f"{tag}: ถูกเอาออกจากตาราง (รอจัดวันใหม่)"
     if b is None:
         return f"{tag}: เคสใหม่ {_when(a)}" if in_a else None
     if in_a and not in_b:
@@ -358,7 +360,7 @@ def build_messages(event: dict, users: list) -> list[Message]:
                 user = by_staff.get(sid)
                 if user is None or user.user_id == actor:
                     continue
-                line = describe_change(change, sid, event.get("cases", {}))
+                line = describe_change(change, sid, event.get("cases", {}), event.get("cause"))
                 if line:
                     lines[user.user_id].append(line)
         when = f" วันที่ {day}" if day else ""
