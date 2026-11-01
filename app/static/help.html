@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>วิธีใช้ · ORchestraAI</title>
+<link href="https://fonts.googleapis.com/css2?family=Prompt:wght@400;500;600&family=Sarabun:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #f4f6fb; --surface: #ffffff; --surface-2: #f8fafc; --text: #0f172a; --muted: #64748b;
+    --border: #e2e8f0; --accent: #0e7490; --accent-soft: #e0f2fe; --ok: #047857; --ok-soft: #d1fae5;
+    --bad: #b91c1c; --bad-soft: #fee2e2; --warn: #b45309; --warn-soft: #fef3c7;
+    --shadow: 0 1px 3px rgba(15,23,42,.08), 0 8px 24px rgba(15,23,42,.06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --bg: #0b1220; --surface: #111a2e; --surface-2: #0f172a; --text: #e2e8f0; --muted: #94a3b8;
+      --border: #1f2a44; --accent: #22d3ee; --accent-soft: rgba(34,211,238,.12); --ok: #34d399; --ok-soft: rgba(16,185,129,.15);
+      --bad: #f87171; --bad-soft: rgba(239,68,68,.15); --warn: #fbbf24; --warn-soft: rgba(245,158,11,.15); --shadow: none;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #0b1220; --surface: #111a2e; --surface-2: #0f172a; --text: #e2e8f0; --muted: #94a3b8;
+    --border: #1f2a44; --accent: #22d3ee; --accent-soft: rgba(34,211,238,.12); --ok: #34d399; --ok-soft: rgba(16,185,129,.15);
+    --bad: #f87171; --bad-soft: rgba(239,68,68,.15); --warn: #fbbf24; --warn-soft: rgba(245,158,11,.15); --shadow: none;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.7 'Sarabun', 'Prompt', 'Noto Sans Thai', system-ui, sans-serif; }
+  button { font: inherit; color: inherit; }
+  h1, h2, h3, .roles button, .btn { font-family: 'Prompt', 'Sarabun', system-ui, sans-serif; }
+  .top { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; padding: 14px 24px; background: var(--surface); border-bottom: 1px solid var(--border); }
+  .brand { display: flex; align-items: center; gap: 12px; }
+  .orb { width: 14px; height: 14px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 12px var(--accent); flex: none; }
+  .brand h1 { margin: 0; font-size: 1.15rem; }
+  .brand p { margin: 0; font-size: .82rem; color: var(--muted); }
+  .top nav { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .btn { border: 1px solid var(--border); background: var(--surface); padding: 7px 14px; border-radius: 8px; cursor: pointer; text-decoration: none; color: var(--text); font-size: .86rem; display: inline-block; }
+  .btn:hover { border-color: var(--accent); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  :root[data-theme="dark"] .btn.primary { color: #04121a; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .btn.primary { color: #04121a; } }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .roles { position: sticky; top: 0; z-index: 5; display: flex; gap: 4px; flex-wrap: wrap; padding: 8px 24px; background: var(--bg); border-bottom: 1px solid var(--border); }
+  .roles button { border: 1px solid transparent; background: transparent; padding: 7px 12px; border-radius: 8px; cursor: pointer; font-size: .88rem; color: var(--muted); }
+  .roles button[aria-selected="true"] { background: var(--accent-soft); color: var(--text); font-weight: 600; border-color: var(--accent); }
+  .roles button .you { font-size: .7rem; background: var(--accent); color: #fff; border-radius: 99px; padding: 0 6px; margin-left: 4px; }
+  main { max-width: 900px; margin: 0 auto; padding: 20px 24px 60px; }
+  .guide { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow); padding: 24px 28px; }
+  .guide > h2 { margin: 0 0 4px; font-size: 1.35rem; }
+  .guide > .who { margin: 0 0 16px; color: var(--muted); }
+  h3 { font-size: 1.08rem; margin: 26px 0 8px; padding-top: 10px; border-top: 1px solid var(--border); }
+  h3:first-of-type { border-top: 0; padding-top: 0; }
+  h4 { font-size: .98rem; margin: 16px 0 6px; }
+  p { margin: 6px 0; }
+  ol, ul { margin: 6px 0; padding-left: 24px; }
+  li { margin: 3px 0; }
+  ol.steps { counter-reset: step; list-style: none; padding-left: 0; }
+  ol.steps > li { counter-increment: step; position: relative; padding-left: 38px; margin: 8px 0; }
+  ol.steps > li::before { content: counter(step); position: absolute; left: 0; top: 1px; width: 26px; height: 26px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); font: 600 .84rem/26px 'Prompt', sans-serif; text-align: center; }
+  kbd { font: 500 .86em/1.4 'Prompt', 'Sarabun', sans-serif; background: var(--surface-2); border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 6px; padding: 1px 7px; white-space: nowrap; }
+  .tip, .warn, .pdpa { border-radius: 10px; padding: 10px 14px; margin: 12px 0; font-size: .94rem; }
+  .tip { background: var(--accent-soft); }
+  .warn { background: var(--warn-soft); }
+  .pdpa { background: var(--bad-soft); }
+  .tip > b:first-child, .warn > b:first-child, .pdpa > b:first-child { display: block; }
+  .toc { background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 16px; margin: 0 0 8px; font-size: .92rem; }
+  .toc ol { margin: 4px 0; }
+  .toc a { color: var(--accent); text-decoration: none; }
+  table { width: 100%; border-collapse: collapse; font-size: .92rem; margin: 8px 0; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: .84rem; }
+  .table-scroll { overflow-x: auto; }
+  .legend-dot { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -1px; margin-right: 4px; }
+  .print-head { display: none; }
+  [hidden] { display: none !important; }
+  @media (max-width: 640px) {
+    .top, main, .roles { padding-left: 16px; padding-right: 16px; }
+    .guide { padding: 18px 16px; }
+    kbd { white-space: normal; }
+  }
+  @page { size: A4 portrait; margin: 14mm 14mm 16mm; }
+  @media print {
+    :root { color-scheme: light; --bg: #fff; --surface: #fff; --surface-2: #f6f7f9; --text: #000; --muted: #444; --border: #bbb;
+            --accent: #0b5f74; --accent-soft: #e8f3f6; --warn-soft: #fff6dc; --bad-soft: #fdecec; --shadow: none; }
+    body { font-size: 11.5pt; line-height: 1.55; background: #fff; }
+    .top, .roles, .no-print { display: none !important; }
+    main { max-width: none; padding: 0; }
+    .print-head { display: flex !important; justify-content: space-between; font: 9pt 'Prompt', sans-serif; color: #444; border-bottom: 1px solid #999; padding-bottom: 4px; margin-bottom: 10px; }
+    .guide { display: none !important; border: 0; padding: 0; box-shadow: none; }
+    .guide.print-on { display: block !important; break-before: page; }
+    .guide.print-on.first { break-before: auto; }
+    h3, h4 { break-after: avoid; }
+    li, .tip, .warn, .pdpa, tr { break-inside: avoid; }
+    .toc { display: none; }
+    a { color: inherit; text-decoration: none; }
+  }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <span class="orb" aria-hidden="true"></span>
+    <div><h1>วิธีใช้ ORchestraAI</h1><p id="sub">คู่มือแยกตามบทบาท · อ่านบนจอ หรือพิมพ์แจกตอนอบรม</p></div>
+  </div>
+  <nav>
+    <a class="btn" href="/" id="back">← กลับไปตารางผ่าตัด</a>
+    <button class="btn primary" type="button" id="print-one">🖨 พิมพ์คู่มือนี้</button>
+    <button class="btn" type="button" id="print-all">พิมพ์ทุกบทบาท</button>
+  </nav>
+</header>
+<nav class="roles" role="tablist" aria-label="เลือกคู่มือ">
+  <button type="button" role="tab" data-guide="start">เริ่มต้นใช้งาน (ทุกคน)</button>
+  <button type="button" role="tab" data-guide="scheduler">ผู้จัดตาราง</button>
+  <button type="button" role="tab" data-guide="surgeon">ศัลยแพทย์</button>
+  <button type="button" role="tab" data-guide="staff">วิสัญญี / พยาบาล</button>
+  <button type="button" role="tab" data-guide="cssd">CSSD</button>
+  <button type="button" role="tab" data-guide="admin">ผู้ดูแลระบบ</button>
+  <button type="button" role="tab" data-guide="faq">คำถามที่พบบ่อย</button>
+</nav>
+
+<main>
+  <div class="print-head"><span>คู่มือการใช้งาน ORchestraAI · ระบบนัดผ่าตัด</span><span id="printed"></span></div>
+
+  <!-- ================================================================ START -->
+  <section class="guide" id="start" data-guide="start">
+    <h2>เริ่มต้นใช้งาน</h2>
+    <p class="who">สำหรับทุกคน อ่านส่วนนี้ก่อนคู่มือของบทบาทตัวเอง</p>
+    <div class="toc no-print"><b>ในส่วนนี้</b><ol>
+      <li><a href="#start-login">เข้าสู่ระบบครั้งแรก</a></li><li><a href="#start-read">อ่านตารางผ่าตัด</a></li>
+      <li><a href="#start-case">ดูรายละเอียดเคส</a></li><li><a href="#start-notify">เปิดแจ้งเตือนบนมือถือ / LINE</a></li>
+      <li><a href="#start-account">รหัสผ่านและการออกจากระบบ</a></li><li><a href="#start-pdpa">ข้อมูลผู้ป่วย (PDPA)</a></li>
+      <li><a href="#start-agents">Agent ในระบบทำอะไร</a></li></ol></div>
+
+    <h3 id="start-login">1. เข้าสู่ระบบครั้งแรก</h3>
+    <ol class="steps">
+      <li>รับ <b>ชื่อผู้ใช้</b> และ <b>รหัสผ่านชั่วคราว</b> จากผู้ดูแลระบบ</li>
+      <li>เปิดที่อยู่เว็บของระบบ ใส่ชื่อผู้ใช้และรหัสชั่วคราว แล้วกด <kbd>เข้าสู่ระบบ</kbd></li>
+      <li>ตั้งรหัสผ่านใหม่ (อย่างน้อย 10 ตัวอักษร และห้ามมีชื่อผู้ใช้อยู่ในรหัส) แล้วกด <kbd>ตั้งรหัสผ่านและเข้าใช้งาน</kbd></li>
+    </ol>
+    <div class="tip"><b>เคล็ดลับ</b>บนมือถือ เพิ่มเว็บไว้ที่หน้าจอโฮมจะเปิดได้เหมือนแอป (Android: เมนู ⋮ → เพิ่มไปยังหน้าจอหลัก · iPhone: ปุ่มแชร์ → <kbd>เพิ่มไปยังหน้าจอโฮม</kbd>)</div>
+
+    <h3 id="start-read">2. อ่านตารางผ่าตัด</h3>
+    <p>หน้าแรกคือ <b>ตารางห้องผ่าตัด</b> ของวันนี้ แต่ละแถวคือ 1 ห้อง แถบสีคือเคส เลื่อนซ้าย-ขวาเพื่อดูทั้งวัน</p>
+    <div class="table-scroll"><table>
+      <tr><th>สิ่งที่เห็น</th><th>ความหมาย</th></tr>
+      <tr><td><span class="legend-dot" style="background:#2563eb"></span>น้ำเงิน · <span class="legend-dot" style="background:#f59e0b"></span>เหลืองส้ม · <span class="legend-dot" style="background:#dc2626"></span>แดง</td><td>เคสนัดล่วงหน้า (Elective) · ด่วน (Urgent) · ฉุกเฉิน (Emergency)</td></tr>
+      <tr><td>เส้นแดงแนวตั้ง</td><td>เวลาปัจจุบัน</td></tr>
+      <tr><td>ลายทางต่อท้ายแถบ</td><td>เวลาทำความสะอาดห้องหลังเคส</td></tr>
+      <tr><td>เส้นประรอบแถบ</td><td>เคสเริ่มผ่าตัดแล้ว ระบบจะไม่ย้ายเคสนี้</td></tr>
+      <tr><td>กรอบเขียว</td><td>เคสที่เพิ่งเปลี่ยน (ย้ายเวลา ย้ายห้อง หรือจองใหม่)</td></tr>
+      <tr><td>ป้าย “ของฉัน”</td><td>คุณอยู่ในทีมของเคสนี้</td></tr>
+      <tr><td>วงกลมมุมขวาของแถบ</td><td>ความพร้อมก่อนผ่าตัด: ตัวเลข = รายการที่ยังไม่ได้ทำ · ✓ พร้อม · ! มีปัญหา</td></tr>
+      <tr><td>พื้นลายแดงในแถวห้อง</td><td>ห้องปิดชั่วคราว (ซ่อม ทำความสะอาดใหญ่)</td></tr>
+      <tr><td>แถบจางสีฟ้าเต็มแถว</td><td>บล็อกห้องของแผนกหรือศัลยแพทย์ (จางลงอีก = เปิดให้ทุกคนจองแล้ว)</td></tr>
+    </table></div>
+    <p>แถบสีเหลืองหรือแดงด้านบนคือ <b>คำเตือน</b> เช่น เคสยังไม่พร้อม วัสดุใกล้หมด หรือตารางขัดกันหลังมีคนลา ให้อ่านและแจ้งผู้รับผิดชอบ · กด <kbd>โหลดใหม่</kbd> เพื่อดูข้อมูลล่าสุด</p>
+
+    <h3 id="start-case">3. ดูรายละเอียดเคส</h3>
+    <p>แตะแถบเคสในตาราง จะเห็นรายละเอียดใต้ตาราง: หัตถการ ห้อง เวลา ทีม เครื่องมือ เตียงพักฟื้น เหตุผลที่ระบบเลือกเวลานี้
+      และ 2 กล่องที่ใช้บ่อย</p>
+    <ul>
+      <li><b>ความพร้อมก่อนผ่าตัด</b>: ใบยินยอม ประเมินวิสัญญี ผลแล็บ งดน้ำงดอาหาร จองเลือด ทำเครื่องหมายตำแหน่งผ่าตัด</li>
+      <li><b>สถานะวันนี้</b>: เวลาของแต่ละขั้น ตั้งแต่ผู้ป่วยมาถึงห้องเตรียมจนออกจากห้องพักฟื้น</li>
+    </ul>
+
+    <h3 id="start-notify">4. เปิดแจ้งเตือนบนมือถือ / LINE</h3>
+    <p>ระบบจะแจ้งเมื่อเคสของคุณถูกเพิ่ม ย้าย หรือเอาออก (ข้อความมีแค่เลขเคส เวลา ห้อง ไม่มีชื่อหรือ HN ผู้ป่วย)</p>
+    <h4>แจ้งเตือนในเบราว์เซอร์ (ไม่ต้องติดตั้งอะไร)</h4>
+    <ol class="steps">
+      <li>กด <kbd>🔔 แจ้งเตือน</kbd> ที่หัวหน้า</li>
+      <li>กด <kbd>เปิดการแจ้งเตือนบนอุปกรณ์นี้</kbd> แล้วกด “อนุญาต” เมื่อเบราว์เซอร์ถาม</li>
+      <li>กด <kbd>ส่งข้อความทดสอบ</kbd> ถ้ามีข้อความเด้งขึ้น แปลว่าใช้ได้</li>
+    </ol>
+    <div class="warn"><b>iPhone / iPad</b>ต้องใช้ iOS 16.4 ขึ้นไป และต้องเพิ่มเว็บไปที่หน้าจอโฮมก่อน (ปุ่มแชร์ใน Safari → <kbd>เพิ่มไปยังหน้าจอโฮม</kbd>) แล้วเปิดจากไอคอนนั้น จึงจะเปิดแจ้งเตือนได้</div>
+    <h4>แจ้งเตือนทาง LINE (ถ้าโรงพยาบาลเปิดใช้)</h4>
+    <ol class="steps">
+      <li>ใน <kbd>🔔 แจ้งเตือน</kbd> กด <kbd>เชื่อม LINE</kbd> ระบบจะให้รหัส 6 หลัก (ใช้ได้ 15 นาที)</li>
+      <li>เพิ่มเพื่อน LINE ของโรงพยาบาล แล้วพิมพ์รหัสนั้นส่งในแชต</li>
+      <li>กลับมากด <kbd>ส่งรหัสแล้ว ตรวจสถานะ</kbd></li>
+    </ol>
+    <p>เลือกได้ว่าจะรับเรื่องใดบ้างในหัวข้อ “รับแจ้งเตือนเรื่อง”</p>
+
+    <h3 id="start-account">5. รหัสผ่านและการออกจากระบบ</h3>
+    <ul>
+      <li>เปลี่ยนรหัสผ่าน: กด <kbd>เปลี่ยนรหัสผ่าน</kbd> ที่หัวหน้า</li>
+      <li>ลืมรหัสผ่าน: ให้ผู้ดูแลระบบรีเซ็ตให้ (จะได้รหัสชั่วคราวใหม่)</li>
+      <li>เครื่องที่ใช้ร่วมกัน (เครื่องในหอผู้ป่วย ห้องผ่าตัด) <b>กด <kbd>ออกจากระบบ</kbd> ทุกครั้งที่ใช้เสร็จ</b> · การออกจากระบบจะออกจากทุกเครื่องที่คุณเข้าไว้</li>
+      <li>ใส่รหัสผิดหลายครั้ง ระบบจะพักการเข้าสู่ระบบ 10 นาที</li>
+    </ul>
+
+    <h3 id="start-pdpa">6. ข้อมูลผู้ป่วย (PDPA)</h3>
+    <div class="pdpa"><b>สิ่งที่ทุกคนต้องทำ</b>
+      <ul>
+        <li>ระบบบันทึกว่าใครเปิดดูข้อมูลผู้ป่วย (HN / ชื่อ) เมื่อไร เปิดดูเฉพาะเคสที่เกี่ยวกับงานของคุณ</li>
+        <li>ช่องหมายเหตุ (เหตุผลงดผ่าตัด เช็กลิสต์ ฯลฯ) <b>ไม่ต้องใส่ชื่อหรือ HN ผู้ป่วย</b> ระบบรู้อยู่แล้วว่าเป็นเคสไหน</li>
+        <li>ช่องพิมพ์/พูดคำขอผ่าตัด ข้อความถูกส่งให้ AI อ่าน (ระบบซ่อน HN และชื่อก่อนส่ง) ถ้าใช้ <kbd>🎙️ พูด</kbd> อย่าพูดชื่อหรือ HN เพราะเสียงถูกส่งไปแปลงที่ Google/Apple</li>
+        <li>ไม่ถ่ายภาพหน้าจอที่มีข้อมูลผู้ป่วยส่งต่อทางแชต · ใบที่ติดหน้าห้องให้พิมพ์แบบ “ไม่แสดงชื่อและ HN”</li>
+      </ul></div>
+
+    <h3 id="start-agents">7. Agent ในระบบทำอะไร</h3>
+    <div class="table-scroll"><table>
+      <tr><th>Agent</th><th>หน้าที่</th></tr>
+      <tr><td>Intake &amp; Triage</td><td>อ่านคำขอผ่าตัดที่พิมพ์หรือพูด กรอกฟอร์มให้ คัดแยกความเร่งด่วน และประเมินเวลาผ่าตัดจากประวัติจริงของศัลยแพทย์</td></tr>
+      <tr><td>Staffing</td><td>ตรวจเวร ทักษะ ชั่วโมงทำงาน และเวลาพักของทีม (กันคนทำงานเกินเกณฑ์)</td></tr>
+      <tr><td>Equipment &amp; CSSD</td><td>ตรวจเครื่องมือ เวลาอบฆ่าเชื้อ นัดซ่อม และวัสดุ/รากเทียมในคลัง</td></tr>
+      <tr><td>OR Facility</td><td>ตรวจห้องผ่าตัด เวลาเปิดห้อง การปิดห้อง บล็อกห้อง และเตียงพักฟื้น</td></tr>
+      <tr><td>Master Orchestrator</td><td>รวมคำตอบของทุก Agent และหาเวลาที่ทุกฝ่ายพร้อมพร้อมกัน โดยไม่ให้อะไรชนกัน</td></tr>
+    </table></div>
+  </section>
+
+  <!-- ================================================================ SCHEDULER -->
+  <section class="guide" id="scheduler" data-guide="scheduler">
+    <h2>คู่มือผู้จัดตาราง OR</h2>
+    <p class="who">หัวหน้าพยาบาลห้องผ่าตัด / ผู้จัดตาราง · จองได้ทุกเคส แก้เวรและวันลา ดูรายงาน</p>
+    <div class="toc no-print"><b>ในส่วนนี้</b><ol>
+      <li><a href="#sch-day">งานประจำวัน</a></li><li><a href="#sch-book">จองเคสผ่าตัด</a></li><li><a href="#sch-er">เคสฉุกเฉิน</a></li>
+      <li><a href="#sch-over">ผ่าตัดเกินเวลา</a></li><li><a href="#sch-cancel">งดผ่าตัดและรายการรอจัด</a></li>
+      <li><a href="#sch-fix">เมื่อตารางขัดกัน</a></li><li><a href="#sch-ready">ความพร้อมก่อนผ่าตัด</a></li>
+      <li><a href="#sch-roster">เวร วันลา ปิดห้อง เตียง บล็อกห้อง</a></li><li><a href="#sch-print">พิมพ์ กระดานสถานะ รายงาน</a></li></ol></div>
+
+    <h3 id="sch-day">1. งานประจำวัน</h3>
+    <ul>
+      <li><b>เช้า</b>: อ่านแถบคำเตือนด้านบน · แท็บ <kbd>ความพร้อม</kbd> ดูเคสวันนี้ที่ยังไม่พร้อม · แท็บ <kbd>เครื่องมือ</kbd> ดูคิว CSSD</li>
+      <li><b>ระหว่างวัน</b>: แทรกเคสฉุกเฉิน แจ้งเกินเวลา ดู <kbd>📺 กระดานสถานะ</kbd></li>
+      <li><b>บ่าย</b>: ระบบส่งสรุป “เคสพรุ่งนี้ที่ยังไม่พร้อม” ให้ (ตั้งเวลาได้) · พิมพ์ใบรายการและ WHO checklist ของพรุ่งนี้</li>
+      <li><b>ทุกสัปดาห์ / เดือน</b>: ใส่เวรและวันลาล่วงหน้า (ระบบจัดคนเข้าเคสจากเวร)</li>
+    </ul>
+    <div class="tip"><b>ดูวันอื่น</b>ใช้ช่องวันที่ที่หัวหน้า (ข้าง <kbd>โหลดใหม่</kbd>) แล้วทำงานกับวันนั้นได้เหมือนวันนี้</div>
+
+    <h3 id="sch-book">2. จองเคสผ่าตัด</h3>
+    <h4>ก. ให้ Intake Agent กรอกฟอร์มให้ (เร็วที่สุด)</h4>
+    <ol class="steps">
+      <li>แท็บ <kbd>จองผ่าตัด</kbd> พิมพ์คำขอในกล่อง Intake เช่น “หมอนภัส ผ่าตัดถุงน้ำดีส่องกล้อง HN 123456 พรุ่งนี้ 9 โมง เคสซับซ้อน” (หรือกด <kbd>🎙️ พูด</kbd>)</li>
+      <li>กด <kbd>วิเคราะห์คำขอ</kbd> ระบบจะกรอกศัลยแพทย์ หัตถการ HN วันที่ เวลา ความเร่งด่วน และเวลาผ่าตัดที่แนะนำ (จากเคสจริงของแพทย์ท่านนั้น)</li>
+      <li>ตรวจทุกช่องในฟอร์ม แก้ถ้าไม่ถูก · ใส่ชื่อผู้ป่วยในช่อง “ชื่อผู้ป่วย” ของฟอร์ม (ไม่ใช่ในกล่องข้อความ)</li>
+    </ol>
+    <h4>ข. ตรวจเวลาและยืนยัน</h4>
+    <ol class="steps">
+      <li>ใส่ <b>เวลาที่ต้องการ</b> แล้วกด <kbd>ตรวจสอบช่วงเวลา</kbd></li>
+      <li>อ่านผลของ Agent ทั้ง 3: ✓ คือพร้อม ✗ คือไม่พร้อม พร้อมเหตุผล เช่น “ติดเคส C01 ถึง 10:30” หรือ “ไม่อยู่เวร”</li>
+      <li>ถ้าเวลาที่ขอไม่ว่าง ระบบเสนอ <b>ช่วงแรกที่ทุก Agent พร้อม</b> ให้ ตรวจห้อง ทีม และเตียง แล้วกด <kbd>ยืนยันจอง</kbd></li>
+      <li>ทีมได้รับแจ้งเตือนอัตโนมัติ เคสขึ้นในตารางพร้อมกรอบเขียว</li>
+    </ol>
+    <div class="warn"><b>ถ้าขึ้น “ไม่มีช่วงเวลาที่จองได้วันนี้”</b>อ่านเหตุผลที่แสดง เช่น ห้องไม่มีความสามารถที่ต้องการ ไม่มีคนมีทักษะนี้ วัสดุไม่พอ หรือเวลาผ่าตัดนัดของห้องหมด แล้วเลือกวันอื่น หรือถ้ารอไม่ได้ ให้เปลี่ยนความเร่งด่วนเป็น Urgent</div>
+    <p>เปิด <kbd>บันทึกการเจรจาของ Agent</kbd> เพื่อดูว่าแต่ละ Agent ตรวจอะไรไปบ้าง</p>
+
+    <h3 id="sch-er">3. เคสฉุกเฉิน</h3>
+    <ol class="steps">
+      <li>แท็บ <kbd>ฉุกเฉิน</kbd> กรอกเคส (หรือพิมพ์คำขอแล้วกด <kbd>วิเคราะห์คำขอ</kbd>)</li>
+      <li>ใส่ <b>เวลาที่ผู้ป่วยมาถึง (เวลาปัจจุบัน)</b> แล้วกด <kbd>แทรกเคสฉุกเฉิน</kbd></li>
+      <li>ระบบล็อกเคสที่เริ่มผ่าตัดแล้ว และเลื่อนเคสอื่นให้น้อยที่สุด หน้าจอจะแสดงว่าเคสไหนย้ายไปไหน และแจ้งเตือนทีมทุกคนที่ถูกเปลี่ยนให้อัตโนมัติ</li>
+    </ol>
+    <p>เคสฉุกเฉินใช้คนที่ทำงานเกินเกณฑ์ความเหนื่อยล้าได้ แต่ระบบจะเตือนให้เห็นเสมอ</p>
+
+    <h3 id="sch-over">4. ผ่าตัดเกินเวลา</h3>
+    <ol class="steps">
+      <li>แท็บ <kbd>เกินเวลา</kbd> เลือกเคส ใส่ “ใช้เวลาเพิ่มอีก (นาที)” และ “เวลาปัจจุบัน”</li>
+      <li>กด <kbd>คำนวณผลกระทบ</kbd> ระบบเลื่อนเคสถัดไปในห้องนั้น ย้ายห้องหรือเปลี่ยนทีมถ้าจำเป็น และแจ้งเตือนผู้ที่ถูกเปลี่ยน</li>
+    </ol>
+
+    <h3 id="sch-cancel">5. งดผ่าตัดและรายการรอจัด</h3>
+    <ol class="steps">
+      <li>แตะเคสในตาราง กด <kbd>งดผ่าตัด / ยกเลิกเคสนี้</kbd></li>
+      <li>เลือกเหตุผล (ระบบแนะนำให้ถ้าเช็กลิสต์มีปัญหา) ใส่รายละเอียดสั้น ๆ ถ้าจำเป็น <b>โดยไม่ใส่ชื่อผู้ป่วย</b></li>
+      <li>เลือก <kbd>เลื่อน: ไปอยู่รายการรอจัดวันใหม่</kbd> หรือ <kbd>ยกเลิกคำขอ (ไม่ผ่าตัดแล้ว)</kbd> แล้วกด <kbd>ยืนยันงดผ่าตัด</kbd></li>
+    </ol>
+    <p>เคสที่เลื่อนจะอยู่ในกล่อง <b>รอจัดวันใหม่</b> ใต้ตาราง (เห็นได้ทุกวัน) กด <kbd>จองใหม่</kbd> เพื่อหาเวลาใหม่ หรือ <kbd>ยกเลิกคำขอ</kbd> ถ้าไม่ผ่าตัดแล้ว
+      · เหตุผลการงดทุกครั้งไปอยู่ในรายงานผู้บริหาร</p>
+
+    <h3 id="sch-fix">6. เมื่อตารางขัดกัน</h3>
+    <p>ถ้ามีคนลา ปิดห้อง หรือเครื่องมือเสีย <b>หลัง</b>จองเคสไปแล้ว จะมีแถบเตือน “ตารางวันนี้มีจุดขัดกัน” พร้อมรายการ</p>
+    <ol class="steps">
+      <li>อ่านรายการว่าเคสไหนขัดกับอะไร</li>
+      <li>กด <kbd>จัดตารางวันนี้ใหม่เพื่อแก้</kbd> ระบบจัดใหม่โดยเปลี่ยนให้น้อยที่สุด เคสที่จัดไม่ได้จะไปอยู่ในรายการรอจัด</li>
+    </ol>
+
+    <h3 id="sch-ready">7. ความพร้อมก่อนผ่าตัด</h3>
+    <ol class="steps">
+      <li>แท็บ <kbd>ความพร้อม</kbd> ติ๊ก <kbd>เฉพาะเคสที่ยังไม่พร้อม</kbd></li>
+      <li>แตะชิปของแต่ละรายการเพื่อเปลี่ยนเป็นเรียบร้อย หรือแตะ <kbd>รายละเอียด</kbd> เพื่อเลือก <kbd>ไม่ต้องใช้</kbd> / <kbd>มีปัญหา</kbd></li>
+    </ol>
+    <p>รายการที่ “มีปัญหา” จะแจ้งเตือนผู้จัดตาราง และระบบส่งสรุปเคสวันถัดไปที่ยังไม่พร้อมวันละครั้ง</p>
+
+    <h3 id="sch-roster">8. เวร วันลา ปิดห้อง เตียง และบล็อกห้อง</h3>
+    <p>อยู่ในหน้า <kbd>ข้อมูลโรงพยาบาล</kbd> (ปุ่มที่หัวหน้า)</p>
+    <h4>ใส่เวรหรือวันลา</h4>
+    <ol class="steps">
+      <li>แท็บ <kbd>เวรและวันลา</kbd> → <b>เพิ่มเวรหรือวันลา</b> เลือกประเภท (เวรปกติ / on-call / ลา) ช่วงวันที่ เวลา และวันในสัปดาห์</li>
+      <li>เลือกบุคลากร (กรองตามบทบาท หรือ <kbd>เลือกทั้งหมดที่แสดง</kbd>) แล้วกด <kbd>บันทึก</kbd></li>
+      <li>ถ้าวันลาขัดกับเคสที่จองไว้ ระบบจะบอกวันที่ที่ต้องจัดใหม่ทันที</li>
+    </ol>
+    <h4>ตารางเวรทั้งเดือนด้วย Excel</h4>
+    <ol class="steps">
+      <li>เลือกเดือน กด <kbd>ดาวน์โหลดตารางเวร (.xlsx)</kbd> แล้วกรอกรหัสเวรในไฟล์ (ช / บ / ด / ล ฯลฯ)</li>
+      <li>เลือกไฟล์ กด <kbd>ตรวจไฟล์</kbd> อ่านสิ่งที่จะเปลี่ยน แล้วกดปุ่มยืนยันนำเข้า</li>
+    </ol>
+    <h4>ปิดห้องชั่วคราว / เตียงพักฟื้น</h4>
+    <ul>
+      <li>แท็บ <kbd>ห้องผ่าตัด</kbd> → “ปิดห้องชั่วคราว” เลือกห้อง ช่วงเวลา เหตุผล แล้วกด <kbd>ปิดห้อง</kbd></li>
+      <li>เตียง PACU / ICU ที่มีผู้ป่วยจากที่อื่นอยู่: ใส่ “มีผู้ป่วยอยู่ถึงวันที่” · เมื่อว่างกด <kbd>ว่างแล้ว</kbd></li>
+    </ul>
+    <h4>บล็อกห้องรายสัปดาห์</h4>
+    <ul>
+      <li>แท็บ <kbd>บล็อกห้อง</kbd> → “เพิ่มบล็อก” เลือกห้อง วัน เวลา และเจ้าของ (แผนก หรือศัลยแพทย์คนเดียว) กำหนดว่าจะเปิดให้คนอื่นจองกี่วันก่อนผ่าตัด แล้วกด <kbd>บันทึกบล็อก</kbd></li>
+      <li>เจ้าของไม่ใช้บางวัน: “คืนบล็อกเฉพาะวัน” เพื่อเปิดให้ทุกคนจองได้ทันที</li>
+    </ul>
+
+    <h3 id="sch-print">9. พิมพ์ กระดานสถานะ และรายงาน</h3>
+    <ul>
+      <li><kbd>🖨 พิมพ์ / WHO checklist</kbd> (มุมขวาของตาราง): เลือก <kbd>ใบรายการผ่าตัด (แยกตามห้อง)</kbd> หรือ <kbd>WHO Surgical Safety Checklist (ต่อเคส)</kbd> ใบติดหน้าห้องให้ติ๊ก <kbd>ไม่แสดงชื่อและ HN (ฉบับติดหน้าห้อง)</kbd> แล้วกด <kbd>พิมพ์ / บันทึก PDF</kbd></li>
+      <li><kbd>📺 กระดานสถานะ</kbd>: เปิดบนจอในห้องผ่าตัด กด <kbd>เต็มจอ</kbd> · <kbd>จอสำหรับญาติ</kbd> แสดงแค่เลขเคสและสถานะ (ไม่มีชื่อ หัตถการ หรือแพทย์)</li>
+      <li><kbd>รายงาน</kbd>: อัตราใช้ห้อง เคสต่อวัน ความแม่นของเวลาที่จอง การงดผ่าตัด การใช้บล็อกห้อง เลือกช่วง <kbd>7 วัน</kbd> <kbd>30 วัน</kbd> <kbd>เดือนนี้</kbd> หรือกำหนดเอง · <kbd>ดาวน์โหลดข้อมูลเคส (CSV)</kbd> เปิดใน Excel ได้ (ไม่มี HN หรือชื่อผู้ป่วย)</li>
+      <li>แท็บ <kbd>บุคลากร</kbd>: ชั่วโมงผ่าตัดและความเหนื่อยล้าของทุกคน (ติ๊ก <kbd>เฉพาะคนที่มีเคสวันนี้</kbd>)</li>
+    </ul>
+  </section>
+
+  <!-- ================================================================ SURGEON -->
+  <section class="guide" id="surgeon" data-guide="surgeon">
+    <h2>คู่มือศัลยแพทย์</h2>
+    <p class="who">จอง แจ้งเกินเวลา และงดผ่าตัดได้เฉพาะเคสที่ท่านเป็นแพทย์ผ่าตัดหลัก · แก้ preference card ของท่านเอง</p>
+
+    <h3>1. จองเคสของท่าน</h3>
+    <ol class="steps">
+      <li>แท็บ <kbd>จองผ่าตัด</kbd> พิมพ์คำขอในกล่อง Intake เช่น “ผ่าตัดไส้ติ่งส่องกล้อง พรุ่งนี้บ่ายสอง HN 456789” แล้วกด <kbd>วิเคราะห์คำขอ</kbd> (ระบบใส่ชื่อท่านเป็นแพทย์ผ่าตัดให้)</li>
+      <li>ตรวจฟอร์ม: หัตถการ เวลาผ่าตัด (ระบบแนะนำจากเคสจริงของท่าน) ความซับซ้อน เครื่องมือ</li>
+      <li>ใส่เวลาที่ต้องการ กด <kbd>ตรวจสอบช่วงเวลา</kbd> ถ้าไม่ว่าง ระบบเสนอเวลาแรกที่ห้อง ทีม เครื่องมือ และเตียงพร้อม แล้วกด <kbd>ยืนยันจอง</kbd></li>
+    </ol>
+    <div class="tip"><b>เวลาผ่าตัดที่แนะนำ</b>คิดจากเคสจริงของท่านกับหัตถการนั้น (ถ้ามี) ปรับตามความซับซ้อน และเผื่อให้ครอบคลุมราว 70% ของเคสที่ผ่านมา ยิ่งพยาบาลบันทึกเวลาจริงสม่ำเสมอ ยิ่งแม่นขึ้น</div>
+
+    <h3>2. Preference card ของท่าน</h3>
+    <p>ค่าที่ฟอร์มจองใช้ทันที: เวลาผ่าตัด ทีม เครื่องมือ และหมายเหตุของแต่ละหัตถการ</p>
+    <ol class="steps">
+      <li>กด <kbd>Preference card ของฉัน</kbd> ที่หัวหน้า</li>
+      <li>แก้เวลา จำนวนคนในทีม และเครื่องมือ แล้วบันทึก · ติ๊ก <kbd>เฉพาะที่เวลาต่างจากเคสจริง</kbd> เพื่อดูหัตถการที่ควรปรับเวลา</li>
+    </ol>
+
+    <h3>3. ระหว่างวันผ่าตัด</h3>
+    <ul>
+      <li>ผ่าตัดนานกว่าที่จอง: แท็บ <kbd>เกินเวลา</kbd> ใส่เวลาที่ต้องใช้เพิ่ม แล้วกด <kbd>คำนวณผลกระทบ</kbd> (เฉพาะเคสของท่าน)</li>
+      <li>เคสฉุกเฉินของท่าน: แท็บ <kbd>ฉุกเฉิน</kbd> แล้วกด <kbd>แทรกเคสฉุกเฉิน</kbd></li>
+      <li>สถานะเคส: แตะเคสของท่าน กล่อง “สถานะวันนี้” บันทึกขั้นตอนได้ (ส่วนใหญ่พยาบาลเป็นผู้บันทึก)</li>
+    </ul>
+
+    <h3>4. ความพร้อมและการงดผ่าตัด</h3>
+    <ul>
+      <li>แท็บ <kbd>ความพร้อม</kbd> ดูเช็กลิสต์เคสของท่าน (ใบยินยอม ประเมินวิสัญญี ผลแล็บ NPO เลือด ทำเครื่องหมายตำแหน่ง)</li>
+      <li>งดเคส: แตะเคส → <kbd>งดผ่าตัด / ยกเลิกเคสนี้</kbd> เลือกเหตุผล แล้ว <kbd>ยืนยันงดผ่าตัด</kbd></li>
+    </ul>
+    <div class="pdpa"><b>PDPA</b>ในกล่องคำขอไม่ต้องใส่ชื่อผู้ป่วย (ใส่ HN ได้ ระบบซ่อนก่อนส่งให้ AI) · ถ้าพูดคำขอ อย่าพูดชื่อหรือ HN</div>
+  </section>
+
+  <!-- ================================================================ STAFF -->
+  <section class="guide" id="staff" data-guide="staff">
+    <h2>คู่มือวิสัญญีแพทย์ / พยาบาล</h2>
+    <p class="who">พยาบาลส่งเครื่องมือ พยาบาลช่วยรอบนอก พยาบาลห้องเตรียม ห้องพักฟื้น และวิสัญญี</p>
+
+    <h3>1. ดูเคสของฉัน</h3>
+    <ul>
+      <li>เคสที่คุณอยู่ในทีมมีป้าย <b>“ของฉัน”</b> บนแถบในตาราง</li>
+      <li>แท็บ <kbd>แจ้งเตือนของฉัน</kbd> แสดงการเปลี่ยนแปลงเคสของคุณ (ย้ายเวลา ย้ายห้อง เปลี่ยนทีม)</li>
+      <li>แท็บ <kbd>บุคลากร</kbd> แสดงชั่วโมงผ่าตัดและความเหนื่อยล้าของคุณ ระบบจะไม่จัดคุณเข้าเคสเกินเกณฑ์ชั่วโมง/วัน, 7 วัน และเวลาพักหลังเคสดึก (ยกเว้นเคสฉุกเฉินที่จำเป็น)</li>
+    </ul>
+
+    <h3>2. เช็กลิสต์ความพร้อมก่อนผ่าตัด</h3>
+    <ol class="steps">
+      <li>แตะเคสในตาราง (หรือแท็บ <kbd>ความพร้อม</kbd>) ไปที่กล่องความพร้อม</li>
+      <li>แต่ละรายการเลือก <kbd>เรียบร้อย</kbd> / <kbd>ไม่ต้องใช้</kbd> / <kbd>มีปัญหา</kbd> (กลับเป็น <kbd>ยังไม่ทำ</kbd> ได้)</li>
+      <li>ถ้ามีปัญหา ใส่หมายเหตุสั้น ๆ เช่น “K 2.9 รอแก้ไข” <b>ไม่ต้องใส่ชื่อผู้ป่วย</b> ผู้จัดตารางจะได้รับแจ้งเตือน</li>
+    </ol>
+
+    <h3>3. บันทึกสถานะวันนี้ (ขั้นตอนของเคส)</h3>
+    <p>เวลาที่บันทึกแสดงบนกระดานสถานะ และใช้ทำรายงานและพยากรณ์เวลาผ่าตัด</p>
+    <div class="table-scroll"><table>
+      <tr><th>ขั้น</th><th>ใครบันทึก</th></tr>
+      <tr><td>มาถึงห้องเตรียมผ่าตัด</td><td>พยาบาลห้องเตรียม (ไม่ต้องอยู่ในทีมของเคส)</td></tr>
+      <tr><td>เข้าห้องผ่าตัด</td><td><b>ทีมของเคสเท่านั้น</b> (เป็นเวลาเริ่มผ่าตัดจริง)</td></tr>
+      <tr><td>ลงมีด · เย็บแผลเสร็จ</td><td>ทีมในห้อง</td></tr>
+      <tr><td>ออกจากห้องผ่าตัด (ไปห้องพักฟื้น)</td><td><b>ทีมของเคสเท่านั้น</b> (เป็นเวลาเสร็จจริง)</td></tr>
+      <tr><td>ออกจากห้องพักฟื้น (กลับหอ/ICU)</td><td>พยาบาลห้องพักฟื้น</td></tr>
+    </table></div>
+    <ol class="steps">
+      <li>แตะเคส ในกล่อง “สถานะวันนี้” กดปุ่ม <kbd class="dyn">บันทึก: (ขั้นถัดไป) ตอนนี้</kbd> เมื่อถึงขั้นนั้นจริง</li>
+      <li>ลืมกดตอนนั้น: ใช้ <kbd>แก้/ใส่เวลาย้อนหลัง</kbd> เลือกขั้น ใส่เวลา แล้วกด <kbd>บันทึกเวลา</kbd></li>
+      <li>กดผิด: กด <kbd>ยกเลิก</kbd> ข้างขั้นล่าสุด</li>
+    </ol>
+    <div class="warn"><b>สำคัญ</b>ช่วง “เข้าห้อง” ถึง “ออกห้อง” คือเวลาผ่าตัดจริงที่ระบบใช้เรียนรู้ ถ้าไม่บันทึก การประเมินเวลาผ่าตัดครั้งต่อไปจะไม่แม่น</div>
+
+    <h3>4. WHO Surgical Safety Checklist</h3>
+    <p>กด <kbd>🖨 พิมพ์ / WHO checklist</kbd> เลือก <kbd>WHO Surgical Safety Checklist (ต่อเคส)</kbd> แล้ว <kbd>พิมพ์ / บันทึก PDF</kbd> (มี Sign In · Time Out · Sign Out พร้อมข้อมูลเคสกรอกไว้แล้ว)</p>
+  </section>
+
+  <!-- ================================================================ CSSD -->
+  <section class="guide" id="cssd" data-guide="cssd">
+    <h2>คู่มือเจ้าหน้าที่จ่ายกลาง (CSSD)</h2>
+    <p class="who">อัปเดตสถานะเครื่องมือ เวลาอบเสร็จ และคลังวัสดุ/รากเทียม · บทบาทนี้ไม่เห็น HN หรือชื่อผู้ป่วย (แสดงเป็น •••)</p>
+
+    <h3>1. คิว CSSD วันนี้</h3>
+    <p>แท็บ <kbd>เครื่องมือ</kbd> → <b>คิว CSSD วันนี้</b> แสดงชุดเครื่องมือที่ต้องล้าง/อบให้ทันเคสถัดไป เรียงจากเร่งที่สุด</p>
+    <ul>
+      <li>อ่านแต่ละแถว: กลับจากเคสไหน (เวลา) → พร้อมเมื่อไร → ใช้ต่อกับเคสไหน · “เผื่อ X นาที” หรือ <b>“ไม่ทัน X นาที”</b> (สีแดง)</li>
+      <li>อบเสร็จแล้ว: เปิด “อัปเดตเวลาพร้อม” แล้วกด <kbd>อบเสร็จแล้ว</kbd></li>
+      <li>จะเสร็จช้ากว่าที่ระบบคาด: ใส่ “พร้อมใช้จริงเวลา” แล้วกด <kbd>บันทึก</kbd> ถ้าไม่ทันเคสที่จองไว้ ผู้จัดตารางจะได้รับแจ้งเตือนทันที</li>
+    </ul>
+
+    <h3>2. สถานะเครื่องมือ</h3>
+    <ol class="steps">
+      <li>แท็บ <kbd>เครื่องมือ</kbd> → <b>เครื่องมือทั้งหมด</b> หาเครื่อง</li>
+      <li>เลือกสถานะ (พร้อมใช้ / กำลังใช้ / กำลังอบที่ CSSD / ซ่อมบำรุง) และเวลาพร้อม แล้วกด <kbd>บันทึก</kbd></li>
+      <li>ถ้าเครื่องนั้นมีเคสจองไว้แล้ว ระบบจะเตือนให้ผู้จัดตารางแก้ตาราง</li>
+    </ol>
+
+    <h3>3. คลังวัสดุและรากเทียม</h3>
+    <ol class="steps">
+      <li>กด <kbd>ข้อมูลโรงพยาบาล</kbd> ที่หัวหน้า → แท็บ <kbd>วัสดุ/รากเทียม</kbd> (ติ๊ก <kbd>เฉพาะที่ใกล้หมด</kbd> เพื่อดูของที่ต้องสั่ง)</li>
+      <li>ในแต่ละรายการเปิด <kbd>รับของ / นับสต็อก / สั่งของ / แก้ไข</kbd> เพื่อรับของเข้า ปรับยอดตามที่นับได้ หรือบันทึกของที่สั่งไว้ (วันที่จะได้)</li>
+      <li>ระบบตัดสต็อกเองเมื่อเคสผ่าตัดเสร็จ และไม่ให้จองเคสที่ต้องใช้วัสดุที่ไม่พอ</li>
+    </ol>
+    <p>นัดซ่อมบำรุงเครื่อง: ผู้ดูแลระบบหรือผู้จัดตารางบันทึกในหน้า <kbd>ข้อมูลโรงพยาบาล</kbd> → <kbd>เครื่องมือ</kbd> (ระบบจะไม่จองเครื่องในช่วงนั้น)</p>
+  </section>
+
+  <!-- ================================================================ ADMIN -->
+  <section class="guide" id="admin" data-guide="admin">
+    <h2>คู่มือผู้ดูแลระบบ</h2>
+    <p class="who">ตั้งค่าระบบ ใส่ข้อมูลโรงพยาบาล จัดการบัญชีผู้ใช้ และดูแลเรื่อง PDPA</p>
+    <div class="toc no-print"><b>ในส่วนนี้</b><ol>
+      <li><a href="#adm-golive">เตรียมระบบก่อนใช้จริง</a></li><li><a href="#adm-data">ใส่ข้อมูลโรงพยาบาล</a></li>
+      <li><a href="#adm-users">บัญชีผู้ใช้และบทบาท</a></li><li><a href="#adm-pdpa">PDPA</a></li><li><a href="#adm-server">การตั้งค่าเซิร์ฟเวอร์</a></li></ol></div>
+
+    <h3 id="adm-golive">1. เตรียมระบบก่อนใช้จริง</h3>
+    <ol class="steps">
+      <li>กด <kbd>⚙ สถานะระบบ</kbd> ถ้ามีไฟล์ SQL ที่ยังไม่ได้รัน กด <kbd>รัน SQL ที่ยังขาด</kbd> แล้ว <kbd>รันเลย</kbd></li>
+      <li>อ่านหัวข้อ “พร้อมใช้งานจริงหรือยัง” ข้อไหนขึ้น ✕ หรือ ! ให้กดลิงก์ทางขวาไปแก้</li>
+      <li>ใส่ข้อมูลจริง (ข้อ 2) แล้วลบข้อมูลตัวอย่างใน <kbd>ข้อมูลโรงพยาบาล</kbd> → <kbd>นำเข้า/ส่งออก Excel</kbd> → หัวข้อ “3. เริ่มใช้งานจริง: ลบข้อมูลตัวอย่าง”</li>
+      <li>สร้างบัญชีให้ทุกคน (ข้อ 3) และตั้งระยะเวลาเก็บข้อมูลผู้ป่วย (ข้อ 4)</li>
+    </ol>
+
+    <h3 id="adm-data">2. ใส่ข้อมูลโรงพยาบาล</h3>
+    <h4>ทีละมาก ๆ ด้วย Excel (แนะนำตอนเริ่ม)</h4>
+    <ol class="steps">
+      <li><kbd>ข้อมูลโรงพยาบาล</kbd> → <kbd>นำเข้า/ส่งออก Excel</kbd> → <kbd>ดาวน์โหลดแบบฟอร์มเปล่า</kbd> (หรือ <kbd>ดาวน์โหลดข้อมูลปัจจุบัน (.xlsx)</kbd> เพื่อแก้ของเดิม)</li>
+      <li>กรอกแต่ละแผ่นตามคำอธิบายในแผ่นแรก: ห้อง เตียง ชนิดเครื่องมือ เครื่องรายชิ้น บุคลากร วัสดุ หัตถการ preference card</li>
+      <li>อัปโหลดไฟล์ ระบบตรวจก่อนบันทึกทุกครั้ง แสดงสิ่งที่จะเพิ่ม/แก้ และแถวที่ผิด แก้จนไม่มีข้อผิดพลาดแล้วกดยืนยัน</li>
+    </ol>
+    <h4>ทีละรายการ</h4>
+    <ul>
+      <li><kbd>ห้องผ่าตัด</kbd>: ความสามารถของห้อง (เช่น LAMINAR_FLOW, NEGATIVE_PRESSURE) เวลาทำความสะอาด และเวลาผ่าตัดนัด (elective)</li>
+      <li><kbd>บุคลากร</kbd>: บทบาท ความเชี่ยวชาญ (ใช้กับบล็อกห้องแบบแผนก) ทักษะ และเกณฑ์ชั่วโมงทำงาน</li>
+      <li><kbd>เครื่องมือ</kbd>: ชนิด (เวลาอบฆ่าเชื้อ) เครื่องรายชิ้น และนัดซ่อมบำรุง</li>
+      <li><kbd>หัตถการ</kbd>: เวลามาตรฐาน ห้องที่ต้องใช้ ทักษะ ICU จองเลือด และวัสดุที่ใช้ · <kbd>Preference card</kbd> ของแต่ละแพทย์</li>
+    </ul>
+
+    <h3 id="adm-users">3. บัญชีผู้ใช้และบทบาท</h3>
+    <ol class="steps">
+      <li>หน้าตารางผ่าตัด → แท็บ <kbd>ผู้ใช้</kbd> → “เพิ่มผู้ใช้”: ชื่อผู้ใช้ ชื่อที่แสดง บทบาท</li>
+      <li>ศัลยแพทย์และพยาบาล <b>ต้องเลือก “ผูกกับรายชื่อบุคลากร”</b> เพื่อให้ระบบรู้ว่าเคสไหนเป็นของเขาและส่งแจ้งเตือนถูกคน</li>
+      <li>กด <kbd>สร้างบัญชี</kbd> ระบบแสดงรหัสชั่วคราว <b>ครั้งเดียว</b> แจ้งให้เจ้าของบัญชีทางที่ปลอดภัย (ผู้ใช้ต้องตั้งรหัสใหม่เมื่อเข้าครั้งแรก)</li>
+      <li>ลืมรหัส: <kbd>รีเซ็ตรหัสผ่าน</kbd> · ลาออก/ย้าย: เอาเครื่องหมาย <kbd>ใช้งาน</kbd> ออก (ออกจากระบบทุกเครื่องทันที)</li>
+    </ol>
+    <div class="table-scroll"><table>
+      <tr><th>บทบาท</th><th>ทำอะไรได้</th></tr>
+      <tr><td>ผู้ดูแลระบบ (admin)</td><td>ทุกอย่าง รวมถึงผู้ใช้ ข้อมูลโรงพยาบาล สถานะระบบ และ PDPA</td></tr>
+      <tr><td>ผู้จัดตาราง (scheduler)</td><td>จอง/ฉุกเฉิน/เกินเวลา/งดผ่าตัดทุกเคส เวร วันลา ปิดห้อง บล็อกห้อง รายงาน</td></tr>
+      <tr><td>ศัลยแพทย์ (surgeon)</td><td>จอง ฉุกเฉิน เกินเวลา งดผ่าตัด เฉพาะเคสของตัวเอง · preference card ของตัวเอง</td></tr>
+      <tr><td>วิสัญญี / พยาบาล (staff)</td><td>ดูตาราง เช็กลิสต์ความพร้อม บันทึกขั้นตอนของเคส ดูชั่วโมงทำงานของตัวเอง</td></tr>
+      <tr><td>CSSD (cssd)</td><td>สถานะเครื่องมือ คิว CSSD คลังวัสดุ · <b>ไม่เห็นข้อมูลผู้ป่วย</b></td></tr>
+    </table></div>
+
+    <h3 id="adm-pdpa">4. PDPA</h3>
+    <p><kbd>⚙ สถานะระบบ</kbd> → <kbd>🔒 PDPA</kbd></p>
+    <ul>
+      <li><b>ระยะเวลาเก็บข้อมูลระบุตัวผู้ป่วย</b>: ตั้งจำนวนวันหลังผ่าตัดตามนโยบายโรงพยาบาล ระบบลบ HN ชื่อ และข้อความที่พิมพ์ทุกคืน 02:00 (เวลา ห้อง ทีม ยังอยู่ให้รายงานใช้) หรือกด <kbd>ลบข้อมูลของเคสที่เกินระยะเวลาตอนนี้</kbd></li>
+      <li><b>บันทึกการเข้าถึงข้อมูลผู้ป่วย</b>: ใครเห็น HN/ชื่อผู้ป่วยเมื่อไร ค้นตามผู้ใช้ ช่วงวันที่ เลขเคส หรือ <b>HN ผู้ป่วย</b> แล้วกด <kbd>ค้นหา</kbd> (การค้นด้วย HN ถูกบันทึกด้วย)</li>
+      <li>ตรวจบันทึกเป็นประจำ เช่น เดือนละครั้ง หรือเมื่อผู้ป่วยร้องขอ</li>
+    </ul>
+
+    <h3 id="adm-server">5. การตั้งค่าเซิร์ฟเวอร์</h3>
+    <p>ค่าต่าง ๆ ตั้งที่ Render → Environment (ดูว่าตั้งแล้วหรือยังที่ <kbd>⚙ สถานะระบบ</kbd>): ฐานข้อมูล, รหัสผ่านบัญชีหลัก (อย่างน้อย 12 ตัว), SESSION_SECRET, Claude API, LINE, ชื่อโรงพยาบาลบนกระดาษพิมพ์, เวลาส่งสรุปความพร้อม</p>
+    <div class="warn"><b>บัญชีหลัก (orchestra)</b>ใช้เฉพาะเจ้าของระบบ อย่าใช้ร่วมกัน ให้สร้างบัญชีของแต่ละคนแทน เพื่อให้บันทึกกิจกรรมและบันทึกการเข้าถึงบอกได้ว่าใครทำอะไร</div>
+  </section>
+
+  <!-- ================================================================ FAQ -->
+  <section class="guide" id="faq" data-guide="faq">
+    <h2>คำถามที่พบบ่อย</h2>
+    <p class="who">ลองดูที่นี่ก่อนติดต่อผู้ดูแลระบบ</p>
+    <h3>เข้าสู่ระบบไม่ได้</h3>
+    <ul>
+      <li><b>“ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง”</b>: ตรวจแป้นพิมพ์ภาษาไทย/อังกฤษ และ Caps Lock · ลืมรหัสให้ผู้ดูแลระบบรีเซ็ต</li>
+      <li><b>“ล็อกอินผิดหลายครั้ง”</b>: รอ 10 นาทีแล้วลองใหม่</li>
+      <li><b>ถูกให้ออกจากระบบเอง</b>: ครบ 12 ชั่วโมง, มีการเปลี่ยนรหัส/บทบาท, หรือกดออกจากระบบที่เครื่องอื่น ให้เข้าสู่ระบบใหม่</li>
+    </ul>
+    <h3>ไม่ได้รับแจ้งเตือน</h3>
+    <ul>
+      <li>เปิด <kbd>🔔 แจ้งเตือน</kbd> แล้วกด <kbd>ส่งข้อความทดสอบ</kbd> · ดู “ส่งล่าสุด” ว่าส่งสำเร็จหรือไม่</li>
+      <li>iPhone ต้องเปิดจากไอคอนบนหน้าจอโฮม · ตรวจว่าโทรศัพท์ไม่ได้ปิดการแจ้งเตือนของเบราว์เซอร์</li>
+      <li>ศัลยแพทย์/พยาบาลที่ไม่ได้รับแจ้งเรื่องเคสของตัวเอง: ให้ผู้ดูแลระบบตรวจว่าบัญชี “ผูกกับรายชื่อบุคลากร” แล้ว</li>
+    </ul>
+    <h3>เรื่องตาราง</h3>
+    <ul>
+      <li><b>เห็น ••• แทน HN</b>: บทบาทของคุณไม่ได้รับสิทธิ์เห็นข้อมูลผู้ป่วย (เช่น CSSD) เป็นเรื่องปกติ</li>
+      <li><b>ไม่มีช่วงเวลาที่จองได้</b>: อ่านเหตุผลที่ระบบแสดง (ห้อง ทีม เครื่องมือ เตียง วัสดุ บล็อกห้อง) แล้วเลือกวันอื่นหรือแจ้งผู้จัดตาราง</li>
+      <li><b>ข้อมูลไม่ตรงกับที่คนอื่นเห็น</b>: กด <kbd>โหลดใหม่</kbd></li>
+      <li><b>ตารางขัดกันหลังมีคนลา/ปิดห้อง</b>: ผู้จัดตารางกด <kbd>จัดตารางวันนี้ใหม่เพื่อแก้</kbd></li>
+      <li><b>บันทึกเวลาเข้า/ออกห้องไม่ได้</b>: ต้องอยู่ในทีมของเคสนั้น ให้คนในทีมหรือผู้จัดตารางบันทึก</li>
+      <li><b>อยากรู้ว่าระบบตัดสินใจอย่างไร</b>: เปิด <kbd>บันทึกของ Agent</kbd> ในแท็บ <kbd>กิจกรรม</kbd> (สำหรับบทบาทอื่นคือ <kbd>แจ้งเตือนของฉัน</kbd>) หรือ <kbd>บันทึกการเจรจาของ Agent</kbd> หลังตรวจเวลา</li>
+    </ul>
+    <h3>ติดต่อ</h3>
+    <p>ปัญหาที่ไม่อยู่ในคู่มือนี้ แจ้งผู้ดูแลระบบของโรงพยาบาล พร้อมบอกเวลา หน้าที่ใช้ และข้อความที่ขึ้นบนจอ (ไม่ต้องส่งภาพที่มีข้อมูลผู้ป่วย)</p>
+  </section>
+</main>
+
+<script>
+  const $ = s => document.querySelector(s);
+  const GUIDES = ['start', 'scheduler', 'surgeon', 'staff', 'cssd', 'admin', 'faq'];
+  const NAMES = { start: 'เริ่มต้นใช้งาน', scheduler: 'ผู้จัดตาราง', surgeon: 'ศัลยแพทย์', staff: 'วิสัญญี / พยาบาล', cssd: 'CSSD',
+                  admin: 'ผู้ดูแลระบบ', faq: 'คำถามที่พบบ่อย' };
+  let current = 'start', mine = null;
+
+  function show(name, scroll) {
+    current = GUIDES.includes(name) ? name : 'start';
+    document.querySelectorAll('.roles button').forEach(b => b.setAttribute('aria-selected', String(b.dataset.guide === current)));
+    document.querySelectorAll('.guide').forEach(s => { s.hidden = s.dataset.guide !== current; });
+    if (scroll) window.scrollTo({ top: 0 });
+  }
+
+  function printSet(names) {
+    document.querySelectorAll('.guide').forEach(s => {
+      const on = names.includes(s.dataset.guide);
+      s.classList.toggle('print-on', on);
+      s.classList.toggle('first', s.dataset.guide === names[0]);
+    });
+    const label = names.length > 3 ? 'ทุกบทบาท' : names.filter(n => n !== 'start' && n !== 'faq').map(n => NAMES[n]).join(', ') || NAMES[names[0]];
+    $('#printed').textContent = label + ' · พิมพ์เมื่อ ' + new Date().toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: 'numeric' });
+    window.print();
+  }
+
+  document.querySelectorAll('.roles button').forEach(b => b.addEventListener('click', () => {
+    history.replaceState(null, '', '#' + b.dataset.guide);
+    show(b.dataset.guide, true);
+  }));
+  document.querySelectorAll('.toc a').forEach(a => a.addEventListener('click', e => {
+    e.preventDefault();
+    document.getElementById(a.getAttribute('href').slice(1)).scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }));
+  // One guide: the basics, this role and the FAQ (a training handout); all: everything.
+  $('#print-one').addEventListener('click', () => printSet([...new Set(['start', current, 'faq'])]));
+  $('#print-all').addEventListener('click', () => printSet(GUIDES));
+  window.addEventListener('hashchange', () => show(location.hash.slice(1), true));
+  window.addEventListener('afterprint', () => document.querySelectorAll('.guide').forEach(s => s.classList.remove('print-on', 'first')));
+
+  (async () => {
+    const wanted = location.hash.slice(1);
+    try {
+      const res = await fetch('/api/me');
+      if (res.ok) {
+        const me = (await res.json()).user;
+        mine = me.role;
+        const tab = document.querySelector(`.roles button[data-guide="${mine}"]`);
+        if (tab) tab.insertAdjacentHTML('beforeend', '<span class="you">คุณ</span>');
+        $('#sub').textContent = `คุณเข้าระบบในบทบาท ${me.role_label} · อ่าน “เริ่มต้นใช้งาน” แล้วต่อด้วยคู่มือของบทบาทคุณ`;
+      } else {
+        $('#back').textContent = '← เข้าสู่ระบบ';
+        $('#back').href = '/login';
+      }
+    } catch { /* offline: the guide still reads */ }
+    show(GUIDES.includes(wanted) ? wanted : (mine && GUIDES.includes(mine) ? mine : 'start'), false);
+  })();
+</script>
+</body>
+</html>

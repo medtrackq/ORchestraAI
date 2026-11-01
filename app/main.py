@@ -87,7 +87,7 @@ async def _lifespan(_app):
 app = FastAPI(title="ORchestraAI", docs_url="/api/docs", redoc_url=None, openapi_url="/api/openapi.json",
               lifespan=_lifespan)
 
-PUBLIC = {"/login", "/api/login", "/api/health", "/api/line/webhook", "/sw.js", "/manifest.webmanifest",
+PUBLIC = {"/login", "/help", "/api/login", "/api/health", "/api/line/webhook", "/sw.js", "/manifest.webmanifest",
           "/icons/icon-192.png", "/icons/icon-512.png", "/icons/apple-touch-icon.png", "/icons/badge-96.png"}
 ALLOWED_WHILE_TEMPORARY = {"/api/me", "/api/password", "/api/logout"}
 
@@ -296,6 +296,12 @@ def print_page() -> FileResponse:
 def status_page() -> FileResponse:
     """Admin: which SQL files the database has, the server settings and a go-live checklist."""
     return FileResponse(ROOT / "static" / "status.html")
+
+
+@app.get("/help", include_in_schema=False)
+def help_page() -> FileResponse:
+    """User manual per role (Thai), readable before signing in and printable for training."""
+    return FileResponse(ROOT / "static" / "help.html")
 
 
 @app.get("/privacy", include_in_schema=False)
