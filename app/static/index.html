@@ -1165,7 +1165,7 @@
       <p class="hint">เคสที่ยังไม่มีวันผ่าตัด (เพิ่มเข้ารายการรอ หรือถูกเลื่อนออกจากตาราง) เรียงตามความเร่งด่วน วันที่ควรผ่าตัด และเวลาที่รอ · กดจองใหม่ แล้วใช้ปุ่ม "หาวันว่าง 14 วัน" ได้</p>
       <div class="rows" style="margin-top:8px">${list.map(p => `<div class="row-item${p.due_status === 'overdue' ? ' due-overdue' : p.due_status === 'soon' ? ' due-soon' : ''}">
         <div class="title"><b>${esc(p.code)} · ${esc(p.procedure)}</b><span>${dueBadge(p)} <span class="triage ${esc(p.urgency)}">${esc(urgencyText(p.urgency))}</span></span></div>
-        <small class="hint">${esc(p.patient_hn)}${p.patient_name ? ' · ' + esc(p.patient_name) : ''} · ${esc(p.surgeon || '-')} · ${p.duration_mins} นาที${p.was_on ? ' · เดิมวันที่ ' + esc(p.was_on) : ''}${p.waiting_days !== null && p.waiting_days !== undefined ? ' · รอมา ' + p.waiting_days + ' วัน' : ''}${p.airborne ? ' · ติดเชื้อทางอากาศ' : ''}</small>
+        <small class="hint">${esc(p.patient_hn)}${p.patient_name ? ' · ' + esc(p.patient_name) : ''} · ${esc(p.surgeon || '-')} · ${p.duration_mins} นาที${p.was_on ? ' · เดิมวันที่ ' + esc(p.was_on) : ''}${p.requested_date ? ' · แพทย์ขอวันที่ ' + thaiDate(p.requested_date) : ''}${p.waiting_days !== null && p.waiting_days !== undefined ? ' · รอมา ' + p.waiting_days + ' วัน' : ''}${p.his_ref ? ' · จาก HIS เลขที่ ' + esc(p.his_ref) : ''}${p.airborne ? ' · ติดเชื้อทางอากาศ' : ''}</small>
         ${mayBook(p) ? `<div class="line">
           <button class="btn primary" type="button" data-rebook="${esc(p.id)}">จองใหม่</button>
           ${STATE.waitlist_ready ? `<button class="btn" type="button" data-due="${esc(p.id)}">${p.due_date ? 'แก้วันที่ควรผ่าตัด' : 'กำหนดวันที่ควรผ่าตัด'}</button>` : ''}

@@ -48,6 +48,7 @@ TITLES = {  # Thai names for the page (files not listed show the first comment l
     "20261113000000_case_history.sql": "ประวัติผ่าตัดย้อนหลังที่นำเข้าจาก Excel (ใช้ประเมินเวลาผ่าตัด)",
     "20261114000000_waiting_list.sql": "รายการรอผ่าตัด: วันที่ควรได้ผ่าตัดและการเรียงลำดับ",
     "20261115000000_feedback.sql": "แจ้งปัญหา/ข้อเสนอแนะจากผู้ใช้ และข้อผิดพลาดของระบบ",
+    "20261116000000_his_integration.sql": "เชื่อมต่อระบบ HIS ของโรงพยาบาล (API key, จับคู่รหัส, กล่องรับข้อมูล)",
 }
 ROLES_TH = {"SURGEON": "ศัลยแพทย์", "ANESTHESIOLOGIST": "วิสัญญีแพทย์", "SCRUB_NURSE": "พยาบาลส่งเครื่องมือ",
             "CIRCULATING_NURSE": "พยาบาลช่วยรอบนอก"}

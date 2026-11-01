@@ -48,10 +48,11 @@ KINDS = {
     "readiness": "เคสยังไม่พร้อมผ่าตัด (มีปัญหา และสรุปเคสวันถัดไปวันละครั้ง)",
     "feedback": "ผู้ใช้แจ้งปัญหาหรือข้อเสนอแนะ และข้อผิดพลาดใหม่ของระบบ (ผู้ดูแลระบบ)",
     "waitlist": "เคสในรายการรอเลยหรือใกล้วันที่ควรผ่าตัด (สรุปวันละครั้ง)",
+    "his": "ข้อความจากระบบ HIS ที่ต้องดำเนินการ (คำขอฉุกเฉิน เคสที่จองแล้วถูกแก้หรือยกเลิก รหัสใหม่)",
 }
 KIND_ROLES = {"case": None, "emergency": {"admin", "scheduler"}, "cssd": {"admin", "scheduler", "cssd"},
               "readiness": {"admin", "scheduler", "surgeon"}, "feedback": {"admin"},
-              "waitlist": {"admin", "scheduler", "surgeon"}}
+              "waitlist": {"admin", "scheduler", "surgeon"}, "his": {"admin", "scheduler"}}
 FEEDBACK_KINDS = {"PROBLEM": "แจ้งปัญหา", "IDEA": "ข้อเสนอแนะ", "QUESTION": "สอบถาม"}
 MAX_LINES = 6
 CODE_MINUTES = 15
@@ -469,6 +470,16 @@ def build_messages(event: dict, users: list) -> list[Message]:
             lines = [f"{c['code']} {c['procedure']}" + ("" if whose else f" · {c.get('surgeon') or '-'}") + f" · {when(c)}"
                      for c in mine]
             out.append(Message(u.user_id, "waitlist", f"รายการรอผ่าตัด{whose}: " + " · ".join(parts), lines, "/#pending"))
+    elif event["type"] == "his_alert":  # case codes and staff / procedure names only
+        what = event.get("what")
+        if what == "mapping":
+            out += [Message(u.user_id, "his", "HIS: มีรหัสที่ยังจับคู่ไม่ได้", [event.get("detail", ""), "จับคู่ได้ที่หน้าข้อมูลโรงพยาบาล แท็บเชื่อมต่อ HIS"],
+                            "/admin#his") for u in users if u.role == "admin"]
+        else:
+            title = "คำขอผ่าตัดฉุกเฉินจาก HIS" if what == "emergency" else "HIS: ต้องดำเนินการในระบบ"
+            lines = [event.get("detail", "")] + (["เปิดรายการรอผ่าตัดเพื่อแทรกเคสในแท็บฉุกเฉิน"] if what == "emergency" else [])
+            out += [Message(u.user_id, "his", title, lines, "/#pending" if what == "emergency" else "/")
+                    for u in users if u.role in KIND_ROLES["his"]]
     elif event["type"] == "system_error":
         where = {"server": "เซิร์ฟเวอร์", "browser": "หน้าเว็บ", "job": "งานเบื้องหลัง"}.get(event.get("source"), "ระบบ")
         out += [Message(u.user_id, "feedback", "ระบบมีข้อผิดพลาดใหม่", [f"{where}: {event.get('where', '-')}",
