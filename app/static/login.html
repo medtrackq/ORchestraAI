@@ -27,6 +27,8 @@
   button:disabled { opacity: .6; cursor: progress; }
   :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .error { background: var(--bad-soft); color: var(--bad); border-radius: 8px; padding: 8px 10px; font-size: .85rem; }
+  .help-link { margin: 14px 0 0; text-align: center; font-size: .85rem; }
+  .help-link a { color: var(--muted, #64748b); }
   [hidden] { display: none !important; }
 </style>
 </head>
@@ -48,6 +50,7 @@
     <div class="error" id="change-error" role="alert" hidden></div>
     <button type="submit">ตั้งรหัสผ่านและเข้าใช้งาน</button>
   </form>
+  <p class="help-link"><a href="/help">❓ วิธีใช้งาน / ลืมรหัสผ่าน</a></p>
 </main>
 <script>
   let temporaryPassword = '';
