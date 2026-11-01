@@ -47,6 +47,7 @@ PERMISSIONS = {
     "roster": {"admin", "scheduler"},  # shifts, leave, room closures, re-plan a day
     "inventory_view": {"admin", "scheduler", "cssd"},  # supplies and implants stock
     "inventory": {"admin", "cssd"},  # receive, count, order supplies; what procedures use
+    "reports": {"admin", "scheduler"},  # management reports
     "users": {"admin"},
     "seed": {"admin"},
     "reset": {"admin"},

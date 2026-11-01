@@ -22,10 +22,11 @@ import os
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urlparse
+from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
 from .auth import (COOKIE, ROLES, SESSION_HOURS, Accounts, AuthError, DbUserStore, MemoryUserStore,
@@ -51,6 +52,7 @@ else:
     store = ScheduleStore(**_solver)
     accounts = Accounts(MemoryUserStore())
 
+_TZ = ZoneInfo(os.environ.get("APP_TIMEZONE", "Asia/Bangkok"))
 intake = IntakeService()  # Claude pass when ANTHROPIC_API_KEY is set, keyword rules otherwise
 app = FastAPI(title="ORchestraAI", docs_url="/api/docs", redoc_url=None, openapi_url="/api/openapi.json")
 
@@ -178,6 +180,11 @@ def login_page() -> FileResponse:
 @app.get("/admin", include_in_schema=False)
 def admin_page() -> FileResponse:
     return FileResponse(ROOT / "static" / "admin.html")
+
+
+@app.get("/reports", include_in_schema=False)
+def reports_page() -> FileResponse:
+    return FileResponse(ROOT / "static" / "reports.html")
 
 
 @app.get("/flow", include_in_schema=False)
@@ -822,3 +829,34 @@ def admin_add_procedure(body: ProcedureIn, request: Request) -> dict:
 def admin_edit_procedure(procedure_id: str, body: ProcedureIn, request: Request) -> dict:
     user, admin = _admin(request, "hospital_data")
     return _run(admin.save_procedure, body.model_dump(), procedure_id=procedure_id, actor=_actor(user))
+
+
+# ------------------------------------------------------------- management reports
+
+@app.get("/api/reports")
+def reports(request: Request, date_from: str | None = None, date_to: str | None = None) -> dict:
+    """OR utilisation, on-time starts, turnover, booked-duration accuracy, case mix, staff hours, supplies."""
+    _user(request, "reports")
+    return _run(store.report, date_from, date_to)
+
+
+@app.get("/api/reports/cases.csv")
+def report_csv(request: Request, date_from: str | None = None, date_to: str | None = None) -> PlainTextResponse:
+    """The cases behind the report, without patient identifiers (for Excel)."""
+    import csv
+    import io
+
+    _user(request, "reports")
+    out = io.StringIO()
+    writer = csv.writer(out)
+    writer.writerow(["case", "date", "room", "surgeon", "procedure", "urgency", "booked_start", "booked_end",
+                     "actual_start", "actual_end", "booked_mins", "actual_mins", "actual_minus_booked", "team_size"])
+    for c in _run(store.report_cases, date_from, date_to):
+        local = lambda ts: ts.astimezone(_TZ).strftime("%Y-%m-%d %H:%M") if ts else ""  # noqa: E731
+        writer.writerow([c.case_id, local(c.start)[:10], c.room, c.surgeon, c.procedure, c.urgency, local(c.start),
+                         local(c.end), local(c.actual_start), local(c.actual_end), c.booked_mins,
+                         c.actual_mins if c.actual_mins is not None else "",
+                         c.actual_mins - c.booked_mins if c.actual_mins is not None else "", len(c.team)])
+    name = f"orchestra-cases-{date_from or 'last30'}-{date_to or 'today'}.csv"
+    return PlainTextResponse("\ufeff" + out.getvalue(), media_type="text/csv; charset=utf-8",
+                             headers={"Content-Disposition": f'attachment; filename="{name}"'})

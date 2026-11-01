@@ -203,6 +203,7 @@
   <nav>
     <input type="date" id="date" aria-label="วันที่วางแผน" hidden>
     <button class="btn" id="reload" type="button">โหลดใหม่</button>
+    <a class="btn" href="/reports" id="reports-link" hidden>รายงาน</a>
     <a class="btn" href="/admin" id="admin-link" hidden>ข้อมูลโรงพยาบาล</a>
     <a class="btn" href="/flow" target="_blank" rel="noopener">ดู Flow สาธิต</a>
     <button class="btn" id="reset" type="button" hidden>รีเซ็ตข้อมูลตัวอย่าง</button>
@@ -621,6 +622,7 @@
     if (db) $('#date').value = STATE.date;
     $('#reset').hidden = db || !can('reset');
     $('#admin-link').hidden = !db || !(can('hospital_view') || can('inventory_view'));
+    $('#reports-link').hidden = !can('reports');
     $('#who').innerHTML = `<span>${esc(STATE.me.display_name)}</span><small>${esc(STATE.me.role_label)}</small>`;
     $('#change-pass').hidden = STATE.me.user_id === 'env-admin' || STATE.me.user_id === 'dev';
     applyTabs();

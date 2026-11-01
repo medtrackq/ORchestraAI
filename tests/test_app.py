@@ -301,3 +301,20 @@ def test_supplies_are_checked_when_booking(owner):
 
     bad = {"case": _case(required_supplies={"GOLD-BAR": 1}), "start": "10:00"}
     assert owner.post("/api/slot-check", json=bad).status_code == 400
+
+
+def test_management_report_and_csv(owner):
+    r = owner.get("/api/reports").json()
+    assert r["cases"] == 10 and r["mix"]["ELECTIVE"] == 9 and r["kpi"]["utilization"] > 0
+    assert {"rooms", "per_day", "error_bins", "staff_hours", "waiting"} <= set(r)
+    csv_text = owner.get("/api/reports/cases.csv").text
+    lines = csv_text.strip().splitlines()
+    assert lines[0].lstrip("﻿").startswith("case,date,room") and len(lines) == 11
+    assert "HN-" not in csv_text  # no patient identifiers in the export
+    assert owner.get("/reports").status_code == 200
+
+    scheduler = make_user(owner, "sched1", "scheduler")
+    assert scheduler.get("/api/reports").status_code == 200
+    nurse = make_user(owner, "nurse9", "staff", "SCR-2")
+    assert nurse.get("/api/reports").status_code == 403
+    assert nurse.get("/api/reports/cases.csv").status_code == 403

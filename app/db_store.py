@@ -10,11 +10,10 @@ from __future__ import annotations
 import uuid
 from contextlib import contextmanager
 from dataclasses import replace
-from datetime import date
+from datetime import date, datetime, time, timedelta
 
 import psycopg
 
-from datetime import timedelta
 
 from orchestra_engine import ORchestraOptimizer, ScheduleResult, fmt, hm
 from orchestra_engine.demo import elective_day
@@ -373,6 +372,115 @@ class DatabaseStore:
             self.db.log_activity(conn, world, self._record(conn, world, Activity(
                 "cancel", f"ยกเลิกคำขอที่รอจัด {code}", [], actor=actor_name(actor))))
         return {"cancelled": pending_id}
+
+    # ------------------------------------------------------------- reports
+
+    def _report_period(self, date_from: str | None, date_to: str | None) -> tuple[date, date]:
+        last = self._day(date_to) if date_to else self.db.today()
+        first = self._day(date_from) if date_from else last - timedelta(days=29)
+        if first > last:
+            raise StoreError("วันที่เริ่มต้องไม่หลังวันที่สิ้นสุด")
+        if (last - first).days > 365:
+            raise StoreError("ดูรายงานได้ครั้งละไม่เกิน 366 วัน")
+        return first, last
+
+    def _report_records(self, conn, first: date, last: date) -> tuple[list, list]:
+        from .reports import CaseRecord, RoomInfo
+
+        tz = self.db.tz
+        start = datetime.combine(first, time(), tzinfo=tz)
+        end = datetime.combine(last + timedelta(days=1), time(), tzinfo=tz)
+        rows = list(conn.execute(
+            """SELECT s.schedule_id, s.request_id, s.start_time, s.end_time, s.cleanup_end_time,
+                      s.actual_start_time, s.actual_end_time, o.room_code, r.urgency_level, r.patient_hn,
+                      COALESCE(p.name, r.raw_nlp_input, 'Surgery') AS procedure, st.full_name AS surgeon
+               FROM scheduled_surgeries s
+               JOIN surgery_requests r ON r.request_id = s.request_id
+               JOIN operating_rooms o ON o.or_id = s.or_id
+               LEFT JOIN procedures p ON p.procedure_id = r.procedure_id
+               LEFT JOIN staff st ON st.staff_id = r.primary_surgeon_id
+               WHERE s.status IS DISTINCT FROM 'CANCELLED' AND s.start_time >= %s AND s.start_time < %s""",
+            (start, end),
+        ))
+        team: dict = {}
+        if rows:
+            for a in conn.execute(
+                """SELECT a.schedule_id, st.full_name FROM resource_allocations a JOIN staff st ON st.staff_id = a.staff_id
+                   WHERE a.schedule_id = ANY(%s)""", ([r["schedule_id"] for r in rows],),
+            ):
+                team.setdefault(a["schedule_id"], []).append(a["full_name"])
+        cases = [
+            CaseRecord(case_code(r["request_id"], r["urgency_level"], set()), r["room_code"], r["surgeon"] or "-",
+                       r["procedure"], r["urgency_level"], r["start_time"], r["end_time"], r["cleanup_end_time"],
+                       r["actual_start_time"], r["actual_end_time"], team.get(r["schedule_id"], []),
+                       demo=(r["patient_hn"] or "").startswith("HIST-"))
+            for r in rows
+        ]
+        cols = {(c["table_name"], c["column_name"]) for c in conn.execute(
+            "SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = 'public'")}
+        closures: dict = {}
+        if ("room_closures", "closure_id") in cols:
+            for c in conn.execute(
+                """SELECT o.room_code, c.start_time, c.end_time FROM room_closures c JOIN operating_rooms o USING (or_id)
+                   WHERE c.end_time > %s AND c.start_time < %s""", (start, end),
+            ):
+                closures.setdefault(c["room_code"], []).append((c["start_time"], c["end_time"]))
+        rooms = [
+            RoomInfo(r["room_code"], r.get("elective_start"), r.get("elective_end"),
+                     (r["status"] or "AVAILABLE") not in ("CLOSED", "OUT_OF_SERVICE"), closures.get(r["room_code"], []))
+            for r in conn.execute("SELECT * FROM operating_rooms ORDER BY room_code")
+        ]
+        return cases, rooms
+
+    def report(self, date_from: str | None = None, date_to: str | None = None) -> dict:
+        """Management report for a period (default: the last 30 days) and the period before it."""
+        from .reports import build_report, previous_period
+
+        first, last = self._report_period(date_from, date_to)
+        before = previous_period(first, last)
+        with self._transaction(write=False) as conn:
+            cases, rooms = self._report_records(conn, before[0], last)
+            span = (first, last)
+            counts, overrides = {}, 0
+            if conn.execute("SELECT to_regclass('public.orchestra_activity') IS NOT NULL AS ok").fetchone()["ok"]:
+                counts = {r["kind"]: r["n"] for r in conn.execute(
+                    "SELECT kind, count(*) AS n FROM orchestra_activity WHERE planning_date BETWEEN %s AND %s "
+                    "GROUP BY kind", span)}
+                overrides = conn.execute(
+                    """SELECT count(*) AS n FROM orchestra_activity a, jsonb_array_elements_text(a.agent_log) line
+                       WHERE a.planning_date BETWEEN %s AND %s AND line LIKE '%%FATIGUE OVERRIDE%%'""", span,
+                ).fetchone()["n"]
+            cancelled = conn.execute(
+                "SELECT count(*) AS n FROM surgery_requests WHERE status = 'CANCELLED' "
+                "AND preferred_date_start BETWEEN %s AND %s", span).fetchone()["n"]
+            supplies = []
+            if conn.execute("SELECT to_regclass('public.supply_reservations') IS NOT NULL AS ok").fetchone()["ok"]:
+                supplies = [
+                    {"code": r["code"], "name": r["name"], "unit": r["unit"], "used": r["used"]}
+                    for r in conn.execute(
+                        """SELECT i.code, i.name, i.unit, sum(r.quantity) AS used FROM supply_reservations r
+                           JOIN supply_items i USING (item_id)
+                           WHERE r.status = 'USED' AND (r.used_at AT TIME ZONE %s)::date BETWEEN %s AND %s
+                           GROUP BY i.code, i.name, i.unit ORDER BY used DESC, i.name LIMIT 15""",
+                        (str(self.db.tz), *span),
+                    )
+                ]
+            waiting = len(self.db.pending(conn))
+        extra = {
+            "waiting": waiting, "cancelled": cancelled, "fatigue_overrides": overrides,
+            "emergencies_inserted": counts.get("emergency", 0), "replans": counts.get("replan", 0),
+            "overruns": counts.get("overrun", 0), "supplies_used": supplies, "mode": self.mode,
+        }
+        report = build_report(cases, rooms, first, last, self.db.tz, extra=extra)
+        earlier = build_report(cases, rooms, *before, self.db.tz)
+        report["previous"] = {**earlier["kpi"], "cases": earlier["cases"]}
+        report["previous_range"] = [before[0].isoformat(), before[1].isoformat()]
+        return report
+
+    def report_cases(self, date_from: str | None = None, date_to: str | None = None) -> list:
+        first, last = self._report_period(date_from, date_to)
+        with self._transaction(write=False) as conn:
+            return self._report_records(conn, first, last)[0]
 
     def seed_demo(self) -> dict:
         """Fill an empty database with the synthetic demo hospital and book today's demo cases."""
