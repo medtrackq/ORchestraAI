@@ -9,10 +9,12 @@ secret's value.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -284,6 +286,101 @@ def checklist(conn, migration_rows: list[dict], rls: list[str], users: list) -> 
     return out
 
 
+# ------------------------------------------------------------------ server, scheduled jobs, backups
+
+STARTED = datetime.now(timezone.utc)  # this server process
+BACKUP_WARN_DAYS = 7
+
+
+def _set(store, key: str, value: str) -> None:
+    """Write one app_settings value (only once migration 008 made the table); never raises."""
+    try:
+        with store.db.connect() as conn:
+            if conn.execute("SELECT to_regclass('public.app_settings') IS NOT NULL AS ok").fetchone()["ok"]:
+                conn.execute("""INSERT INTO app_settings (key, value) VALUES (%s, %s)
+                                ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value""", (key, value))
+    except Exception as exc:  # bookkeeping must never break the job it describes
+        log.warning("could not save %s: %s", key, exc)
+
+
+def record_boot(store) -> None:
+    """Remember when this server started (the last 30 starts): frequent starts mean it sleeps when idle."""
+    if getattr(store, "mode", "demo") != "supabase":
+        return
+    try:
+        with store.db.connect() as conn:
+            if not conn.execute("SELECT to_regclass('public.app_settings') IS NOT NULL AS ok").fetchone()["ok"]:
+                return
+            row = conn.execute("SELECT value FROM app_settings WHERE key = 'server_boots' FOR UPDATE").fetchone()
+            boots = json.loads(row["value"]) if row else []
+            boots = (boots + [STARTED.isoformat(timespec="seconds")])[-30:]
+            conn.execute("""INSERT INTO app_settings (key, value) VALUES ('server_boots', %s)
+                            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value""", (json.dumps(boots),))
+    except Exception as exc:
+        log.warning("could not record the server start: %s", exc)
+
+
+def mark_job(store, name: str, now: datetime | None = None) -> None:
+    """A scheduled job checked in (``job:<name>``)."""
+    if getattr(store, "mode", "demo") == "supabase":
+        _set(store, f"job:{name}", (now or datetime.now(timezone.utc)).isoformat(timespec="seconds"))
+
+
+def note_backup(store, manifest: dict, size: int, actor: dict | None) -> None:
+    _set(store, "backup_last", json.dumps({
+        "at": manifest["created_at"], "by": None if actor is None else f"{actor.get('name')} ({actor.get('role')})",
+        "tables": len(manifest["tables"]), "rows": sum(t["rows"] for t in manifest["tables"]), "size": size,
+    }, ensure_ascii=False))
+
+
+def operations(conn, tz, now: datetime | None = None) -> tuple[dict, list[dict]]:
+    """Server starts, scheduled jobs and the last backup, and what the go-live checklist says about them."""
+    from .readiness import digest_hour
+
+    now = (now or datetime.now(timezone.utc)).astimezone(tz)
+    setting = {}
+    has_settings = conn.execute("SELECT to_regclass('public.app_settings') IS NOT NULL AS ok").fetchone()["ok"]
+    if has_settings:
+        setting = {r["key"]: r["value"] for r in conn.execute(
+            """SELECT key, value FROM app_settings WHERE key IN ('server_boots', 'backup_last', 'job:digest',
+                   'retention_last_run', 'retention_patient_days')""")}
+    parse = lambda v: datetime.fromisoformat(v).astimezone(tz) if v else None  # noqa: E731
+    boots = [parse(b) for b in json.loads(setting.get("server_boots") or "[]")]
+    recent = [b for b in boots if b and now - b < timedelta(hours=24)]
+    backup = json.loads(setting["backup_last"]) if setting.get("backup_last") else None
+    hour = digest_hour()
+    digest = parse(setting.get("job:digest"))
+    retention = parse(setting.get("retention_last_run"))
+    info = {"started_at": STARTED.astimezone(tz).isoformat(timespec="minutes"),
+            "uptime_min": int((now - STARTED.astimezone(tz)).total_seconds() // 60),
+            "boots_24h": len(recent), "backup": backup, "digest_hour": hour,
+            "digest_last": digest.isoformat(timespec="minutes") if digest else None,
+            "retention_last": retention.isoformat(timespec="minutes") if retention else None,
+            "retention_on": bool(setting.get("retention_patient_days"))}
+    checks = []
+
+    def add(label, status, detail, link="#server"):
+        checks.append({"label": label, "status": status, "detail": detail, "link": link})
+
+    if backup is None:
+        add("สำรองข้อมูล", "warn", "ยังไม่เคยดาวน์โหลดไฟล์สำรอง · Supabase แผนฟรีไม่มีการสำรองข้อมูลอัตโนมัติ")
+    else:
+        age = (now - parse(backup["at"])).days
+        add("สำรองข้อมูล", "ok" if age < BACKUP_WARN_DAYS else "warn",
+            f"ล่าสุด {age} วันก่อน" + ("" if age < BACKUP_WARN_DAYS else f" (ควรทำอย่างน้อยทุก {BACKUP_WARN_DAYS} วัน)"))
+    if len(recent) >= 4:
+        add("เซิร์ฟเวอร์ทำงานต่อเนื่อง", "warn",
+            f"เริ่มใหม่ {len(recent)} ครั้งใน 24 ชม. · Render แผนฟรีหลับเมื่อไม่มีคนใช้ 15 นาที คนแรกต้องรอ และงานตั้งเวลาอาจไม่ทำงาน")
+    # Jobs note their runs in app_settings (SQL file 008): without it there is nothing to check yet.
+    if has_settings and hour is not None and now.hour >= hour + 1 and (digest is None or digest.date() != now.date()):
+        add("งานสรุปความพร้อมวันถัดไป", "warn",
+            f"วันนี้ยังไม่ได้ทำงาน (ตั้งไว้ {hour:02d}:00) · เซิร์ฟเวอร์อาจหลับอยู่ตอนนั้น จะทำงานเมื่อมีคนเปิดเว็บ")
+    if info["retention_on"] and (retention is None or now - retention > timedelta(hours=26)):
+        add("งานลบข้อมูลผู้ป่วยตามระยะเวลา (PDPA)", "warn",
+            "ไม่ได้ทำงานเกิน 1 วัน (ตั้งไว้ 02:00) · เซิร์ฟเวอร์อาจหลับอยู่ตอนนั้น", "/privacy")
+    return info, checks
+
+
 def summary(store, notifier, intake, accounts) -> dict:
     """Everything the page shows."""
     mode = getattr(store, "mode", "demo")
@@ -294,7 +391,7 @@ def summary(store, notifier, intake, accounts) -> dict:
     except Exception:  # the page must load even if notifications are broken
         push_state = None
     out = {"mode": mode, "version": version(), "settings": settings(mode, intake.llm.enabled, push_state),
-           "migrations": [], "rls_off": [], "checks": [], "db_error": None}
+           "migrations": [], "rls_off": [], "checks": [], "db_error": None, "server": None}
     if mode != "supabase":
         return out
     try:
@@ -302,6 +399,8 @@ def summary(store, notifier, intake, accounts) -> dict:
             out["migrations"] = check(conn)
             out["rls_off"] = rls_off(conn)
             out["checks"] = checklist(conn, out["migrations"], out["rls_off"], _users(accounts))
+            out["server"], ops = operations(conn, store.db.tz)
+            out["checks"] += ops
     except (StoreError, psycopg.Error) as exc:
         out["db_error"] = str(exc).splitlines()[0]
     return out

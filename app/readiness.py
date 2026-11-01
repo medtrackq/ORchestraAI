@@ -103,6 +103,7 @@ class DigestTimer:
         self.store, self.send, self.hour, self.every_s = store, send, hour, every_s
         self._stop = threading.Event()
         self._done: set[str] = set()  # target days this process has already handled
+        self._checked = None  # the day this process last noted its check
 
     def start(self) -> None:
         threading.Thread(target=self._loop, name="readiness-digest", daemon=True).start()
@@ -116,6 +117,15 @@ class DigestTimer:
             self.tick()
             wait = self.every_s
 
+    def _heartbeat(self, now: datetime) -> None:
+        """Note that today's check ran (the status page warns when a sleeping server missed it)."""
+        if self._checked == now.date():
+            return
+        self._checked = now.date()
+        from .system_status import mark_job
+
+        mark_job(self.store, "digest", now)
+
     def tick(self, now: datetime | None = None) -> bool:
         """Send the digest if it is time and not sent yet; True when sent."""
         try:
@@ -123,6 +133,7 @@ class DigestTimer:
             now = now or datetime.now(tz)
             if now.hour < self.hour or not hasattr(self.store, "readiness_next"):
                 return False
+            self._heartbeat(now)
             nxt = self.store.readiness_next()
             if not nxt or not nxt["cases"] or nxt["date"] in self._done:
                 return False
