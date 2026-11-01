@@ -215,6 +215,8 @@ class DatabaseStore:
             if a is None:
                 raise StoreError(f"ไม่พบเคส {case_id} ในวันที่ {world.day}")
             check_own_case(actor, world.result.cases[case_id].surgeon_id)
+            if step in ms.ACTUAL_STEPS:  # into / out of the OR are the actual times: the case's team only
+                check_team(actor, a.staff_ids)
             row = world.bookings[case_id]
             rows = self.db.milestone_rows(conn, [row["request_id"]])
             if step in ms.IN_TABLE and rows is None:

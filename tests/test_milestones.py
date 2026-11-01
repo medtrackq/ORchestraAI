@@ -13,6 +13,13 @@ from test_db import ADMIN_URL, _request, _rows, _tomorrow, db_url, store  # noqa
 
 NURSE = {"name": "Nurse A", "username": "n", "role": "staff", "staff_id": "SCR-9", "user_id": "u-n"}
 needs_db = pytest.mark.skipif(not ADMIN_URL, reason="set TEST_DATABASE_URL to run database tests")
+ACTUAL = ("in_room", "out_room")  # the case's actual times: its own team records them
+
+
+def _team(booking) -> dict:
+    """A nurse on the case's team (NURSE, a holding / recovery nurse, is not)."""
+    member = next(t["staff_id"] for t in booking["team"][1:])
+    return {"name": "Circ B", "username": "c", "role": "staff", "staff_id": member, "user_id": "u-c"}
 
 
 # ------------------------------------------------------------------ rules
@@ -62,18 +69,23 @@ def test_time_per_step_for_the_report():
 
 def test_demo_store_steps():
     s = ScheduleStore(workers=2, time_limit_s=10)
-    case = s.state()["schedule"]["bookings"][0]["case_id"]
+    first = s.state()["schedule"]["bookings"][0]
+    case, team = first["case_id"], _team(first)
+    with pytest.raises(Forbidden, match="ทีม"):  # not on this case: may not set its actual start
+        s.milestone_update(case, {"step": "in_room", "time": "07:50"}, actor=NURSE)
     for step, at in [("arrived", "07:30"), ("in_room", "07:50"), ("incision", "08:20")]:
-        out = s.milestone_update(case, {"step": step, "time": at}, actor=NURSE)
+        out = s.milestone_update(case, {"step": step, "time": at}, actor=team if step in ACTUAL else NURSE)
     assert out["milestones"]["stage"] == "incision"
     booking = next(b for b in s.state()["schedule"]["bookings"] if b["case_id"] == case)
     assert booking["actual_start"] == "07:50"  # into the OR is the actual start the reports use
     with pytest.raises(StoreError, match="ต้องไม่ก่อน"):
         s.milestone_update(case, {"step": "closure", "time": "08:00"}, actor=NURSE)
     s.milestone_update(case, {"step": "closure", "time": "09:30"}, actor=NURSE)
-    s.milestone_update(case, {"step": "out_room", "time": "09:45"}, actor=NURSE)
+    s.milestone_update(case, {"step": "out_room", "time": "09:45"}, actor=team)
     assert s.activity[-1].title.startswith(f"{case} ออกจากห้องผ่าตัด: ใช้ห้อง 115 นาที")
-    s.milestone_update(case, {"step": "out_room", "clear": True}, actor=NURSE)
+    with pytest.raises(Forbidden):
+        s.milestone_update(case, {"step": "out_room", "clear": True}, actor=NURSE)
+    s.milestone_update(case, {"step": "out_room", "clear": True}, actor=team)
     assert s.state()["milestones"][case]["stage"] == "closure"
     stages = {r["to"]: r for r in s.report()["stages"]}
     assert stages["incision"]["mean"] == 30 and stages["closure"]["mean"] == 70
@@ -82,7 +94,7 @@ def test_demo_store_steps():
         s.milestone_update(case, {"step": "out_room", "time": "09:45"}, actor=other)
     if s._clock() < 23 * 60 + 50:  # a time later than now is refused
         with pytest.raises(StoreError, match="ล่วงหน้า"):
-            s.milestone_update(case, {"step": "out_room", "time": "23:59"}, actor=NURSE)
+            s.milestone_update(case, {"step": "out_room", "time": "23:59"}, actor=team)
 
 
 # ------------------------------------------------------- Supabase store
@@ -95,9 +107,10 @@ def test_steps_are_saved_with_the_case(store, db_url):
     case = next(b["case_id"] for b in store.state(day)["schedule"]["bookings"] if b["patient_hn"] == "HN-M1")
     with pytest.raises(StoreError, match="ต้องใส่เวลา"):  # not today: say when
         store.milestone_update(case, {"step": "arrived"}, day=day, actor=NURSE)
+    team = _team(next(b for b in store.state(day)["schedule"]["bookings"] if b["case_id"] == case))
     for step, at in [("arrived", "08:30"), ("in_room", "08:55"), ("incision", "09:20"), ("closure", "10:30"),
                      ("out_room", "10:45"), ("recovery_out", "11:50")]:
-        store.milestone_update(case, {"step": step, "time": at}, day=day, actor=NURSE)
+        store.milestone_update(case, {"step": step, "time": at}, day=day, actor=team if step in ACTUAL else NURSE)
     state = store.state(day)
     m = state["milestones"][case]
     assert (m["stage"], m["phase"], m["times"]["incision"]) == ("recovery_out", "done", "09:20")
@@ -131,7 +144,8 @@ def test_works_before_migration_011(db_url):
     case = next(b["case_id"] for b in s.state(day)["schedule"]["bookings"] if b["patient_hn"] == "HN-M2")
     state = s.state(day)
     assert state["milestones_ready"] is False and state["milestones"][case]["stage"] == "scheduled"
-    s.milestone_update(case, {"step": "in_room", "time": "09:00"}, day=day, actor=NURSE)  # actual start still works
+    team = _team(next(b for b in s.state(day)["schedule"]["bookings"] if b["case_id"] == case))
+    s.milestone_update(case, {"step": "in_room", "time": "09:00"}, day=day, actor=team)  # actual start still works
     with pytest.raises(StoreError, match="migration"):
         s.milestone_update(case, {"step": "incision", "time": "09:10"}, day=day, actor=NURSE)
     assert s.report(day, day)["stages_ready"] is False

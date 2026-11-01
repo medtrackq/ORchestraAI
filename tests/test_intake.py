@@ -114,6 +114,19 @@ def test_times_dates_and_durations():
 def test_identifiers_are_masked():
     masked, hn = mask_identifiers("HN 12345/66 โทร 0812345678 ผ่าพรุ่งนี้")
     assert hn == "12345/66" and "12345" not in masked and "0812345678" not in masked
+    for text, gone in [
+        ("ผู้ป่วยHN54321 ผ่าไส้ติ่งพรุ่งนี้", ["54321"]),  # HN straight after Thai text
+        ("H.N. 98765 lap chole", ["98765"]),
+        ("เลขที่ผู้ป่วย 54321/66 นางสาวสมหญิง รักดี โทร 081-234-5678 ผ่าตัดถุงน้ำดี", ["54321", "สมหญิง", "รักดี", "234"]),
+        ("บัตร 1-1020-00123-45-6 ผ่าเข่า", ["00123"]),
+        ("HN 123 Mr John Smith lap chole", ["John", "Smith"]),
+        ("ด.ญ.มะลิ ผ่าไส้ติ่ง", ["มะลิ"]),
+    ]:
+        masked, _ = mask_identifiers(text)
+        assert not any(g in masked for g in gone), masked
+    # what the booking needs stays readable
+    masked, _ = mask_identifiers("HN 555 นายมานะ ผ่าตัดไส้ติ่ง บ่ายสอง นพ.สมชาย 12/11/69 09:30")
+    assert masked == "HN [HN] [ชื่อ] ผ่าตัดไส้ติ่ง บ่ายสอง นพ.สมชาย 12/11/69 09:30"
 
 
 # ------------------------------------------------------------ web app

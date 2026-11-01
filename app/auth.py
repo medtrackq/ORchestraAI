@@ -21,6 +21,7 @@ import time
 import uuid
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
+from functools import lru_cache
 
 ROLES = {
     "admin": "ผู้ดูแลระบบ",
@@ -105,6 +106,9 @@ def verify_password(password: str, stored: str) -> bool:
     return hmac.compare_digest(actual, expected)
 
 
+DUMMY_HASH = hash_password(secrets.token_urlsafe(16))  # checked when there is no real hash: every login costs one scrypt
+
+
 def check_new_password(password: str, username: str) -> None:
     if len(password) < MIN_PASSWORD:
         raise AuthError(f"รหัสผ่านต้องยาวอย่างน้อย {MIN_PASSWORD} ตัวอักษร")
@@ -125,7 +129,9 @@ class Signer:
             return cls(explicit.encode())
         material = os.environ.get("APP_PASSWORD", "") + "|" + os.environ.get("DATABASE_URL", "")
         if material != "|":  # stable across restarts without another setting
-            return cls(hashlib.sha256(b"orchestra-session|" + material.encode()).digest())
+            # A slow derivation: a cookie must not let anyone test password guesses quickly offline.
+            return cls(hashlib.scrypt(material.encode(), salt=b"orchestra-session-v2", n=2**15, r=8, p=1,
+                                      maxmem=64 * 1024 * 1024, dklen=32))
         return cls(secrets.token_bytes(32))
 
     def sign(self, payload: dict) -> str:
@@ -151,26 +157,37 @@ class Signer:
 
 
 class LoginLimiter:
-    """At most 5 failed logins per user name + address in 10 minutes."""
+    """At most 5 failed logins per user name + address, and 20 per user name from any address, in 10 minutes.
 
-    def __init__(self, limit: int = 5, window_s: int = 600) -> None:
-        self.limit, self.window_s = limit, window_s
+    The per-name cap stops guessing spread over many addresses (or a forged X-Forwarded-For).
+    """
+
+    def __init__(self, limit: int = 5, window_s: int = 600, per_user: int = 20) -> None:
+        self.limit, self.window_s, self.per_user = limit, window_s, per_user
         self._fails: dict[tuple[str, str], list[float]] = {}
         self._lock = threading.Lock()
 
     def _recent(self, key: tuple[str, str]) -> list[float]:
         now = time.time()
         fails = [t for t in self._fails.get(key, []) if now - t < self.window_s]
-        self._fails[key] = fails
+        if fails:
+            self._fails[key] = fails
+        else:
+            self._fails.pop(key, None)
         return fails
 
     def blocked(self, key: tuple[str, str]) -> bool:
         with self._lock:
-            return len(self._recent(key)) >= self.limit
+            return len(self._recent(key)) >= self.limit or len(self._recent((key[0], "*"))) >= self.per_user
 
     def fail(self, key: tuple[str, str]) -> None:
         with self._lock:
-            self._recent(key).append(time.time())
+            now = time.time()
+            for k in (key, (key[0], "*")):
+                self._fails[k] = self._recent(k) + [now]
+            if len(self._fails) > 20000:  # forget stale entries so the table cannot grow without end
+                for k in list(self._fails):
+                    self._recent(k)
 
     def clear(self, key: tuple[str, str]) -> None:
         with self._lock:
@@ -200,11 +217,19 @@ class User:
         return data
 
 
+@lru_cache(maxsize=4)
+def _admin_version(password: str) -> int:
+    """Session version of the owner admin: changes with APP_PASSWORD and, being slow and salted, tells
+    someone holding the cookie nothing useful about the password."""
+    digest = hashlib.scrypt(password.encode(), salt=b"orchestra-admin-version", n=2**14, r=8, p=1, dklen=8)
+    return int.from_bytes(digest[:3], "big")
+
+
 def env_admin() -> User | None:
     password = os.environ.get("APP_PASSWORD", "")
     if not password:
         return None
-    version = int(hashlib.sha256(password.encode()).hexdigest()[:6], 16)  # new password -> old sessions end
+    version = _admin_version(password)  # new password -> old sessions end
     return User(ENV_ADMIN_ID, os.environ.get("APP_USERNAME", "orchestra").lower(),
                 "ผู้ดูแลระบบหลัก (Render)", "admin", session_version=version)
 
@@ -268,6 +293,11 @@ class MemoryUserStore:
             user.password_hash = hash_password(password)
             user.must_change_password = temporary
             user.session_version += 1
+
+    def end_sessions(self, user_id: str) -> None:
+        with self._lock:
+            if user_id in self._users:
+                self._users[user_id].session_version += 1
 
     def touch_login(self, user_id: str) -> None:
         if user_id in self._users:
@@ -397,6 +427,11 @@ class DbUserStore:
         with self._connect() as conn:
             conn.execute("UPDATE app_users SET last_login_at = NOW() WHERE user_id = %s", (uuid.UUID(user_id),))
 
+    def end_sessions(self, user_id: str) -> None:
+        with self._connect() as conn:
+            conn.execute("UPDATE app_users SET session_version = session_version + 1 WHERE user_id = %s",
+                         (uuid.UUID(user_id),))
+
 
 class Accounts:
     """Login, session lookup and account management on top of a user store."""
@@ -405,6 +440,8 @@ class Accounts:
         self.store = store
         self.signer = signer or Signer.from_env()
         self.limiter = LoginLimiter()
+        self._ended: dict[str, float] = {}  # owner-admin cookies signed out before they expire (mac -> exp)
+        self._lock = threading.Lock()
 
     def login(self, username: str, password: str, address: str) -> tuple[User, str]:
         username = (username or "").strip().lower()
@@ -413,15 +450,16 @@ class Accounts:
             raise TooManyAttempts("ล็อกอินผิดหลายครั้ง กรุณารอ 10 นาทีแล้วลองใหม่")
         admin = env_admin()
         user = None
+        # Exactly one scrypt on every path, so the time taken does not tell which user names exist.
         if admin and username == admin.username:
+            verify_password(password, DUMMY_HASH)
             if hmac.compare_digest(password.encode(), os.environ["APP_PASSWORD"].encode()):
                 user = admin
         else:
             found = self.store.by_username(username)
-            if found and found.is_active and verify_password(password, found.password_hash):
+            ok = verify_password(password, found.password_hash if found else DUMMY_HASH)
+            if found and found.is_active and ok:
                 user = found
-            elif found is None:
-                verify_password(password, hash_password("timing-equaliser"))
         if user is None:
             self.limiter.fail(key)
             raise AuthError("ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง")
@@ -432,11 +470,30 @@ class Accounts:
 
     def token(self, user: User) -> str:
         return self.signer.sign({"uid": user.user_id, "sv": user.session_version,
-                                 "exp": int(time.time()) + SESSION_HOURS * 3600})
+                                 "exp": int(time.time()) + SESSION_HOURS * 3600,
+                                 "n": secrets.token_hex(8)})  # every sign-in is its own cookie (logout ends one)
+
+    def logout(self, token: str | None) -> None:
+        """End the session on the server too, not only in this browser (shared ward computers)."""
+        payload = self.signer.verify(token) if token else None
+        if payload is None:
+            return
+        if payload["uid"] == ENV_ADMIN_ID:  # no row to bump: remember the cookie until it expires
+            with self._lock:
+                now = time.time()
+                self._ended = {m: exp for m, exp in self._ended.items() if exp > now}
+                self._ended[token.rsplit(".", 1)[1]] = payload.get("exp", now)
+        else:
+            try:
+                self.store.end_sessions(payload["uid"])  # signs this person out on every device
+            except (AuthError, ValueError):
+                pass
 
     def user_from_token(self, token: str | None) -> User | None:
         payload = self.signer.verify(token) if token else None
         if payload is None:
+            return None
+        if payload["uid"] == ENV_ADMIN_ID and token.rsplit(".", 1)[1] in self._ended:
             return None
         if payload["uid"] == ENV_ADMIN_ID:
             user = env_admin()

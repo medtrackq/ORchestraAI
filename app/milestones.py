@@ -29,6 +29,7 @@ LABELS = {s[0]: s[1] for s in STEPS}
 STAGES = {"scheduled": ("นัดไว้", "scheduled"), "late": ("ยังไม่เข้าห้อง (ช้ากว่านัด)", "late"),
           **{s[0]: (s[3], s[4]) for s in STEPS}}
 IN_TABLE = ("arrived", "incision", "closure", "recovery_out")  # the others are the case's actual times
+ACTUAL_STEPS = ("in_room", "out_room")  # kept as scheduled_surgeries.actual_start_time / actual_end_time
 LATE_AFTER = 15  # minutes after the planned start without being in the room
 SEGMENTS = (  # report: average time between steps
     ("arrived", "in_room", "ห้องเตรียม → เข้าห้องผ่าตัด"),

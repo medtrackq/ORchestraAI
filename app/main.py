@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import re
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -30,14 +31,14 @@ from typing import Literal
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
 from .auth import (COOKIE, ROLES, SESSION_HOURS, Accounts, AuthError, DbUserStore, MemoryUserStore,
                    ServiceUnavailable, TooManyAttempts, User, can)
-from . import hospital_io, roster_io, system_status
+from . import hospital_io, privacy, roster_io, system_status
 from .admin_store import require_supabase
 from .intake_service import IntakeService
 from .notify import DbNotifyStore, MemoryNotifyStore, Notifier, NotifyUnavailable
@@ -66,17 +67,20 @@ store.listener = notifier.handle  # phone notifications after every saved change
 
 _TZ = ZoneInfo(os.environ.get("APP_TIMEZONE", "Asia/Bangkok"))
 intake = IntakeService()  # Claude pass when ANTHROPIC_API_KEY is set, keyword rules otherwise
+access = privacy.AccessLog(store)  # PDPA: who was shown patients' HN / names
 
 
 @asynccontextmanager
 async def _lifespan(_app):
-    """Background job: the daily reminder of the next day's cases that are not ready."""
+    """Background jobs: the daily reminder of the next day's not-ready cases; the PDPA retention run."""
     hour = digest_hour()
-    timer = DigestTimer(store, notifier.handle, hour=hour) if hour is not None else None
-    if timer is not None:
+    timers = [DigestTimer(store, notifier.handle, hour=hour)] if hour is not None else []
+    if store.mode == "supabase":
+        timers.append(privacy.RetentionTimer(store))
+    for timer in timers:
         timer.start()
     yield
-    if timer is not None:
+    for timer in timers:
         timer.stop()
 
 
@@ -98,13 +102,34 @@ def _https(request: Request) -> bool:
 
 
 def _address(request: Request) -> str:
-    forwarded = request.headers.get("x-forwarded-for", "")
-    return forwarded.split(",")[0].strip() or (request.client.host if request.client else "unknown")
+    """The client's IP. Render runs behind Cloudflare, which always overwrites CF-Connecting-IP; the first
+    X-Forwarded-For entry is whatever the client sent (Render only appends), so it is the fallback only.
+    Login limits do not rely on it alone (there is also a per-user-name cap)."""
+    for value in (request.headers.get("cf-connecting-ip", ""),
+                  request.headers.get("x-forwarded-for", "").split(",")[0]):
+        value = value.strip()
+        if value:
+            return value[:64]
+    return request.client.host if request.client else "unknown"
+
+
+MAX_BODY = 12 * 1024 * 1024  # an Excel upload (5 MB) as base64 JSON fits; anything bigger is refused unread
+# The pages use inline scripts and styles and Google Fonts only; nothing may load from elsewhere or frame them.
+CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' "
+       "https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; "
+       "connect-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; "
+       "form-action 'self'; frame-ancestors 'none'")
 
 
 @app.middleware("http")
 async def sessions(request: Request, call_next):
     path = request.url.path
+    try:
+        size = int(request.headers.get("content-length") or 0)
+    except ValueError:
+        size = 0
+    if size > MAX_BODY:
+        return JSONResponse({"detail": "ข้อมูลที่ส่งมาใหญ่เกินไป"}, status_code=413)
     if _open_mode():
         user = User("dev", "dev", "โหมดพัฒนา (ไม่มีรหัสผ่าน)", "admin")
     else:
@@ -132,6 +157,11 @@ async def sessions(request: Request, call_next):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "same-origin"
+    response.headers["Permissions-Policy"] = "microphone=(self), camera=(), geolocation=()"
+    if not path.startswith("/api/docs"):  # Swagger UI loads its files from a CDN
+        response.headers["Content-Security-Policy"] = CSP
+    if _https(request):
+        response.headers["Strict-Transport-Security"] = "max-age=31536000"
     return response
 
 
@@ -158,6 +188,9 @@ def _run(fn, *args, **kwargs):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+FREE_TEXT_ACTIVITY = {"cancel", "admin"}  # activity kinds whose log holds text people typed
+
+
 def _shape(state: dict, user: User) -> dict:
     """Per-role view: hide patient identity from roles that do not need it and
     show only the signed-in person's own notifications to clinical staff."""
@@ -174,16 +207,19 @@ def _shape(state: dict, user: User) -> dict:
         if state.get("readiness_next"):
             state["readiness_next"] = {**state["readiness_next"], "cases": [
                 {**c, "readiness": hide(c["readiness"])} for c in state["readiness_next"]["cases"]]}
+    def own_notes(notes: list) -> list:  # change notices name the HN
+        if not patients:
+            return []
+        return notes if everyone else [n for n in notes if n.get("staff_id") == user.staff_id]
+
+    schedule["notifications"] = own_notes(schedule.get("notifications", []))
     state["schedule"] = schedule
     activity = []
     for item in state.get("activity", []):
         item = dict(item)
-        notes = item.get("notifications", [])
-        if not patients:
-            notes = []
-        elif not everyone:
-            notes = [n for n in notes if n.get("staff_id") == user.staff_id]
-        item["notifications"] = notes
+        item["notifications"] = own_notes(item.get("notifications", []))
+        if not patients and item.get("kind") in FREE_TEXT_ACTIVITY:
+            item["log"] = []  # cancellation reasons and bed notes are typed by people: may name the patient
         activity.append(item)
     state["activity"] = activity
     # Staffing Agent view: schedulers see everyone's fatigue, clinical staff only their own.
@@ -196,8 +232,10 @@ def _shape(state: dict, user: User) -> dict:
     return state
 
 
-def _state(user: User, day: str | None) -> dict:
+def _state(user: User, day: str | None, request: Request | None = None, action: str = "schedule") -> dict:
     state = _shape(_run(store.state, day), user)
+    if can(user.role, "patients"):  # PDPA: this person is being shown these patients' identities
+        access.record_state(user, state, action, _address(request) if request is not None else None)
     state["hospital_name"] = (os.environ.get("HOSPITAL_NAME") or "").strip()[:120] or None  # printed headers
     return state
 
@@ -258,6 +296,12 @@ def print_page() -> FileResponse:
 def status_page() -> FileResponse:
     """Admin: which SQL files the database has, the server settings and a go-live checklist."""
     return FileResponse(ROOT / "static" / "status.html")
+
+
+@app.get("/privacy", include_in_schema=False)
+def privacy_page() -> FileResponse:
+    """Admin: who was shown patient data, and how long patient identity is kept (PDPA)."""
+    return FileResponse(ROOT / "static" / "privacy.html")
 
 
 @app.get("/flow", include_in_schema=False)
@@ -321,7 +365,9 @@ def login(body: LoginIn, request: Request, response: Response) -> dict:
 
 
 @app.post("/api/logout")
-def logout(response: Response) -> dict:
+def logout(request: Request, response: Response) -> dict:
+    """Signs out on the server too: the cookie stops working even if someone copied it."""
+    accounts.logout(request.cookies.get(COOKIE))
     response.delete_cookie(COOKIE, path="/")
     return {"ok": True}
 
@@ -418,9 +464,9 @@ def _own_case(user: User, case: CaseIn) -> None:
 
 
 @app.get("/api/state")
-def state(request: Request, date: str | None = None) -> dict:
-    """Schedule, resources and activity for one planning day (default: today)."""
-    return _state(_user(request), date)
+def state(request: Request, date: str | None = None, view: Literal["schedule", "print"] = "schedule") -> dict:
+    """Schedule, resources and activity for one planning day (default: today). ``view=print``: the printout."""
+    return _state(_user(request), date, request, view)
 
 
 @app.post("/api/slot-check")
@@ -437,7 +483,7 @@ def book(body: SlotIn, request: Request, date: str | None = None) -> dict:
     user = _user(request, "book")
     _own_case(user, body.case)
     result = _run(store.slot_check, body.case.model_dump(), body.start, commit=True, day=date, actor=_actor(user))
-    return {"result": result, "state": _state(user, date)}
+    return {"result": result, "state": _state(user, date, request)}
 
 
 @app.post("/api/emergency")
@@ -445,14 +491,14 @@ def emergency(body: EmergencyIn, request: Request, date: str | None = None) -> d
     user = _user(request, "emergency")
     _own_case(user, body.case)
     result = _run(store.emergency, body.case.model_dump(), body.now, day=date, actor=_actor(user))
-    return {"result": result, "state": _state(user, date)}
+    return {"result": result, "state": _state(user, date, request)}
 
 
 @app.post("/api/overrun")
 def overrun(body: OverrunIn, request: Request, date: str | None = None) -> dict:
     user = _user(request, "overrun")
     result = _run(store.overrun, body.case_id, body.new_duration_mins, body.now, day=date, actor=_actor(user))
-    return {"result": result, "state": _state(user, date)}
+    return {"result": result, "state": _state(user, date, request)}
 
 
 @app.get("/api/equipment")
@@ -466,7 +512,7 @@ def update_equipment(unit_id: str, body: EquipmentIn, request: Request, date: st
     """Equipment & Inventory input from CSSD: status and when the unit is ready again."""
     user = _user(request, "equipment")
     result = _run(store.update_equipment, unit_id, body.status, body.ready_at, day=date, actor=_actor(user))
-    return {"result": result, "units": _run(store.equipment, date), "state": _state(user, date)}
+    return {"result": result, "units": _run(store.equipment, date), "state": _state(user, date, request)}
 
 
 # ----------------------------------------------------------- intake agent
@@ -513,7 +559,7 @@ def record_actual(case_id: str, body: ActualIn, request: Request, date: str | No
     """Record when a case really started / finished; the forecast learns from it."""
     user = _user(request, "record_times")
     result = _run(store.record_actual, case_id, body.start, body.end, day=date, actor=_actor(user))
-    return {"result": result, "state": _state(user, date)}
+    return {"result": result, "state": _state(user, date, request)}
 
 
 class ReadinessIn(BaseModel):
@@ -527,7 +573,7 @@ def update_readiness(case_id: str, body: ReadinessIn, request: Request, date: st
     """Pre-op checklist: tick, clear or flag one item of a case (surgeons: their own cases)."""
     user = _user(request, "readiness")
     result = _run(store.readiness_update, case_id, body.model_dump(), day=date, actor=_actor(user))
-    return {"result": result, "state": _state(user, date)}
+    return {"result": result, "state": _state(user, date, request)}
 
 
 @app.post("/api/intake/seed-history")
@@ -546,7 +592,7 @@ def reset(request: Request) -> dict:
     if store.mode != "demo":
         raise HTTPException(status_code=400, detail="ใช้ได้เฉพาะโหมดข้อมูลจำลอง")
     store.reset()
-    return {"state": _state(user, None)}
+    return {"state": _state(user, None, request)}
 
 
 @app.post("/api/seed-demo")
@@ -556,7 +602,7 @@ def seed_demo(request: Request) -> dict:
     if store.mode != "supabase":
         raise HTTPException(status_code=400, detail="ใช้ได้เฉพาะเมื่อเชื่อม Supabase")
     result = _run(store.seed_demo)
-    return {"result": result, "state": _state(user, result["date"])}
+    return {"result": result, "state": _state(user, result["date"], request)}
 
 
 # ------------------------------------------------------------- hospital data
@@ -733,7 +779,7 @@ def replan(request: Request, date: str | None = None) -> dict:
     """Re-plan the cases of a day that have not started yet (fixes conflicts after data changes)."""
     user = _user(request, "roster")
     result = _run(store.replan, date, actor=_actor(user))
-    return {"result": result, "state": _state(user, date)}
+    return {"result": result, "state": _state(user, date, request)}
 
 
 class CancelIn(BaseModel):
@@ -748,7 +794,7 @@ def cancel_pending(pending_id: str, request: Request, body: CancelIn | None = No
     user = _user(request, "book")
     data = body.model_dump() if body is not None else None
     result = _run(store.cancel_pending, pending_id, data=data, actor=_actor(user))
-    return {"result": result, "state": _state(user, date)}
+    return {"result": result, "state": _state(user, date, request)}
 
 
 @app.post("/api/cases/{case_id}/cancel")
@@ -756,7 +802,7 @@ def cancel_booking(case_id: str, body: CancelIn, request: Request, date: str | N
     """Call off a booked case (งดผ่าตัด) with a reason: postpone it to the waiting list or give it up."""
     user = _user(request, "book")
     result = _run(store.cancel_booking, case_id, body.model_dump(), day=date, actor=_actor(user))
-    return {"result": result, "state": _state(user, date)}
+    return {"result": result, "state": _state(user, date, request)}
 
 
 # ------------------------------------------------------------- supplies and implants
@@ -912,7 +958,8 @@ def admin_add_bed(body: BedIn, request: Request) -> dict:
 @app.patch("/api/admin/beds/{code}")
 def admin_edit_bed(code: str, body: BedIn, request: Request) -> dict:
     user, admin = _admin(request, "roster")
-    return _run(admin.save_bed, body.model_dump(), code=code, actor=_actor(user))
+    return _run(admin.save_bed, body.model_dump(), code=code, actor=_actor(user),
+                keep_type=not can(user.role, "hospital_data"))
 
 
 @app.post("/api/admin/beds/{code}/occupy")
@@ -962,11 +1009,13 @@ def report_csv(request: Request, date_from: str | None = None, date_to: str | No
                      "actual_start", "actual_end", "booked_mins", "actual_mins", "actual_minus_booked", "team_size"])
     for c in _run(store.report_cases, date_from, date_to):
         local = lambda ts: ts.astimezone(_TZ).strftime("%Y-%m-%d %H:%M") if ts else ""  # noqa: E731
-        writer.writerow([c.case_id, local(c.start)[:10], c.room, c.surgeon, c.procedure, c.urgency, local(c.start),
-                         local(c.end), local(c.actual_start), local(c.actual_end), c.booked_mins,
-                         c.actual_mins if c.actual_mins is not None else "",
-                         c.actual_mins - c.booked_mins if c.actual_mins is not None else "", len(c.team)])
-    name = f"orchestra-cases-{date_from or 'last30'}-{date_to or 'today'}.csv"
+        writer.writerow([hospital_io.csv_safe(v) for v in (
+            c.case_id, local(c.start)[:10], c.room, c.surgeon, c.procedure, c.urgency, local(c.start),
+            local(c.end), local(c.actual_start), local(c.actual_end), c.booked_mins,
+            c.actual_mins if c.actual_mins is not None else "",
+            c.actual_mins - c.booked_mins if c.actual_mins is not None else "", len(c.team))])
+    safe = lambda d: d if d and re.fullmatch(r"\d{4}-\d{2}-\d{2}", d) else None  # noqa: E731  (file name)
+    name = f"orchestra-cases-{safe(date_from) or 'last30'}-{safe(date_to) or 'today'}.csv"
     return PlainTextResponse("\ufeff" + out.getvalue(), media_type="text/csv; charset=utf-8",
                              headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
@@ -1199,7 +1248,7 @@ def record_milestone(case_id: str, body: MilestoneIn, request: Request, date: st
     """Record a step of a case (holding, into the OR, incision, closure, out, left recovery) or undo the latest."""
     user = _user(request, "record_times")
     result = _run(store.milestone_update, case_id, body.model_dump(), day=date, actor=_actor(user))
-    return {"result": result, "state": _state(user, date)}
+    return {"result": result, "state": _state(user, date, request)}
 
 
 @app.get("/api/board")
@@ -1303,3 +1352,51 @@ def system_migrate(body: MigrateIn, request: Request) -> dict:
     results = _run(system_status.run_missing, store.db)
     system_status.log_run(store, results, _actor(user))
     return {"results": results, "status": _run(system_status.summary, store, notifier, intake, accounts)}
+
+
+# ------------------------------------------------------------- PDPA (admin)
+
+class RetentionIn(BaseModel):
+    patient_days: int | None = Field(default=None, ge=privacy.MIN_DAYS, le=privacy.MAX_DAYS)
+    access_days: int | None = Field(default=None, ge=privacy.MIN_DAYS, le=privacy.MAX_DAYS)
+
+
+@app.get("/api/privacy/access")
+def privacy_access(request: Request, username: str | None = None, date_from: str | None = None,
+                   date_to: str | None = None, case: str | None = Query(default=None, max_length=40),
+                   hn: str | None = Query(default=None, max_length=50)) -> dict:
+    """Who was shown patients' HN / names, newest first (looking up an HN is itself recorded)."""
+    user = _user(request, "users")
+    out = _run(access.entries, username=username, date_from=date_from, date_to=date_to, case=case, hn=hn,
+               user=user, address=_address(request))
+    out["users"] = sorted({u.username for u in _run(_safe_users)} | {e["username"] for e in out["entries"]})
+    return out
+
+
+def _safe_users() -> list:
+    try:
+        return accounts.store.list()
+    except AuthError:  # no app_users table yet
+        return []
+
+
+@app.get("/api/privacy/retention")
+def privacy_retention(request: Request) -> dict:
+    _user(request, "users")
+    return _run(privacy.retention, store)
+
+
+@app.post("/api/privacy/retention")
+def privacy_set_retention(body: RetentionIn, request: Request) -> dict:
+    user = _user(request, "users")
+    return _run(privacy.set_retention, store, body.patient_days, body.access_days, actor=_actor(user))
+
+
+@app.post("/api/privacy/apply")
+def privacy_apply(body: MigrateIn, request: Request) -> dict:
+    """Remove identity from cases past the retention period now (instead of waiting for the nightly run)."""
+    user = _user(request, "users")
+    if not body.confirm:
+        raise HTTPException(status_code=400, detail="กรุณายืนยันก่อนลบข้อมูล")
+    result = _run(privacy.apply, store, actor=_actor(user))
+    return {"result": result, "retention": _run(privacy.retention, store)}

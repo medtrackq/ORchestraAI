@@ -33,9 +33,11 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
+from urllib.parse import urlsplit
+
 from orchestra_engine import fmt
 
-from .auth import env_admin
+from .auth import LoginLimiter, env_admin
 
 log = logging.getLogger("orchestra.notify")
 
@@ -256,20 +258,47 @@ class WebPushSender:
         self._vapid, self._public = vapid, base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
 
     def send(self, target: Target, payload: dict) -> tuple[str, str | None]:
+        import requests
         from pywebpush import WebPushException, webpush
 
+        if not push_endpoint_ok(target.address):  # saved before the host check existed
+            return "removed", "ที่อยู่รับแจ้งเตือนไม่ใช่บริการ push ที่รองรับ"
         self._load()
+        session = requests.Session()
+        session.max_redirects = 0  # a push service answers directly; never follow a redirect elsewhere
         try:
             webpush({"endpoint": target.address, "keys": target.keys}, json.dumps(payload, ensure_ascii=False),
-                    vapid_private_key=self._vapid, vapid_claims={"sub": self.subject}, ttl=12 * 3600, timeout=10)
+                    vapid_private_key=self._vapid, vapid_claims={"sub": self.subject}, ttl=12 * 3600, timeout=10,
+                    requests_session=session)
             return "sent", None
         except WebPushException as exc:
             code = getattr(exc.response, "status_code", None)
             if code in (404, 410):
                 return "removed", f"การรับแจ้งเตือนของอุปกรณ์นี้หมดอายุ ({code})"
-            return "failed", f"บริการ push ตอบกลับ {code}: {str(exc)[:200]}"
+            return "failed", f"บริการ push ตอบกลับ {code}"  # not the body: it is shown to the user
         except Exception as exc:  # network errors etc.: log, never raise into the app
-            return "failed", str(exc)[:200]
+            log.warning("web push to %s failed: %s", urlsplit(target.address).hostname, exc)
+            return "failed", f"ส่งไม่สำเร็จ ({type(exc).__name__})"
+        finally:
+            session.close()
+
+
+# The browser push services (Chrome/Edge via FCM, Firefox, Safari, Windows). The server POSTs to the
+# endpoint a browser gives it, so it must be one of these and never an address inside the hospital network.
+PUSH_HOSTS = ("fcm.googleapis.com", "android.googleapis.com", "push.services.mozilla.com", "push.apple.com",
+              "notify.windows.com")
+MAX_DEVICES = 10
+
+
+def push_endpoint_ok(endpoint: str) -> bool:
+    try:
+        parts = urlsplit(endpoint)
+        port = parts.port
+    except ValueError:
+        return False
+    host = (parts.hostname or "").lower()
+    return (parts.scheme == "https" and not parts.username and not parts.password and port in (None, 443)
+            and len(endpoint) <= 1000 and any(host == h or host.endswith("." + h) for h in PUSH_HOSTS))
 
 
 class LineSender:
@@ -414,6 +443,7 @@ class Notifier:
         self.store = store
         self.webpush = webpush or WebPushSender(store)
         self.line = line or LineSender()
+        self._code_tries = LoginLimiter(limit=5, window_s=900, per_user=10**9)  # wrong LINE link codes
         self.background = background
         self._pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="notify") if background else None
         self.base_url = (os.environ.get("APP_URL") or os.environ.get("RENDER_EXTERNAL_URL") or "").rstrip("/")
@@ -482,8 +512,11 @@ class Notifier:
     def subscribe(self, user, subscription: dict, label: str | None) -> None:
         endpoint = subscription.get("endpoint") or ""
         keys = subscription.get("keys") or {}
-        if not endpoint.startswith("https://") or not keys.get("p256dh") or not keys.get("auth"):
-            raise ValueError("ข้อมูลการสมัครรับแจ้งเตือนไม่ถูกต้อง")
+        if not push_endpoint_ok(endpoint) or not keys.get("p256dh") or not keys.get("auth"):
+            raise ValueError("ข้อมูลการสมัครรับแจ้งเตือนไม่ถูกต้อง (รองรับ Chrome, Edge, Firefox และ Safari)")
+        mine = [t for t in self.store.targets(user.user_id) if t.channel == "webpush" and t.address != endpoint]
+        if len(mine) >= MAX_DEVICES:
+            raise ValueError(f"เปิดแจ้งเตือนไว้ครบ {MAX_DEVICES} อุปกรณ์แล้ว ให้ปิดแจ้งเตือนในอุปกรณ์ที่ไม่ใช้ก่อน")
         self.store.add_target(Target(user.user_id, "webpush", endpoint,
                                      {"p256dh": keys["p256dh"], "auth": keys["auth"]}, (label or "")[:200] or None))
 
@@ -524,7 +557,13 @@ class Notifier:
                 self.line.reply(reply, "สวัสดีครับ พิมพ์รหัส 6 หลักจากหน้า 'แจ้งเตือน' ใน ORchestraAI เพื่อเชื่อมบัญชี")
             elif event.get("type") == "message" and (event.get("message") or {}).get("type") == "text" and source:
                 text = "".join(ch for ch in event["message"].get("text", "") if ch.isdigit())
+                if len(text) == 6 and self._code_tries.blocked((source, "line")):
+                    if reply:
+                        self.line.reply(reply, "พิมพ์รหัสผิดหลายครั้ง กรุณารอ 15 นาทีแล้วขอรหัสใหม่")
+                    continue
                 user_id = self.store.take_code(text) if len(text) == 6 else None
+                if len(text) == 6 and user_id is None:
+                    self._code_tries.fail((source, "line"))  # 5 wrong codes per LINE account per 15 minutes
                 user = next((u for u in self.users() if u.user_id == user_id), None) if user_id else None
                 if user is not None:
                     self.store.add_target(Target(user.user_id, "line", source, {}, "LINE"))

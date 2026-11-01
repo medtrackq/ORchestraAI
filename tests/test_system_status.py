@@ -184,6 +184,8 @@ def test_go_live_checklist(store, db_url):
     linked = checks["บัญชีแพทย์/พยาบาลผูกกับรายชื่อบุคลากร"]
     assert linked["status"] == "warn" and "dr.a" in linked["detail"] and "nurse.b" not in linked["detail"]
     assert all(c["link"] for c in out["checks"])
+    assert checks["บันทึกการเข้าถึงข้อมูลผู้ป่วย (PDPA)"]["status"] == "ok"
+    assert checks["กำหนดระยะเวลาเก็บข้อมูลผู้ป่วย (PDPA)"]["status"] == "warn"  # not set yet
 
     with psycopg.connect(db_url, autocommit=True) as conn:
         conn.execute("ALTER TABLE case_milestones DISABLE ROW LEVEL SECURITY")

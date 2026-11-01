@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 
 from .admin_store import HospitalAdmin
-from .hospital_io import _blank, _csv_grid, _squash, _text, _xlsx_grids
+from .hospital_io import _blank, _csv_grid, _squash, _text, _xlsx_grids, as_text, list_formula
 from .store import StoreError
 
 CODES_SHEET = "รหัสเวร"
@@ -378,7 +378,7 @@ def build_roster(admin: HospitalAdmin, month: str | None = None, role: str | Non
             cell.alignment = Alignment(horizontal="center")
             if d.weekday() >= 5:
                 cell.fill = weekend
-    picks = DataValidation(type="list", formula1='"' + ",".join(c.code for c in codes)[:250] + '"', allow_blank=True)
+    picks = DataValidation(type="list", formula1=list_formula(c.code for c in codes), allow_blank=True)
     picks.showErrorMessage = False  # combinations (ช/บ) and times are fine too
     ws.add_data_validation(picks)
     picks.add(f"D4:{_letter(len(days) + 2)}{last_row}")
@@ -388,6 +388,7 @@ def build_roster(admin: HospitalAdmin, month: str | None = None, role: str | Non
         sheet.page_setup.fitToWidth, sheet.page_setup.fitToHeight = 1, 0
     wb.active = 2
     out = io.BytesIO()
+    as_text(wb)
     wb.save(out)
     return out.getvalue()
 

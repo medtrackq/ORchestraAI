@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import csv
 import io
+import itertools
 import re
 import zipfile
 from dataclasses import dataclass
@@ -43,6 +44,7 @@ from .seed import HISTORY_TAG
 from .store import StoreError
 
 MAX_BYTES = 5 * 1024 * 1024  # uploaded file
+MAX_SHEETS = 20
 MAX_UNZIPPED = 60 * 1024 * 1024  # an .xlsx is a zip: refuse ones that expand too far
 MAX_ROWS = 5000  # data rows per sheet
 FORM_ROWS = 500  # rows given dropdowns / text format in the downloaded form
@@ -475,6 +477,7 @@ def build_workbook(admin: HospitalAdmin, *, blank: bool = False) -> bytes:
         ws.sheet_properties.pageSetUpPr.fitToPage = True
         ws.page_setup.fitToWidth, ws.page_setup.fitToHeight = 1, 0
     out = io.BytesIO()
+    as_text(wb)
     wb.save(out)
     return out.getvalue()
 
@@ -577,11 +580,14 @@ def _xlsx_grids(content: bytes) -> list[tuple[str, list[list]]]:
 
     try:
         wb = load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+        if len(wb.worksheets) > MAX_SHEETS:
+            raise StoreError(f"ไฟล์มีแผ่นงานเกิน {MAX_SHEETS} แผ่น")
         grids = []
         for ws in wb.worksheets:
             rows = []
-            for row in ws.iter_rows(values_only=True):
-                rows.append(list(row[:60]))
+            # max_col: a sheet that claims thousands of columns must not be read (and padded) in full
+            for row in ws.iter_rows(max_col=60, values_only=True):
+                rows.append(list(row))
                 if len(rows) > MAX_ROWS + 10:
                     break
             grids.append((ws.title, rows))
@@ -606,7 +612,10 @@ def _csv_grid(content: bytes) -> list[list]:
         dialect = csv.Sniffer().sniff(text[:4096], delimiters=",;\t")
     except csv.Error:
         dialect = csv.excel
-    return [row[:60] for row in csv.reader(io.StringIO(text), dialect)][: MAX_ROWS + 11]
+    try:
+        return [row[:60] for row in itertools.islice(csv.reader(io.StringIO(text), dialect), MAX_ROWS + 11)]
+    except csv.Error as exc:  # e.g. a field longer than csv.field_size_limit()
+        raise StoreError(f"อ่านไฟล์ CSV ไม่ได้: {exc}") from exc
 
 
 # ---------------------------------------------------------------- import
@@ -843,6 +852,37 @@ def import_file(admin: HospitalAdmin, filename: str, content: bytes, *, commit: 
         "new": sum(s["new"] for s in sheets), "changed": sum(s["changed"] for s in sheets),
         "unchanged": sum(s["unchanged"] for s in sheets), "errors": sum(len(s["errors"]) for s in sheets),
     }
+
+
+# --------------------------------------------------- safe downloads (no formulas)
+
+FORMULA_START = ("=", "+", "-", "@", "\t", "\r")
+
+
+def as_text(wb) -> None:
+    """Keep typed text as text: openpyxl stores any string starting with "=" as a formula, which would run
+    when someone opens the download (a name or note like =HYPERLINK(...) must stay plain text)."""
+    for ws in wb.worksheets:
+        for row in ws.iter_rows():
+            for cell in row:
+                if cell.data_type == "f":
+                    cell.data_type = "s"
+
+
+def csv_safe(value):
+    """A CSV cell that Excel will not read as a formula (numbers stay numbers)."""
+    if isinstance(value, str) and value.startswith(FORMULA_START):
+        try:
+            float(value)
+            return value
+        except ValueError:
+            return "'" + value
+    return value
+
+
+def list_formula(choices) -> str:
+    """A drop-down list for data validation: quotes doubled, codes holding a comma left out."""
+    return '"' + ",".join(str(c).replace('"', '""') for c in choices if "," not in str(c))[:250] + '"'
 
 
 # --------------------------------------------------- demo data, start over
