@@ -25,7 +25,7 @@ def _labels() -> list[str]:
 
 
 def test_every_button_named_in_the_manual_exists():
-    pages = [p for p in (ROOT / "static").glob("*.html") if p.name != "help.html"]
+    pages = [p for p in (ROOT / "static").glob("*.html") if p.name != "help.html"] + [ROOT / "static" / "feedback.js"]
     source = "\n".join(p.read_text(encoding="utf-8") for p in pages)
     source += "\n".join(p.read_text(encoding="utf-8") for p in ROOT.glob("*.py"))
     source = html.unescape(re.sub(r"\s+", " ", source))

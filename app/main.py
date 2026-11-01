@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import logging
 import re
 import os
 from contextlib import asynccontextmanager
@@ -38,7 +39,7 @@ from pydantic import BaseModel, Field
 
 from .auth import (COOKIE, ROLES, SESSION_HOURS, Accounts, AuthError, DbUserStore, MemoryUserStore,
                    ServiceUnavailable, TooManyAttempts, User, can)
-from . import backup, history_io, hospital_io, privacy, roster_io, system_status
+from . import backup, feedback as fb, history_io, hospital_io, privacy, roster_io, system_status
 from .admin_store import require_supabase
 from .intake_service import IntakeService
 from .notify import DbNotifyStore, MemoryNotifyStore, Notifier, NotifyUnavailable
@@ -69,6 +70,8 @@ store.listener = notifier.handle  # phone notifications after every saved change
 _TZ = ZoneInfo(os.environ.get("APP_TIMEZONE", "Asia/Bangkok"))
 intake = IntakeService()  # Claude pass when ANTHROPIC_API_KEY is set, keyword rules otherwise
 access = privacy.AccessLog(store)  # PDPA: who was shown patients' HN / names
+feedback = fb.Feedback(store, notifier.handle)  # problem reports from users and errors, for the admin
+logging.getLogger("orchestra").addHandler(fb.ErrorLogHandler(feedback))  # errors the app logs are listed too
 
 
 @asynccontextmanager
@@ -89,7 +92,7 @@ async def _lifespan(_app):
 app = FastAPI(title="ORchestraAI", docs_url="/api/docs", redoc_url=None, openapi_url="/api/openapi.json",
               lifespan=_lifespan)
 
-PUBLIC = {"/login", "/help", "/api/login", "/api/health", "/api/line/webhook", "/sw.js", "/manifest.webmanifest",
+PUBLIC = {"/login", "/help", "/api/login", "/api/health", "/api/line/webhook", "/sw.js", "/feedback.js", "/manifest.webmanifest",
           "/icons/icon-192.png", "/icons/icon-512.png", "/icons/apple-touch-icon.png", "/icons/badge-96.png"}
 ALLOWED_WHILE_TEMPORARY = {"/api/me", "/api/password", "/api/logout"}
 
@@ -257,6 +260,12 @@ def login_page() -> FileResponse:
 @app.get("/admin", include_in_schema=False)
 def admin_page() -> FileResponse:
     return FileResponse(ROOT / "static" / "admin.html")
+
+
+@app.get("/feedback.js", include_in_schema=False)
+def feedback_script() -> FileResponse:
+    """The report-a-problem button and the page error reporter, shared by the pages."""
+    return FileResponse(ROOT / "static" / "feedback.js", media_type="text/javascript")
 
 
 @app.get("/sw.js", include_in_schema=False)
@@ -1386,7 +1395,23 @@ class MigrateIn(BaseModel):
 def system_status_view(request: Request) -> dict:
     """SQL files applied or missing, settings (set or not, never values) and the go-live checklist."""
     _user(request, "users")
-    return _run(system_status.summary, store, notifier, intake, accounts)
+    out = _run(system_status.summary, store, notifier, intake, accounts)
+    out["checks"] = out["checks"] + [_feedback_check()]
+    return out
+
+
+def _feedback_check() -> dict:
+    view = feedback.overview()
+    new = [f"เรื่องใหม่ที่ผู้ใช้แจ้ง {view['new_reports']} เรื่อง"] if view["new_reports"] else []
+    new += [f"ข้อผิดพลาดของระบบ {view['new_errors']} แบบ"] if view["new_errors"] else []
+    seen = sum(1 for r in view["reports"] if r["status"] == "SEEN")
+    detail = " · ".join(new) or "ไม่มีเรื่องใหม่"
+    if seen:
+        detail += f" · รับทราบแล้ว รอแก้ {seen} เรื่อง"
+    if not view["ready"]:
+        detail += " · ยังไม่ได้รัน SQL ไฟล์ 016: เก็บไว้ชั่วคราว หายเมื่อเซิร์ฟเวอร์เริ่มใหม่"
+    return {"label": "เรื่องที่ผู้ใช้แจ้ง และข้อผิดพลาดของระบบ", "status": "warn" if new or not view["ready"] else "ok",
+            "detail": detail, "link": "#feedback"}
 
 
 @app.post("/api/system/migrate")
@@ -1400,6 +1425,70 @@ def system_migrate(body: MigrateIn, request: Request) -> dict:
     results = _run(system_status.run_missing, store.db)
     system_status.log_run(store, results, _actor(user))
     return {"results": results, "status": _run(system_status.summary, store, notifier, intake, accounts)}
+
+
+# ------------------------------------------------------------- problem reports and errors
+
+class FeedbackIn(BaseModel):
+    kind: Literal["PROBLEM", "IDEA", "QUESTION"] = "PROBLEM"
+    message: str = Field(min_length=1, max_length=fb.MAX_MESSAGE)
+    page: str | None = Field(default=None, max_length=500)
+
+
+class ClientErrorIn(BaseModel):
+    message: str = Field(max_length=2000)
+    where: str | None = Field(default=None, max_length=500)
+    page: str | None = Field(default=None, max_length=500)
+
+
+class FeedbackUpdateIn(BaseModel):
+    status: Literal["NEW", "SEEN", "DONE"]
+    note: str | None = Field(default=None, max_length=fb.MAX_NOTE)
+
+
+@app.post("/api/feedback")
+def send_feedback(body: FeedbackIn, request: Request) -> dict:
+    """Anyone signed in: a problem, a suggestion or a question (page and time attached, no patient data)."""
+    user = request.state.user
+    result = _run(feedback.submit, user, body.kind, body.message, body.page, request.headers.get("user-agent"))
+    return {"result": result, "mine": feedback.mine(user)}
+
+
+@app.get("/api/feedback/mine")
+def my_feedback(request: Request) -> dict:
+    return {"mine": feedback.mine(request.state.user)}
+
+
+@app.post("/api/client-errors")
+def client_error(body: ClientErrorIn, request: Request) -> dict:
+    """An error in the browser (sent by the page itself)."""
+    recorded = feedback.record_error("browser", body.where or "-", body.message, user=request.state.user, page=body.page)
+    return {"recorded": recorded}
+
+
+@app.get("/api/feedback")
+def feedback_overview(request: Request, done: bool = False) -> dict:
+    """Admin: reports from users and errors of the system, newest first (open ones unless ``done``)."""
+    _user(request, "users")
+    return feedback.overview(show_done=done)
+
+
+@app.patch("/api/feedback/{what}/{item_id}")
+def feedback_update(what: Literal["report", "error"], item_id: int, body: FeedbackUpdateIn, request: Request) -> dict:
+    user = _user(request, "users")
+    if what == "error" and body.status == "SEEN":
+        raise HTTPException(status_code=400, detail="ข้อผิดพลาดมีสถานะ ใหม่ หรือ แก้แล้ว เท่านั้น")
+    result = _run(feedback.update, what, item_id, body.status, body.note, _actor(user))
+    return {"result": result, "overview": feedback.overview()}
+
+
+@app.exception_handler(Exception)
+async def unexpected_error(request: Request, exc: Exception) -> JSONResponse:
+    """Anything not handled: listed for the admin, and a plain message for the person."""
+    user = getattr(request.state, "user", None)
+    await run_in_threadpool(feedback.record_error, "server", f"{request.method} {request.url.path}",
+                            f"{type(exc).__name__}: {exc}", user=user)
+    return JSONResponse({"detail": "เกิดข้อผิดพลาดในระบบ ผู้ดูแลระบบได้รับบันทึกแล้ว กรุณาลองใหม่อีกครั้ง"}, status_code=500)
 
 
 # ------------------------------------------------------------- PDPA (admin)
