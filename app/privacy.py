@@ -30,7 +30,8 @@ from .store import StoreError
 
 log = logging.getLogger("orchestra.privacy")
 
-ACTIONS = {"schedule": "เปิดตารางผ่าตัด", "print": "พิมพ์ใบรายการ / เช็กลิสต์", "lookup": "ค้นหาด้วย HN"}
+ACTIONS = {"schedule": "เปิดตารางผ่าตัด", "print": "พิมพ์ใบรายการ / เช็กลิสต์", "lookup": "ค้นหาด้วย HN",
+           "backup": "ดาวน์โหลดสำรองข้อมูลทั้งหมด"}
 WINDOW = timedelta(minutes=30)
 MIN_DAYS = 30  # shorter would remove identities of cases still being followed up
 MAX_DAYS = 3650
@@ -86,9 +87,13 @@ class AccessLog:
     def record_state(self, user, state: dict, action: str = "schedule", address: str | None = None) -> bool:
         return self.record(user, action, state.get("date"), _codes_of(state), address)
 
-    def record(self, user, action: str, day: str | None, codes: list[str], address: str | None = None) -> bool:
-        """Log one access; False when skipped (nothing shown, or the same view moments ago)."""
-        if not codes or action not in ACTIONS:
+    def record(self, user, action: str, day: str | None, codes: list[str], address: str | None = None,
+               *, patients: int | None = None) -> bool:
+        """Log one access; False when skipped (nothing shown, or the same view moments ago).
+
+        A full backup holds every patient: it is logged with their number and no case codes.
+        """
+        if action not in ACTIONS or (not codes and not patients):
             return False
         now = datetime.now().astimezone()
         key = (user.user_id, action, day)
@@ -102,7 +107,8 @@ class AccessLog:
                 for k in sorted(self._recent, key=lambda k: self._recent[k][0])[:1000]:
                     del self._recent[k]
         row = {"accessed_at": now, "user_id": user.user_id, "username": user.username, "role": user.role,
-               "action": action, "target_day": day, "case_codes": sorted(shown), "patients": len(shown),
+               "action": action, "target_day": day, "case_codes": sorted(shown),
+               "patients": patients if patients is not None else len(shown),
                "address": (address or "")[:64] or None}
         if not self.supabase:
             with self._lock:

@@ -134,6 +134,16 @@
     <ul class="checklist" id="checks"></ul>
   </section>
 
+  <section class="card" id="server" hidden>
+    <header>
+      <div><h2>เซิร์ฟเวอร์ งานตั้งเวลา และการสำรองข้อมูล</h2>
+        <p class="hint">Supabase แผนฟรีไม่มีการสำรองข้อมูลอัตโนมัติ ควรดาวน์โหลดไฟล์สำรองอย่างน้อยสัปดาห์ละครั้ง และเก็บในที่ปลอดภัยของโรงพยาบาล</p></div>
+      <div class="actions"><button class="btn primary" type="button" id="backup">⬇ ดาวน์โหลดสำรองข้อมูลทั้งหมด (.zip)</button></div>
+    </header>
+    <div class="table-scroll"><table><tbody id="server-rows"></tbody></table></div>
+    <p class="hint" style="margin-top:10px">วิธีกู้คืนอยู่ในไฟล์ README.txt ในไฟล์ zip (กู้คืนลงฐานข้อมูลใหม่ที่ว่างเปล่า เช่น โปรเจกต์ Supabase ใหม่)</p>
+  </section>
+
   <section class="card" id="migrations" hidden>
     <header>
       <div><h2>ไฟล์ SQL ในฐานข้อมูล</h2>
@@ -161,6 +171,17 @@
     </div>
   </section>
 </main>
+
+<dialog id="backup-confirm" aria-labelledby="backup-title">
+  <h3 id="backup-title">ดาวน์โหลดสำรองข้อมูลทั้งหมด</h3>
+  <p class="hint">ไฟล์นี้มี <b>ข้อมูลทุกอย่างในฐานข้อมูล รวม HN และชื่อผู้ป่วย</b> เก็บไว้ในที่ปลอดภัยของโรงพยาบาลเหมือนเวชระเบียน
+    อย่าส่งทางแชตหรืออีเมล · การดาวน์โหลดถูกบันทึกในบันทึกการเข้าถึงข้อมูลผู้ป่วย (PDPA)</p>
+  <p class="error" id="backup-error" hidden></p>
+  <div class="actions">
+    <button class="btn" type="button" id="backup-cancel">ยกเลิก</button>
+    <button class="btn primary" type="button" id="backup-ok">ดาวน์โหลด</button>
+  </div>
+</dialog>
 
 <dialog id="confirm" aria-labelledby="confirm-title">
   <h3 id="confirm-title">รัน SQL ที่ยังขาด</h3>
@@ -279,6 +300,27 @@
     }).join('');
   }
 
+  const when = iso => iso ? new Date(iso).toLocaleString('th-TH', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : null;
+  const kb = n => n > 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
+  function renderServer() {
+    const sv = data.server;
+    $('#server').hidden = !sv;
+    if (!sv) return;
+    const hours = Math.floor(sv.uptime_min / 60), mins = sv.uptime_min % 60;
+    const row = (label, text, tone) => `<tr><td>${esc(label)}</td><td>${tone ? `<span class="badge ${tone}">${GLYPH[tone]}</span> ` : ''}${text}</td></tr>`;
+    const b = sv.backup;
+    $('#server-rows').innerHTML = [
+      row('เซิร์ฟเวอร์เริ่มทำงาน', `${esc(when(sv.started_at))} (ทำงานมา ${hours ? hours + ' ชม. ' : ''}${mins} นาที) · เริ่มใหม่ใน 24 ชม. ${sv.boots_24h} ครั้ง`,
+          sv.boots_24h >= 4 ? 'warn' : 'ok'),
+      row('สรุปเคสวันถัดไปที่ยังไม่พร้อม', sv.digest_hour === null ? 'ปิดอยู่ (READINESS_DIGEST_HOUR=off)'
+          : `ทุกวัน ${String(sv.digest_hour).padStart(2, '0')}:00 · ตรวจล่าสุด ${esc(when(sv.digest_last) || 'ยังไม่เคย')}`),
+      row('ลบข้อมูลผู้ป่วยตามระยะเวลา (PDPA)', sv.retention_on ? `ทุกคืน 02:00 · ทำงานล่าสุด ${esc(when(sv.retention_last) || 'ยังไม่เคย')}`
+          : 'ยังไม่ได้ตั้งระยะเวลา (<a href="/privacy">ตั้งที่หน้า PDPA</a>)'),
+      row('สำรองข้อมูลล่าสุด', b ? `${esc(when(b.at))} โดย ${esc(b.by || '-')} · ${b.tables} ตาราง ${b.rows.toLocaleString('th-TH')} แถว ${kb(b.size)}`
+          : 'ยังไม่เคยดาวน์โหลด', b ? 'ok' : 'warn'),
+    ].join('');
+  }
+
   function render() {
     $('#sub').textContent = (data.mode === 'supabase' ? 'เชื่อมฐานข้อมูล Supabase' : 'โหมดสาธิต (ไม่มีฐานข้อมูล)')
       + (data.version ? ` · เวอร์ชัน ${data.version}` : '') + ' · ตรวจเมื่อ ' + new Date().toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
@@ -286,6 +328,7 @@
     renderChecks();
     renderMigrations();
     renderSettings();
+    renderServer();
   }
 
   async function load() {
@@ -313,6 +356,37 @@
   }
 
   $('#reload').addEventListener('click', () => { $('#run-results').innerHTML = ''; load(); });
+  $('#backup').addEventListener('click', () => { $('#backup-error').hidden = true; $('#backup-confirm').showModal(); });
+  $('#backup-cancel').addEventListener('click', () => $('#backup-confirm').close());
+  $('#backup-ok').addEventListener('click', async () => {
+    const ok = $('#backup-ok');
+    ok.disabled = true;
+    ok.textContent = 'กำลังเตรียมไฟล์…';
+    try {
+      const res = await fetch('/api/system/backup.zip');
+      if (!res.ok) {
+        const out = await res.json().catch(() => ({}));
+        throw new Error(out.detail || 'HTTP ' + res.status);
+      }
+      const blob = await res.blob();
+      const name = ((res.headers.get('content-disposition') || '').match(/filename="([^"]+)"/) || [])[1] || 'orchestra-backup.zip';
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = name;
+      document.body.append(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+      $('#backup-confirm').close();
+      await load();  // shows the new "last backup"
+    } catch (e) {
+      $('#backup-error').textContent = 'ดาวน์โหลดไม่สำเร็จ: ' + e.message;
+      $('#backup-error').hidden = false;
+    } finally {
+      ok.disabled = false;
+      ok.textContent = 'ดาวน์โหลด';
+    }
+  });
   $('#run').addEventListener('click', () => {
     $('#confirm-list').innerHTML = plan(data.migrations).map(m => `<li>${esc(m.title)}<br><span class="mono hint">${esc(m.name)}</span></li>`).join('');
     $('#confirm-error').hidden = true;

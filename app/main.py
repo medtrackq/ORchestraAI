@@ -33,12 +33,12 @@ from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from .auth import (COOKIE, ROLES, SESSION_HOURS, Accounts, AuthError, DbUserStore, MemoryUserStore,
                    ServiceUnavailable, TooManyAttempts, User, can)
-from . import hospital_io, privacy, roster_io, system_status
+from . import backup, hospital_io, privacy, roster_io, system_status
 from .admin_store import require_supabase
 from .intake_service import IntakeService
 from .notify import DbNotifyStore, MemoryNotifyStore, Notifier, NotifyUnavailable
@@ -77,6 +77,7 @@ async def _lifespan(_app):
     timers = [DigestTimer(store, notifier.handle, hour=hour)] if hour is not None else []
     if store.mode == "supabase":
         timers.append(privacy.RetentionTimer(store))
+        await run_in_threadpool(system_status.record_boot, store)  # frequent starts = the server sleeps when idle
     for timer in timers:
         timer.start()
     yield
@@ -1406,3 +1407,29 @@ def privacy_apply(body: MigrateIn, request: Request) -> dict:
         raise HTTPException(status_code=400, detail="กรุณายืนยันก่อนลบข้อมูล")
     result = _run(privacy.apply, store, actor=_actor(user))
     return {"result": result, "retention": _run(privacy.retention, store)}
+
+
+@app.get("/api/system/backup.zip")
+def system_backup(request: Request) -> StreamingResponse:
+    """Every table as CSV in a ZIP, with restore scripts (admin). It holds every patient's HN and name,
+    so each download goes into the PDPA access log."""
+    user = _user(request, "users")
+    if store.mode != "supabase":
+        raise HTTPException(status_code=400, detail="โหมดสาธิตไม่มีฐานข้อมูลให้สำรอง")
+    out, manifest = _run(backup.dump, store.db.url)
+    size = out.seek(0, 2)
+    out.seek(0)
+    access.record(user, "backup", None, [], _address(request), patients=backup.patients_in(manifest))
+    system_status.note_backup(store, manifest, size, _actor(user))
+    name = f"orchestra-backup-{store.db.today().isoformat()}.zip"
+
+    def chunks():
+        try:
+            while chunk := out.read(1 << 16):
+                yield chunk
+        finally:
+            out.close()
+
+    return StreamingResponse(chunks(), media_type="application/zip",
+                             headers={"Content-Disposition": f'attachment; filename="{name}"',
+                                      "Content-Length": str(size)})

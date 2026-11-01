@@ -207,5 +207,6 @@ def test_page_loads_on_a_database_without_tables(empty_url):
     out = ss.summary(s, notifier, SimpleNamespace(llm=SimpleNamespace(enabled=False)),
                      SimpleNamespace(store=SimpleNamespace(list=lambda: [])))
     assert out["db_error"] is None and out["migrations"][0]["runnable"]
-    assert [c["label"] for c in out["checks"]] == ["SQL ครบทุกไฟล์", "Row Level Security เปิดทุกตาราง"]
+    # the hospital-data checks need the tables; the backup reminder shows from the start (whatever the time of day)
+    assert [c["label"] for c in out["checks"]] == ["SQL ครบทุกไฟล์", "Row Level Security เปิดทุกตาราง", "สำรองข้อมูล"]
     ss.log_run(s, [{"name": FILES[0], "ok": True}], {"name": "Admin", "role": "admin"})  # no activity table: no error
