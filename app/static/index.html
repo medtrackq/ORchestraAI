@@ -263,7 +263,8 @@
   <section class="card" aria-labelledby="sched-title">
     <div class="card-head">
       <h2 id="sched-title">ตารางห้องผ่าตัด</h2>
-      <div class="stats" id="stats"></div>
+      <div class="stats"><span class="stats" id="stats"></span>
+        <a class="btn" id="print-link" href="/print" target="_blank" rel="noopener" style="padding:3px 12px;font-size:.8rem">🖨 พิมพ์ / WHO checklist</a></div>
     </div>
     <div class="gantt-scroll"><div class="gantt" id="gantt"></div></div>
     <div class="legend">
@@ -699,6 +700,7 @@
     applyTabs();
     $('#day').textContent = STATE.planning_day + (s.now_min ? ' · เวลาปัจจุบันของตาราง ' + hhmm(s.now_min) : '');
     renderBanners();
+    $('#print-link').href = '/print' + (STATE.date ? '?date=' + STATE.date : '');
     $('#stats').innerHTML = `
       <span class="chip ok">จองแล้ว ${s.bookings.length} เคส</span>
       <span class="chip ${s.unscheduled.length ? 'bad' : ''}">ยังไม่ได้จัด ${s.unscheduled.length}</span>
@@ -855,8 +857,10 @@
     const box = $('#detail');
     if (!b) { box.hidden = true; return; }
     box.hidden = false;
+    const printQ = new URLSearchParams({ kind: 'who', case: b.case_id, ...(STATE.date ? { date: STATE.date } : {}) });
     box.innerHTML = `
-      <h3>${esc(b.case_id)} · ${esc(b.procedure)}</h3>
+      <h3 style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center">${esc(b.case_id)} · ${esc(b.procedure)}
+        <a class="btn" href="/print?${printQ}" target="_blank" rel="noopener" style="padding:3px 10px;font-size:.78rem;font-weight:400">🖨 WHO checklist</a></h3>
       <dl>
         <dt>ผู้ป่วย</dt><dd>${esc(b.patient_hn)}${b.patient_name ? ' · ' + esc(b.patient_name) : ''} · ${esc(b.urgency)}${b.frozen ? ' · เริ่มแล้ว (ล็อก)' : ''}${b.airborne ? ' · <b>ติดเชื้อทางอากาศ (ห้องความดันลบ)</b>' : ''}</dd>
         <dt>ห้อง / เวลา</dt><dd>${esc(b.or_id)} ${esc(b.start)}-${esc(b.end)} (ห้องพร้อมใหม่ ${esc(b.cleanup_end)})</dd>

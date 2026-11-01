@@ -25,7 +25,7 @@ from .db import ConflictError, Database, DatabaseUnavailable, World, case_code
 from .intake_service import IntakeContext
 from .store import (Activity, StoreError, actor_name, build_case, check_own_case, check_team, cssd_event, equipment_rows,
                     facility_view, fatigue_log, fatigue_view, parse_time, ready_minute, room_options, staff_skills,
-                    schedule_event, supply_options)
+                    schedule_event, supply_options, with_roles)
 
 
 class DatabaseStore:
@@ -257,7 +257,7 @@ class DatabaseStore:
         return {"case_id": case_id, "readiness": summary}
 
     def _state(self, world: World, activity: list[dict]) -> dict:
-        schedule = world.result.to_dict()
+        schedule = with_roles(world.result.to_dict(), world.hospital)
         bookings = schedule["bookings"]
         for b in bookings:
             row = world.bookings.get(b["case_id"], {})

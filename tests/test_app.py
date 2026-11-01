@@ -380,3 +380,16 @@ def test_readiness_checklist_over_the_api(owner):
     seen = cssd.get("/api/state").json()["readiness"][knee["case_id"]]
     assert seen["status"] == "problem" and seen["items"]["npo"]["note"] is None  # status only, no clinical note
     assert owner.get("/api/state").json()["readiness"][knee["case_id"]]["items"]["npo"]["note"] == "ดื่มน้ำ 07:00"
+
+
+def test_print_page_and_the_data_it_uses(owner, monkeypatch):
+    assert TestClient(app, base_url="https://testserver").get("/print", follow_redirects=False).status_code in (302, 303)
+    assert owner.get("/print").status_code == 200
+    monkeypatch.setenv("HOSPITAL_NAME", "โรงพยาบาลทดสอบ")
+    state = owner.get("/api/state").json()
+    assert state["hospital_name"] == "โรงพยาบาลทดสอบ"
+    team = state["schedule"]["bookings"][0]["team"]
+    assert team[0]["role"] == "SURGEON" and {t["role"] for t in team[1:]} <= {
+        "SURGEON", "ANESTHESIOLOGIST", "SCRUB_NURSE", "CIRCULATING_NURSE"}
+    monkeypatch.delenv("HOSPITAL_NAME")
+    assert owner.get("/api/state").json()["hospital_name"] is None
