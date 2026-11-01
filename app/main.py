@@ -48,6 +48,7 @@ from .store import Forbidden, ScheduleStore, StoreError
 ROOT = Path(__file__).resolve().parent
 FLOW_PAGE = ROOT.parent / "web" / "orchestra-flow.html"
 TIME = r"^\d{2}:\d{2}$"
+DATE = r"^\d{4}-\d{2}-\d{2}$"
 
 _solver = {
     "workers": int(os.environ.get("SOLVER_WORKERS", "2")),
@@ -442,11 +443,25 @@ class CaseIn(BaseModel):
     pending_id: str | None = Field(default=None, max_length=64)  # rebook a request waiting for a slot
     required_supplies: dict[str, int] = Field(default={}, max_length=30)  # supply code -> quantity
     recovery_mins: int | None = Field(default=None, ge=0, le=10080)  # PACU / ICU stay; None = default
+    due_date: str | None = Field(default=None, pattern=DATE)  # operate by (waiting list priority)
 
 
 class SlotIn(BaseModel):
     case: CaseIn
     start: str = Field(pattern=TIME)
+
+
+class SearchIn(SlotIn):
+    days: int = Field(default=14, ge=1, le=28)
+    skip_weekends: bool = True
+
+
+class WaitIn(BaseModel):
+    case: CaseIn
+
+
+class DueIn(BaseModel):
+    due_date: str | None = Field(default=None, pattern=DATE)
 
 
 class EmergencyIn(BaseModel):
@@ -482,6 +497,32 @@ def slot_check(body: SlotIn, request: Request, date: str | None = None) -> dict:
     user = _user(request, "book")
     _own_case(user, body.case)
     return _run(store.slot_check, body.case.model_dump(), body.start, commit=False, day=date, actor=_actor(user))
+
+
+@app.post("/api/slot-search")
+def slot_search(body: SearchIn, request: Request, date: str | None = None) -> dict:
+    """The first free days (up to 3) within ``days`` from ``date``; nothing is booked."""
+    user = _user(request, "book")
+    _own_case(user, body.case)
+    return _run(store.find_slots, body.case.model_dump(), body.start, day=date, days=body.days,
+                skip_weekends=body.skip_weekends, actor=_actor(user))
+
+
+@app.post("/api/waitlist")
+def add_waiting(body: WaitIn, request: Request, date: str | None = None) -> dict:
+    """Put a request on the waiting list without a day."""
+    user = _user(request, "book")
+    _own_case(user, body.case)
+    result = _run(store.add_waiting, body.case.model_dump(), actor=_actor(user))
+    return {"result": result, "state": _state(user, date, request)}
+
+
+@app.patch("/api/pending/{pending_id}")
+def set_due(pending_id: str, body: DueIn, request: Request, date: str | None = None) -> dict:
+    """Set or clear the date a waiting request should be operated by."""
+    user = _user(request, "book")
+    result = _run(store.set_due, pending_id, body.due_date, actor=_actor(user))
+    return {"result": result, "state": _state(user, date, request)}
 
 
 @app.post("/api/bookings")

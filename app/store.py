@@ -276,6 +276,8 @@ class ScheduleStore:
             self.steps: dict[str, dict[str, int]] = {}  # case_id -> holding / incision / closure / left recovery
             self.digests: set[str] = set()
             self.pending: dict[str, SurgeryCase] = {}  # taken off the schedule, waiting for a new slot
+            self.due: dict[str, date] = {}  # request -> date it should be operated by
+            self.waiting_since: dict[str, date] = {}
             self._ids = Counter()
             self.activity: list[Activity] = [Activity(
                 "reset", "โหลดข้อมูลตัวอย่าง",
@@ -328,6 +330,7 @@ class ScheduleStore:
             "options": self.options(),
             "activity": [a.__dict__ for a in reversed(self.activity[-30:])],
             "pending": self.pending_rows(),
+            "waitlist_ready": True,
             "readiness": self._readiness(),
             "readiness_ready": True,
             "readiness_next": None,  # the demo has one day
@@ -438,6 +441,7 @@ class ScheduleStore:
             raise StoreError("ตารางที่คำนวณได้ไม่ผ่านการตรวจ: " + "; ".join(errors[:3]))
         for cid in set(self.result.assignments) - set(result.assignments):
             self.pending[cid] = self.result.cases[cid]  # keep it visible until it is rebooked or cancelled
+            self.waiting_since[cid] = date.today()
         for cid in result.assignments:
             self.pending.pop(cid, None)
         self.result = result
@@ -453,16 +457,90 @@ class ScheduleStore:
         return self._next_id(prefix, commit=commit)
 
     def pending_rows(self) -> list[dict]:
+        from .waitlist import due_info, order_key
+
         by_name = {p["name"]: p["id"] for p in self.procedures}
         names = {s.staff_id: s.name for s in self.hospital.staff}
-        rank = {Urgency.EMERGENCY: 0, Urgency.URGENT: 1, Urgency.ELECTIVE: 2}
-        return [
+        today = date.today()
+        rows = [
             {"id": cid, "code": cid, "patient_hn": c.patient_hn, "patient_name": c.patient_name,
              "surgeon_id": c.surgeon_id, "surgeon": names.get(c.surgeon_id), "procedure_id": by_name.get(c.procedure),
              "procedure": c.procedure, "urgency": c.urgency.value, "duration_mins": c.duration_mins,
-             "airborne": c.airborne, "was_on": None, "supplies": dict(c.required_supplies)}
-            for cid, c in sorted(self.pending.items(), key=lambda kv: (rank[kv[1].urgency], kv[0]))
+             "airborne": c.airborne, "was_on": None, "supplies": dict(c.required_supplies),
+             **due_info(self.due.get(cid), today),
+             "waiting_days": (today - self.waiting_since[cid]).days if cid in self.waiting_since else None}
+            for cid, c in self.pending.items()
         ]
+        return sorted(rows, key=order_key)
+
+    def find_slots(self, data: dict, start_text: str, *, day: str | None = None, days: int = 14,
+                   skip_weekends: bool = True, actor: dict | None = None) -> dict:
+        """The demo has one day: the same check as ``slot_check`` from the requested time (or now)."""
+        from . import waitlist as wl
+
+        requested = parse_time(start_text)
+        due = wl.parse_due(data.get("due_date"))
+        if data.get("urgency") == "EMERGENCY":
+            raise StoreError("เคสฉุกเฉินใช้แท็บฉุกเฉิน (แทรกในวันนี้ทันที)")
+        with self._lock:
+            start = wl.search_start(requested, max(0, self.result.now_min))
+            found, skipped = [], []
+            if start is None:
+                skipped.append({"date": None, "label": "วันตัวอย่าง", "reason": "เลยเวลาของวันนี้แล้ว"})
+            else:
+                case = build_case(self.hospital, data, self._case_id(data, "R", commit=False, actor=actor))
+                check = self.opt.check_slot(self.result, case, start, verbose=False)
+                row = wl.found_row(None, check, self.hospital, requested, due)
+                if row:
+                    found.append(row)
+                else:
+                    skipped.append(wl.not_found(None, check))
+        return {"from": None, "to": None, "days": 1, "searched": 1, "found": found, "skipped": skipped,
+                "carry_on": None, "next_from": None, "due_date": due.isoformat() if due else None,
+                "requested": fmt(requested), "single_day": True}
+
+    def add_waiting(self, data: dict, *, actor: dict | None = None) -> dict:
+        from . import waitlist as wl
+
+        if (data.get("urgency") or "ELECTIVE") == "EMERGENCY":
+            raise StoreError("เคสฉุกเฉินต้องแทรกในตารางทันที ไม่เข้ารายการรอ")
+        if data.get("pending_id"):
+            raise StoreError("คำขอนี้อยู่ในรายการรออยู่แล้ว")
+        due = wl.parse_due(data.get("due_date"))
+        with self._lock:
+            case = build_case(self.hospital, data, self._next_id("R", commit=False))
+            check_own_case(actor, case.surgeon_id)
+            same = next((cid for cid, c in self.pending.items() if c.patient_hn == case.patient_hn
+                         and c.surgeon_id == case.surgeon_id and c.procedure == case.procedure), None)
+            if same:
+                raise StoreError(f"ผู้ป่วยรายนี้มีคำขอหัตถการนี้ในรายการรออยู่แล้ว ({same})")
+            cid = self._next_id("R", commit=True)
+            self.pending[cid] = case
+            self.waiting_since[cid] = date.today()
+            if due:
+                self.due[cid] = due
+            note = f" · ควรผ่าตัดภายใน {wl.thai_date(due)}" if due else ""
+            self.activity.append(Activity("waitlist", f"เพิ่มเข้ารายการรอผ่าตัด {cid} {case.procedure}{note}", [],
+                                          actor=actor_name(actor)))
+        return {"id": cid, "code": cid, "due_date": due.isoformat() if due else None}
+
+    def set_due(self, pending_id: str, due_text: str | None, *, actor: dict | None = None) -> dict:
+        from . import waitlist as wl
+
+        due = wl.parse_due(due_text)
+        with self._lock:
+            case = self.pending.get(pending_id)
+            if case is None:
+                raise StoreError("คำขอนี้ถูกจองหรือยกเลิกไปแล้ว กรุณาโหลดใหม่")
+            check_own_case(actor, case.surgeon_id)
+            if due:
+                self.due[pending_id] = due
+            else:
+                self.due.pop(pending_id, None)
+            title = (f"กำหนดวันที่ควรผ่าตัด {pending_id}: {wl.thai_date(due)}" if due
+                     else f"ยกเลิกกำหนดวันที่ควรผ่าตัด {pending_id}")
+            self.activity.append(Activity("waitlist", title, [], actor=actor_name(actor)))
+        return {"id": pending_id, "due_date": due.isoformat() if due else None}
 
     def cancel_pending(self, pending_id: str, *, data: dict | None = None, actor: dict | None = None) -> dict:
         reason, note, _ = cx.parse(data, outcome_needed=False) if data and data.get("reason") else ("UNSPECIFIED", None, "")
@@ -590,9 +668,16 @@ class ScheduleStore:
             out = check.to_dict()
             out["booked"] = False
             if commit and check.assignment is not None:
+                from .waitlist import parse_due
+
+                due = parse_due(data.get("due_date"))
                 self._commit(check.result)
                 if not data.get("pending_id"):
                     self._next_id("R", commit=True)
+                if due:
+                    self.due[case.case_id] = due
+                else:
+                    self.due.pop(case.case_id, None)
                 out["booked"] = True
                 self._emit(schedule_event("booking", date.today(), check.result, case.case_id, actor))
                 self.activity.append(Activity(

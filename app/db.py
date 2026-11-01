@@ -714,9 +714,10 @@ class Database:
                     conn.execute(
                         "UPDATE surgery_requests SET status = 'RESCHEDULED' WHERE request_id = %s", (row["request_id"],)
                     )
+            since = ", waitlisted_at = NOW()" if world.has("surgery_requests", "waitlisted_at") else ""
             for cid in removed:
                 conn.execute(
-                    "UPDATE surgery_requests SET status = 'PENDING' WHERE request_id = %s",
+                    f"UPDATE surgery_requests SET status = 'PENDING'{since} WHERE request_id = %s",
                     (world.bookings[cid]["request_id"],),
                 )
             if removed:
@@ -736,6 +737,9 @@ class Database:
                 if world.has("surgery_requests", "airborne_isolation"):
                     cols.append("airborne_isolation")
                     values.append(case.airborne)
+                if world.has("surgery_requests", "due_date"):
+                    cols.append("due_date")
+                    values.append(request.get("due_date"))
                 if request.get("existing"):  # a request waiting to be rebooked keeps its id and history
                     cur = conn.execute(
                         f"UPDATE surgery_requests SET {', '.join(f'{c} = %s' for c in cols[1:])} "
@@ -901,10 +905,13 @@ class Database:
         cols = {r["column_name"] for r in conn.execute(
             "SELECT column_name FROM information_schema.columns WHERE table_name = 'surgery_requests'")}
         airborne = "r.airborne_isolation" if "airborne_isolation" in cols else "false"
+        due = "r.due_date" if "due_date" in cols else "NULL::date"
+        since = "COALESCE(r.waitlisted_at, r.created_at)" if "waitlisted_at" in cols else "r.created_at"
         rows = conn.execute(
             f"""SELECT r.request_id, r.patient_hn, r.patient_name, r.primary_surgeon_id, r.procedure_id,
                        r.urgency_level, r.raw_nlp_input, r.ai_predicted_duration_mins, r.preferred_date_start,
-                       r.created_at, {airborne} AS airborne, p.name AS procedure_name, s.full_name AS surgeon_name
+                       r.created_at, {airborne} AS airborne, {due} AS due_date, {since} AS waiting_since,
+                       p.name AS procedure_name, s.full_name AS surgeon_name
                 FROM surgery_requests r
                 LEFT JOIN procedures p ON p.procedure_id = r.procedure_id
                 LEFT JOIN staff s ON s.staff_id = r.primary_surgeon_id
@@ -912,7 +919,7 @@ class Database:
                     SELECT 1 FROM scheduled_surgeries x
                     WHERE x.request_id = r.request_id AND x.status IS DISTINCT FROM 'CANCELLED')
                 ORDER BY CASE r.urgency_level WHEN 'EMERGENCY' THEN 0 WHEN 'URGENT' THEN 1 ELSE 2 END,
-                         r.preferred_date_start NULLS LAST, r.created_at
+                         {due} NULLS LAST, {since}
                 LIMIT 200"""
         ).fetchall()
         held: dict = {}
@@ -923,9 +930,15 @@ class Database:
                 ([r["request_id"] for r in rows],),
             ):
                 held.setdefault(h["request_id"], {})[h["code"]] = h["quantity"]
-        return [
+        from .waitlist import due_info, order_key
+
+        today = self.today()
+        out = [
             {"id": str(r["request_id"]), "code": case_code(r["request_id"], r["urgency_level"], set()),
              "supplies": held.get(r["request_id"], {}),
+             **due_info(r["due_date"], today),
+             "waiting_days": max(0, (today - r["waiting_since"].astimezone(self.tz).date()).days)
+             if r["waiting_since"] else None,
              "patient_hn": r["patient_hn"], "patient_name": r["patient_name"],
              "surgeon_id": str(r["primary_surgeon_id"]) if r["primary_surgeon_id"] else None,
              "surgeon": r["surgeon_name"], "procedure_id": str(r["procedure_id"]) if r["procedure_id"] else None,
@@ -934,6 +947,36 @@ class Database:
              "was_on": r["preferred_date_start"].isoformat() if r["preferred_date_start"] else None}
             for r in rows
         ]
+        return sorted(out, key=order_key)
+
+    @staticmethod
+    def has_waitlist(conn: psycopg.Connection) -> bool:
+        """Migration 015: due dates on waiting requests."""
+        return conn.execute(
+            """SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public'
+                              AND table_name = 'surgery_requests' AND column_name = 'due_date') AS ok""").fetchone()["ok"]
+
+    def add_waiting(self, conn: psycopg.Connection, world: World, case, request: dict, due: date | None) -> None:
+        """A request that goes straight onto the waiting list (no day yet)."""
+        from .store import StoreError
+
+        same = conn.execute(
+            """SELECT request_id, urgency_level FROM surgery_requests
+               WHERE status = 'PENDING' AND patient_hn = %s AND primary_surgeon_id = %s
+                 AND (procedure_id = %s OR (procedure_id IS NULL AND raw_nlp_input = %s))""",
+            (case.patient_hn, uuid.UUID(case.surgeon_id), request.get("procedure_id"), request.get("raw_text")),
+        ).fetchone()
+        if same:
+            raise StoreError(f"ผู้ป่วยรายนี้มีคำขอหัตถการนี้ในรายการรออยู่แล้ว ({case_code(same['request_id'], same['urgency_level'], set())})")
+        cols = ["request_id", "patient_hn", "patient_name", "primary_surgeon_id", "procedure_id", "urgency_level",
+                "raw_nlp_input", "ai_predicted_duration_mins", "status"]
+        values = [request["request_id"], case.patient_hn, request["patient_name"], uuid.UUID(case.surgeon_id),
+                  request.get("procedure_id"), case.urgency.value, request.get("raw_text"), case.duration_mins, "PENDING"]
+        for col, value in (("airborne_isolation", case.airborne), ("due_date", due), ("waitlisted_at", datetime.now(self.tz))):
+            if world.has("surgery_requests", col):
+                cols.append(col)
+                values.append(value)
+        conn.execute(f"INSERT INTO surgery_requests ({', '.join(cols)}) VALUES ({', '.join(['%s'] * len(cols))})", values)
 
     @staticmethod
     def has_cancellations(conn: psycopg.Connection) -> bool:

@@ -46,6 +46,7 @@ TITLES = {  # Thai names for the page (files not listed show the first comment l
     "20261111000000_or_blocks.sql": "บล็อกห้องผ่าตัดรายสัปดาห์",
     "20261112000000_privacy.sql": "บันทึกการเข้าถึงข้อมูลผู้ป่วย และลบข้อมูลตามระยะเวลาเก็บ (PDPA)",
     "20261113000000_case_history.sql": "ประวัติผ่าตัดย้อนหลังที่นำเข้าจาก Excel (ใช้ประเมินเวลาผ่าตัด)",
+    "20261114000000_waiting_list.sql": "รายการรอผ่าตัด: วันที่ควรได้ผ่าตัดและการเรียงลำดับ",
 }
 ROLES_TH = {"SURGEON": "ศัลยแพทย์", "ANESTHESIOLOGIST": "วิสัญญีแพทย์", "SCRUB_NURSE": "พยาบาลส่งเครื่องมือ",
             "CIRCULATING_NURSE": "พยาบาลช่วยรอบนอก"}
