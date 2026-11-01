@@ -103,6 +103,11 @@
   .mini input[type="text"] { min-width: 160px; }
   .delivery { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: .82rem; padding: 4px 0; border-top: 1px dashed var(--border); }
   .delivery .late { color: var(--bad); font-weight: 600; }
+  .eq-rows { display: grid; gap: 6px; margin-bottom: 8px; }
+  .eq-row label:first-child { flex: 1 1 220px; }
+  .eq-row label + label { flex: 0 1 90px; }
+  textarea { resize: vertical; }
+  .card-meta { display: grid; gap: 6px; margin: 10px 0 14px; }
   .people { max-height: 220px; overflow: auto; border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; display: grid; gap: 4px; }
   .people label { display: flex; align-items: center; gap: 8px; color: var(--text); font-size: .84rem; }
 
@@ -118,7 +123,7 @@
 <header class="top">
   <div class="brand">
     <span class="orb" aria-hidden="true"></span>
-    <div><h1>ข้อมูลโรงพยาบาล</h1><p>เวรและวันลา · ห้องผ่าตัดและเตียง · บุคลากร · เครื่องมือ · หัตถการ · วัสดุ/รากเทียม — ระบบใช้ข้อมูลนี้จัดตารางทันที</p></div>
+    <div><h1 id="page-title">ข้อมูลโรงพยาบาล</h1><p id="page-sub">เวรและวันลา · ห้องผ่าตัดและเตียง · บุคลากร · เครื่องมือ · หัตถการ · preference card · วัสดุ/รากเทียม — ระบบใช้ข้อมูลนี้จัดตารางทันที</p></div>
   </div>
   <nav>
     <a class="btn" href="/">← กลับไปตารางผ่าตัด</a>
@@ -134,6 +139,7 @@
     <button class="tab" role="tab" aria-selected="false" data-tab="staff" data-perm="hospital_view">บุคลากร</button>
     <button class="tab" role="tab" aria-selected="false" data-tab="equipment" data-perm="hospital_view equipment">เครื่องมือ</button>
     <button class="tab" role="tab" aria-selected="false" data-tab="procedures" data-perm="hospital_view">หัตถการ</button>
+    <button class="tab" role="tab" aria-selected="false" data-tab="cards" data-perm="cards">Preference card</button>
     <button class="tab" role="tab" aria-selected="false" data-tab="inventory" data-perm="inventory_view">วัสดุ/รากเทียม</button>
   </div>
 
@@ -266,6 +272,21 @@
     <div id="proc-add-box"><h3>เพิ่มหัตถการ</h3><form id="form-proc" class="row-item"></form></div>
   </section>
 
+  <!-- Surgeon preference cards -->
+  <section class="card" data-panel="cards" hidden>
+    <h2>Preference card ของศัลยแพทย์</h2>
+    <p class="hint">เวลา ทีม และเครื่องมือที่แพทย์แต่ละท่านใช้ต่อหัตถการ · ฟอร์มจองเคสใส่ค่าเหล่านี้ให้เองเมื่อเลือกแพทย์และหัตถการ (แก้รายเคสได้)
+      · Intake Agent เทียบกับเวลาผ่าตัดจริงที่บันทึกไว้ และเตือนเมื่อเวลาใน card ต่างจากเคสจริงมาก</p>
+    <p class="readonly" id="cards-unlinked" hidden>บัญชีนี้ยังไม่ได้ผูกกับรายชื่อศัลยแพทย์ ให้ผู้ดูแลระบบผูกบัญชีกับรายชื่อของคุณในแท็บผู้ใช้ (หน้าตารางผ่าตัด) ก่อน</p>
+    <div class="toolbar" style="margin-top:12px">
+      <label id="card-surgeon-box">ศัลยแพทย์<select id="card-surgeon"></select></label>
+      <label>ค้นหาหัตถการ<input type="search" id="card-q" placeholder="ชื่อหัตถการ"></label>
+      <label style="display:flex;flex-direction:row;align-items:center;gap:6px;color:var(--text)"><input type="checkbox" id="card-off">เฉพาะที่เวลาต่างจากเคสจริง</label>
+    </div>
+    <div class="rows" id="cards"></div>
+    <div id="card-add-box" hidden><h3>เพิ่ม preference card</h3><form id="form-card" class="row-item"></form></div>
+  </section>
+
   <!-- Supplies and implants -->
   <section class="card" data-panel="inventory" hidden>
     <h2>วัสดุสิ้นเปลืองและรากเทียม</h2>
@@ -356,7 +377,7 @@
     document.querySelectorAll('[data-panel]').forEach(p => { p.hidden = p.dataset.panel !== name; });
     $('#affected').hidden = true;
     const load = { roster: loadRoster, rooms: loadRooms, staff: loadStaff, equipment: loadEquipment, inventory: loadInventory,
-                   procedures: loadProcedures }[name];
+                   procedures: loadProcedures, cards: loadCards }[name];
     history.replaceState(null, '', '#' + name);
     load().catch(e => toast(e.message));
   }
@@ -810,6 +831,174 @@
     });
   });
 
+  // ------------------------------------------------------- preference cards
+  const CARD_ROLE_TH = { ANESTHESIOLOGIST: 'วิสัญญีแพทย์', SCRUB_NURSE: 'พยาบาลส่งเครื่องมือ', CIRCULATING_NURSE: 'พยาบาลช่วยรอบนอก', SURGEON: 'ศัลยแพทย์ผู้ช่วย' };
+  const NEW_CARD_TEAM = { ANESTHESIOLOGIST: 1, SCRUB_NURSE: 1, CIRCULATING_NURSE: 1, SURGEON: 0 };  // the booking default team
+  let CARDS = null;
+
+  async function loadCards() {
+    CARDS = await api('/api/admin/cards');
+    const sel = $('#card-surgeon'), keep = sel.value;
+    sel.innerHTML = (CARDS.surgeon_only ? '' : '<option value="">ทุกท่าน</option>') + CARDS.surgeons.map(x =>
+      `<option value="${esc(x.id)}">${esc(x.name)}${x.active ? '' : ' (ปิดใช้งาน)'}</option>`).join('');
+    if ([...sel.options].some(o => o.value === keep)) sel.value = keep;
+    $('#card-surgeon-box').hidden = CARDS.surgeon_only;
+    $('#cards-unlinked').hidden = !(CARDS.surgeon_only && !CARDS.own);
+    renderCards();
+  }
+
+  const teamText = roles => Object.keys(CARD_ROLE_TH).filter(r => (roles || {})[r] > 0).map(r => `${CARD_ROLE_TH[r]} ${roles[r]}`).join(' · ') || 'ไม่ใช้ทีมเพิ่ม';
+  const equipmentText = list => list.map(e => e.count > 1 ? `${e.name} ×${e.count}` : e.name).join(', ') || 'ไม่มี';
+
+  function equipmentRow(e, types) {
+    return `<div class="mini eq-row">
+      <label>ชนิดเครื่องมือ<select name="eq_type">${types.map(t => `<option value="${esc(t.id)}" ${t.id === e.type_id ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}</select></label>
+      <label>จำนวน<input type="number" name="eq_count" min="1" max="5" value="${e.count || 1}"></label>
+      <button class="btn small danger" type="button" data-eq-remove>เอาออก</button></div>`;
+  }
+
+  function cardFields(c, data) {
+    const roles = Object.keys(data.roles).map(r => `<label>${esc(CARD_ROLE_TH[r] || r)}
+        <input type="number" name="role_${esc(r)}" min="0" max="${data.roles[r]}" value="${(c.roles || {})[r] ?? 0}"></label>`).join('');
+    return `<div class="grid">
+        <label>เวลาผ่าตัดที่จอง (นาที)<input type="number" name="duration" min="15" max="1440" step="5" required value="${c.duration ?? 60}"></label>
+        <label>คลาดเคลื่อนได้ ± (นาที)<input type="number" name="stddev" min="0" max="240" step="5" value="${c.stddev ?? 15}"></label>
+      </div>
+      <fieldset><legend>ทีม (ไม่นับศัลยแพทย์เจ้าของเคส · 0 = ไม่ต้องใช้)</legend><div class="grid">${roles}</div></fieldset>
+      <fieldset><legend>เครื่องมือที่ใช้ทุกครั้ง</legend>
+        <div class="eq-rows">${(c.equipment || []).map(e => equipmentRow(e, data.equipment_types)).join('')}</div>
+        ${data.equipment_types.length ? '<button class="btn small" type="button" data-eq-add>+ เพิ่มเครื่องมือ</button>'
+          : '<p class="hint">ยังไม่มีชนิดเครื่องมือในระบบ</p>'}
+      </fieldset>
+      <label>หมายเหตุ (เช่น ท่าผู้ป่วย ไหมที่ใช้ ขนาดถุงมือ)<textarea name="notes" rows="2" maxlength="1000">${esc(c.notes || '')}</textarea></label>`;
+  }
+
+  function wireEquipment(form) {
+    form.addEventListener('click', e => {
+      if (e.target.matches('[data-eq-add]')) {
+        const used = new Set([...form.querySelectorAll('[name="eq_type"]')].map(x => x.value));
+        const next = CARDS.equipment_types.find(t => !used.has(t.id)) || CARDS.equipment_types[0];
+        form.querySelector('.eq-rows').insertAdjacentHTML('beforeend', equipmentRow({ type_id: next.id, count: 1 }, CARDS.equipment_types));
+        form.querySelector('.eq-rows .eq-row:last-child select').focus();
+      } else if (e.target.matches('[data-eq-remove]')) {
+        e.target.closest('.eq-row').remove();
+      }
+    });
+  }
+
+  function readCard(form) {
+    const roles = Object.fromEntries(Object.keys(CARDS.roles).map(r => [r, Number(form.elements['role_' + r].value || 0)]));
+    const counts = {};
+    form.querySelectorAll('.eq-row').forEach(row => {
+      const t = row.querySelector('[name="eq_type"]').value, n = Number(row.querySelector('[name="eq_count"]').value || 0);
+      if (n > 0) counts[t] = Math.min(5, (counts[t] || 0) + n);  // the same type twice adds up
+    });
+    return { duration: Number(form.elements['duration'].value), stddev: Number(form.elements['stddev'].value || 0), roles,
+      equipment: Object.entries(counts).map(([type_id, count]) => ({ type_id, count })),
+      notes: form.elements['notes'].value.trim() || null };
+  }
+
+  function historyLine(c) {
+    const h = c.history;
+    if (!h) return '<p class="hint">ยังไม่มีเคสของคู่นี้ที่บันทึกเวลาผ่าตัดจริง</p>';
+    const text = `เวลาจริงจาก ${h.n} เคส: เฉลี่ย ${h.mean} นาที${h.sd !== null ? ` (±${h.sd})` : ''}`;
+    if (!h.suggest) return `<p class="hint">${text}</p>`;
+    const gap = h.mean - c.duration;
+    return `<div class="affected">${text} · ${gap > 0 ? 'นานกว่า' : 'เร็วกว่า'} card ${Math.abs(gap)} นาที
+      <button class="btn small primary" type="button" data-suggest="${h.suggest}" data-suggest-sd="${h.suggest_sd}">ใช้ค่าจากเคสจริง ${h.suggest} ±${h.suggest_sd} นาที</button></div>`;
+  }
+
+  function renderCards() {
+    const data = CARDS, sid = $('#card-surgeon').value, q = $('#card-q').value.trim().toLowerCase(), off = $('#card-off').checked;
+    const open = new Set([...document.querySelectorAll('#cards details[open]')].map(d => d.dataset.card));
+    const shown = data.cards.filter(c => (!sid || c.surgeon_id === sid) && (!q || c.procedure.toLowerCase().includes(q)) && (!off || c.history?.suggest));
+    $('#cards').innerHTML = shown.map(c => `<details class="row-item" data-card="${esc(c.id)}" ${open.has(c.id) ? 'open' : ''}>
+        <summary class="title" style="cursor:pointer"><span><b>${esc(c.procedure)}</b>${sid ? '' : ` <small class="hint">${esc(c.surgeon)}</small>`}</span>
+          <span style="display:flex;gap:4px;flex-wrap:wrap"><span class="badge">${c.duration} นาที ±${c.stddev ?? 15}</span>${c.history?.suggest ? '<span class="badge warn">ต่างจากเคสจริง</span>' : ''}</span></summary>
+        <div class="card-meta"><p class="hint">ทีม: ${esc(teamText(c.roles))} · เครื่องมือ: ${esc(equipmentText(c.equipment))}${c.notes ? ' · ' + esc(c.notes) : ''}</p>
+        ${historyLine(c)}</div>
+        <form>${cardFields(c, data)}<div class="actions">
+          <button class="btn danger" type="button" data-card-delete>ลบ card</button>
+          <button class="btn primary" type="submit">บันทึก</button></div></form>
+      </details>`).join('')
+      || `<p class="hint">${data.cards.length ? 'ไม่พบ card ตามตัวกรอง' : 'ยังไม่มี preference card'}</p>`;
+    $('#cards').querySelectorAll('details').forEach(d => {
+      const form = d.querySelector('form'), c = data.cards.find(x => x.id === d.dataset.card);
+      wireEquipment(form);
+      form.addEventListener('submit', e => {
+        e.preventDefault();
+        busy(form.querySelector('[type="submit"]'), async () => {
+          await api('/api/admin/cards/' + c.id, readCard(form), 'PATCH');
+          showAffected([], `บันทึก card ${c.procedure} ของ ${c.surgeon} แล้ว ใช้กับการจองครั้งถัดไป`);
+          await loadCards();
+        });
+      });
+      d.querySelector('[data-card-delete]').addEventListener('click', e => {
+        if (!confirm(`ลบ preference card ${c.procedure} ของ ${c.surgeon}?\nการจองครั้งถัดไปจะใช้เวลามาตรฐานของหัตถการและทีมมาตรฐานแทน`)) return;
+        busy(e.target, async () => {
+          await api('/api/admin/cards/' + c.id, {}, 'DELETE');
+          showAffected([], `ลบ card ${c.procedure} ของ ${c.surgeon} แล้ว`);
+          await loadCards();
+        });
+      });
+      d.querySelector('[data-suggest]')?.addEventListener('click', e => {
+        form.elements['duration'].value = e.target.dataset.suggest;
+        form.elements['stddev'].value = e.target.dataset.suggestSd;
+        e.target.textContent = 'ใส่ค่าให้แล้ว กด "บันทึก" เพื่อใช้';
+        e.target.disabled = true;
+      });
+    });
+    renderCardAdd();
+  }
+
+  // Add form: only surgeon + procedure pairs that have no card yet.
+  function renderCardAdd() {
+    const data = CARDS, form = $('#form-card');
+    const surgeons = data.surgeons.filter(x => x.active);
+    $('#card-add-box').hidden = !surgeons.length || !data.procedures.length;
+    if ($('#card-add-box').hidden) return;
+    if (!form.innerHTML) {
+      form.innerHTML = `<div class="grid">
+          <label>ศัลยแพทย์<select name="surgeon_id" required>${surgeons.map(x => `<option value="${esc(x.id)}">${esc(x.name)}</option>`).join('')}</select></label>
+          <label>หัตถการ<select name="procedure_id" required></select></label></div>
+        ${cardFields({ roles: NEW_CARD_TEAM, stddev: 15 }, data)}
+        <div class="actions"><button class="btn primary" type="submit">เพิ่ม card</button></div>`;
+      if ($('#card-surgeon').value && surgeons.some(x => x.id === $('#card-surgeon').value)) form.elements['surgeon_id'].value = $('#card-surgeon').value;
+      form.elements['surgeon_id'].addEventListener('change', () => fillCardProcedures(true));
+      form.elements['procedure_id'].addEventListener('change', () => { delete form.dataset.durationTouched; fillDuration(); });
+      form.elements['duration'].addEventListener('input', () => { form.dataset.durationTouched = '1'; });
+      wireEquipment(form);
+    }
+    fillCardProcedures(false);
+  }
+  function fillCardProcedures(reset) {
+    const form = $('#form-card'), sel = form.elements['procedure_id'], keep = reset ? '' : sel.value;
+    const taken = new Set(CARDS.cards.filter(c => c.surgeon_id === form.elements['surgeon_id'].value).map(c => c.procedure_id));
+    const free = CARDS.procedures.filter(p => !taken.has(p.id));
+    sel.innerHTML = free.map(p => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('') || '<option value="">มี card ครบทุกหัตถการแล้ว</option>';
+    if (free.some(p => p.id === keep)) sel.value = keep; else delete form.dataset.durationTouched;
+    form.querySelector('[type="submit"]').disabled = !free.length;
+    fillDuration();
+  }
+  function fillDuration() {
+    const form = $('#form-card'), p = CARDS.procedures.find(x => x.id === form.elements['procedure_id'].value);
+    if (p && !form.dataset.durationTouched) form.elements['duration'].value = p.duration;
+  }
+  $('#form-card').addEventListener('submit', e => {
+    e.preventDefault();
+    const form = e.target;
+    busy(form.querySelector('[type="submit"]'), async () => {
+      const body = { ...readCard(form), surgeon_id: form.elements['surgeon_id'].value, procedure_id: form.elements['procedure_id'].value };
+      await api('/api/admin/cards', body);
+      const proc = CARDS.procedures.find(p => p.id === body.procedure_id), doc = CARDS.surgeons.find(x => x.id === body.surgeon_id);
+      showAffected([], `เพิ่ม card ${proc ? proc.name : ''} ของ ${doc ? doc.name : ''} แล้ว`);
+      form.innerHTML = '';
+      await loadCards();
+    });
+  });
+  ['#card-surgeon', '#card-off'].forEach(id => $(id).addEventListener('change', () => { if (CARDS) renderCards(); }));
+  $('#card-q').addEventListener('input', () => { if (CARDS) renderCards(); });
+
   // ------------------------------------------------------------- inventory
   const SUPPLY_CAT_TH = { IMPLANT: 'รากเทียม', CONSUMABLE: 'วัสดุสิ้นเปลือง' };
   let SUPPLIES = null;
@@ -961,8 +1150,14 @@
     tabs.forEach(t => { t.hidden = !t.dataset.perm.split(' ').some(can); });
     const allowed = tabs.filter(t => !t.hidden).map(t => t.dataset.tab);
     if (!allowed.length) {
-      document.querySelector('main').innerHTML = '<div class="card"><h2>ไม่มีสิทธิ์</h2><p class="hint">หน้านี้สำหรับผู้ดูแลระบบ ผู้จัดตาราง และ CSSD/คลังวัสดุ</p></div>';
+      document.querySelector('main').innerHTML = '<div class="card"><h2>ไม่มีสิทธิ์</h2><p class="hint">หน้านี้สำหรับผู้ดูแลระบบ ผู้จัดตาราง ศัลยแพทย์ (preference card) และ CSSD/คลังวัสดุ</p></div>';
       return;
+    }
+    if (allowed.length === 1 && allowed[0] === 'cards') {  // surgeons: only their own preference cards
+      $('#page-title').textContent = 'Preference card ของฉัน';
+      $('#page-sub').textContent = 'เวลา ทีม และเครื่องมือที่ใช้ในแต่ละหัตถการ — ฟอร์มจองเคสใช้ค่านี้ทันที';
+      document.title = 'Preference card · ORchestraAI';
+      document.querySelector('.tabs').hidden = true;
     }
     const wanted = location.hash.slice(1);
     selectTab(allowed.includes(wanted) ? wanted : allowed[0]);

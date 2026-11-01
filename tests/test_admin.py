@@ -455,3 +455,114 @@ def test_notification_store_in_the_database(store, db_url):
     with __import__("psycopg").connect(db_url, autocommit=True) as conn:
         conn.execute("DROP TABLE notify_targets")
     assert not notify_store.ready() and n.status(user) == {"ready": False, "kinds": status["kinds"]}
+
+
+# ------------------------------------------------------------------ preference cards
+
+def _new_pair(data, surgeon_name):
+    surgeon = next(s for s in data["surgeons"] if s["name"].startswith(surgeon_name))
+    taken = {c["procedure_id"] for c in data["cards"] if c["surgeon_id"] == surgeon["id"]}
+    return surgeon, [p for p in data["procedures"] if p["id"] not in taken]
+
+
+def test_preference_cards_are_edited_and_reach_the_booking_form(admin, store):
+    from app.store import StoreError
+
+    data = admin.cards(ADMIN)
+    assert data["cards"] and data["own"] is None and data["surgeon_only"] is False
+    assert {"ANESTHESIOLOGIST", "SCRUB_NURSE", "CIRCULATING_NURSE", "SURGEON"} == set(data["roles"])
+    surgeon, free = _new_pair(data, "Dr.Napat")
+    proc = free[0]
+    state = store.state(_tomorrow(store))
+    units = {e["type"]: e["units"] for e in state["options"]["equipment_types"]}
+    tray = next(t for t in data["equipment_types"] if units.get(t["name"], 0) >= 2)
+    made = admin.save_card({"surgeon_id": surgeon["id"], "procedure_id": proc["id"], "duration": 95, "stddev": 20,
+                            "roles": {"ANESTHESIOLOGIST": 0, "SCRUB_NURSE": 2, "CIRCULATING_NURSE": 1, "SURGEON": 0},
+                            "equipment": [{"type_id": tray["id"], "count": 2}], "notes": " ท่านอนตะแคง "}, actor=ADMIN)
+    card = next(c for c in admin.cards(ADMIN)["cards"] if c["id"] == made["id"])
+    assert (card["duration"], card["stddev"], card["notes"], card["history"]) == (95, 20, "ท่านอนตะแคง", None)
+    assert card["roles"] == {"ANESTHESIOLOGIST": 0, "SCRUB_NURSE": 2, "CIRCULATING_NURSE": 1, "SURGEON": 0}
+    assert card["equipment"] == [{"type_id": tray["id"], "name": tray["name"], "count": 2}]
+    with pytest.raises(StoreError, match="อยู่แล้ว"):
+        admin.save_card({"surgeon_id": surgeon["id"], "procedure_id": proc["id"], "duration": 60})
+
+    # The booking form (and the Intake Agent) use the card straight away.
+    day = _tomorrow(store)
+    state = store.state(day)
+    option = next(c for c in state["options"]["cards"]
+                  if c["surgeon_id"] == surgeon["id"] and c["procedure_id"] == proc["id"])
+    assert option["duration"] == 95 and option["equipment"] == [tray["name"], tray["name"]]
+    request = _request(state, "Dr.Napat", proc["name"], "HN-PC1")
+    assert store.slot_check(request, "09:00", commit=True, day=day)["booked"]
+    [booking] = [b for b in store.state(day)["schedule"]["bookings"] if b["procedure"] == proc["name"]]
+    staff = {p["id"]: p["role"] for p in admin.staff()["staff"]}
+    team = [staff[m["staff_id"]] for m in booking["team"] if m["staff_id"] != surgeon["id"]]
+    assert sorted(team) == ["CIRCULATING_NURSE", "SCRUB_NURSE", "SCRUB_NURSE"]  # no anesthesiologist on this card
+    assert len(booking["equipment"]) == 2  # two units of the same tray
+
+    # Edit: surgeon and procedure stay, the rest changes; equipment can be removed.
+    admin.save_card({"surgeon_id": "ignored", "procedure_id": "ignored", "duration": 80, "stddev": 10,
+                     "roles": {"ANESTHESIOLOGIST": 1}, "equipment": []}, card_id=made["id"], actor=ADMIN)
+    card = next(c for c in admin.cards(ADMIN)["cards"] if c["id"] == made["id"])
+    assert (card["surgeon_id"], card["procedure_id"], card["duration"], card["equipment"], card["notes"]) == (
+        surgeon["id"], proc["id"], 80, [], None)
+    admin.delete_card(made["id"], actor=ADMIN)
+    assert all(c["id"] != made["id"] for c in admin.cards(ADMIN)["cards"])
+    with pytest.raises(StoreError, match="ไม่พบ"):
+        admin.delete_card(made["id"])
+
+
+def test_preference_card_validation(admin):
+    from app.store import StoreError
+
+    data = admin.cards(ADMIN)
+    surgeon, free = _new_pair(data, "Dr.Napat")
+    base = {"surgeon_id": surgeon["id"], "procedure_id": free[0]["id"], "duration": 60}
+    for bad, message in [({"duration": 10}, "เวลาผ่าตัด"), ({"stddev": 500}, "คลาดเคลื่อน"),
+                         ({"roles": {"ANESTHESIOLOGIST": 9}}, "ANESTHESIOLOGIST"), ({"roles": {"PORTER": 1}}, "บทบาท"),
+                         ({"equipment": [{"type_id": str(uuid4()), "count": 1}]}, "ชนิดเครื่องมือ"),
+                         ({"equipment": [{"type_id": "nope", "count": 1}]}, "ชนิดเครื่องมือ"),
+                         ({"surgeon_id": data["equipment_types"][0]["id"]}, "ไม่พบศัลยแพทย์"),
+                         ({"equipment": [{"type_id": t["id"], "count": 5} for t in data["equipment_types"][:5]]}, "20")]:
+        with pytest.raises(StoreError, match=message):
+            admin.save_card({**base, **bad})
+    with pytest.raises(StoreError, match="ไม่พบ preference card"):
+        admin.save_card({"duration": 60}, card_id=str(uuid4()))
+
+
+def test_surgeons_edit_only_their_own_cards(admin):
+    from app.store import Forbidden
+
+    data = admin.cards(ADMIN)
+    mine = data["cards"][0]
+    other = next(c for c in data["cards"] if c["surgeon_id"] != mine["surgeon_id"])
+    me = {"name": mine["surgeon"], "username": "doc", "role": "surgeon", "staff_id": mine["surgeon_id"]}
+    view = admin.cards(me)
+    assert view["surgeon_only"] and view["own"] == mine["surgeon_id"]
+    assert view["cards"] and {c["surgeon_id"] for c in view["cards"]} == {mine["surgeon_id"]}
+    assert [s["id"] for s in view["surgeons"]] == [mine["surgeon_id"]]
+    admin.save_card({"duration": mine["duration"] + 5, "roles": mine["roles"]}, card_id=mine["id"], actor=me)
+    with pytest.raises(Forbidden):
+        admin.save_card({"duration": 60}, card_id=other["id"], actor=me)
+    with pytest.raises(Forbidden):
+        admin.delete_card(other["id"], actor=me)
+    _, free = _new_pair(data, mine["surgeon"])
+    with pytest.raises(Forbidden):
+        admin.save_card({"surgeon_id": other["surgeon_id"], "procedure_id": free[0]["id"], "duration": 60}, actor=me)
+    unlinked = admin.cards({**me, "staff_id": None})
+    assert unlinked["cards"] == [] and unlinked["surgeons"] == [] and unlinked["surgeon_only"]
+
+
+def test_card_suggests_a_time_from_recorded_cases(admin):
+    data = admin.cards(ADMIN)
+    card = next(c for c in data["cards"] if c["history"] and c["history"]["n"] >= 3)
+    history = card["history"]
+    assert history["mean"] > 0 and ("suggest" in history) == (abs(history["mean"] - card["duration"]) >= 15)
+    admin.save_card({"duration": history["mean"] + 60, "stddev": 5, "roles": card["roles"],
+                     "equipment": card["equipment"]}, card_id=card["id"], actor=ADMIN)
+    after = next(c for c in admin.cards(ADMIN)["cards"] if c["id"] == card["id"])
+    assert after["history"]["suggest"] == 5 * round(history["mean"] / 5)
+    assert after["history"]["suggest_sd"] >= 5
+    assert after["equipment"] == card["equipment"]  # saved back unchanged
+    admin.save_card({"duration": after["history"]["suggest"], "roles": card["roles"]}, card_id=card["id"], actor=ADMIN)
+    assert "suggest" not in next(c for c in admin.cards(ADMIN)["cards"] if c["id"] == card["id"])["history"]

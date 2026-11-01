@@ -20,7 +20,7 @@ from orchestra_engine import StaffRole
 
 from .db import supply_available
 from .db_store import DatabaseStore
-from .store import StoreError
+from .store import Forbidden, StoreError
 
 CODE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,19}$")
 TAG = re.compile(r"^[A-Z][A-Z0-9_]{1,49}$")
@@ -34,6 +34,11 @@ SUPPLY_CATEGORIES = ("IMPLANT", "CONSUMABLE")
 BED_TYPES = ("PACU", "ICU_SURGICAL")
 BED_STATUSES = ("AVAILABLE", "CLOSED")
 INFECTION_LEVELS = ("CLEAN", "CONTAMINATED", "DIRTY")
+CARD_ROLES = {  # role -> most people a card may ask for (the primary surgeon is not counted)
+    StaffRole.ANESTHESIOLOGIST: 3, StaffRole.SCRUB_NURSE: 4, StaffRole.CIRCULATING_NURSE: 4, StaffRole.SURGEON: 3,
+}
+HISTORY_MIN_CASES = 3  # suggest a new card time only from at least this many recorded cases
+SUGGEST_GAP = 15  # ... when the recorded mean is this many minutes away from the card
 SUPPLY_CODE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,49}$")
 MAX_DAYS = 120  # one shift / leave request
 CHECK_DAYS = 31  # days ahead checked for bookings that no longer fit
@@ -557,6 +562,130 @@ class HospitalAdmin:
             self._log(conn, title, [(data.get("note") or "").strip()[:200]], actor)
             affected = self._affected(conn, self.db.today(), until.date() if until else self.db.today())
         return {"bed": code, "affected": affected}
+
+    # ---------------------------------------------------- preference cards
+
+    @staticmethod
+    def _own(actor: dict | None, surgeon_id: str) -> None:
+        """Surgeons may only see and change their own preference cards."""
+        if actor and actor.get("role") == "surgeon" and actor.get("staff_id") != surgeon_id:
+            raise Forbidden("ศัลยแพทย์แก้ได้เฉพาะ preference card ของตัวเอง")
+
+    def cards(self, actor: dict | None = None) -> dict:
+        from statistics import mean, pstdev
+
+        surgeon_only = bool(actor and actor.get("role") == "surgeon")
+        own = actor.get("staff_id") if surgeon_only else None  # None for a surgeon account not linked to staff
+        with self.store._transaction(write=False) as conn:
+            types = {r["eq_type_id"]: r["name"] for r in conn.execute("SELECT eq_type_id, name FROM equipment_types ORDER BY name")}
+            surgeons = [{"id": str(r["staff_id"]), "name": r["full_name"], "active": r["is_active"]} for r in conn.execute(
+                "SELECT staff_id, full_name, is_active FROM staff WHERE role = 'SURGEON' ORDER BY full_name")
+                if not surgeon_only or str(r["staff_id"]) == own]
+            procedures = [{"id": str(r["procedure_id"]), "name": r["name"], "duration": r["default_duration_mins"]}
+                          for r in conn.execute("SELECT procedure_id, name, default_duration_mins FROM procedures ORDER BY name")]
+            minutes: dict[tuple[str, str], list[float]] = {}
+            for h in self.db.history(conn):
+                minutes.setdefault((h.surgeon_id, h.procedure_id), []).append(h.minutes)
+            rows = conn.execute(
+                """SELECT c.*, s.full_name, p.name AS procedure_name FROM surgeon_preference_cards c
+                   JOIN staff s ON s.staff_id = c.surgeon_id JOIN procedures p ON p.procedure_id = c.procedure_id
+                   ORDER BY s.full_name, p.name"""
+            ).fetchall()
+        cards = []
+        for r in rows:
+            sid, pid = str(r["surgeon_id"]), str(r["procedure_id"])
+            if surgeon_only and sid != own:
+                continue
+            equipment: dict[str, int] = {}
+            for t in r["required_equipment_types"] or []:
+                key = str(t)
+                equipment[key] = equipment.get(key, 0) + 1
+            seen = minutes.get((sid, pid), [])
+            history = None
+            if seen:
+                avg = mean(seen)
+                history = {"n": len(seen), "mean": round(avg), "sd": round(pstdev(seen)) if len(seen) > 1 else None}
+                if len(seen) >= HISTORY_MIN_CASES and abs(avg - r["historical_avg_duration_mins"]) >= SUGGEST_GAP:
+                    history["suggest"] = int(5 * round(avg / 5))
+                    history["suggest_sd"] = max(5, int(5 * round(pstdev(seen) / 5)))
+            cards.append({
+                "id": str(r["card_id"]), "surgeon_id": sid, "surgeon": r["full_name"], "procedure_id": pid,
+                "procedure": r["procedure_name"], "duration": r["historical_avg_duration_mins"],
+                "stddev": r["historical_stddev_mins"], "roles": r["required_staff_roles"] or {},
+                "equipment": [{"type_id": k, "name": types.get(uuid.UUID(k), "?"), "count": n} for k, n in equipment.items()],
+                "notes": r["special_notes"], "history": history,
+            })
+        return {"cards": cards, "surgeons": surgeons, "procedures": procedures,
+                "equipment_types": [{"id": str(k), "name": v} for k, v in types.items()],
+                "roles": {role: limit for role, limit in CARD_ROLES.items()}, "own": own, "surgeon_only": surgeon_only}
+
+    def save_card(self, data: dict, *, card_id: str | None = None, actor: dict | None = None) -> dict:
+        duration = int(_number(data.get("duration"), 15, 1440, "เวลาผ่าตัด (นาที)"))
+        stddev = int(_number(data.get("stddev", 15), 0, 240, "ความคลาดเคลื่อน (นาที)"))
+        roles = {}
+        for role, count in (data.get("roles") or {}).items():
+            if role not in CARD_ROLES:
+                raise StoreError(f"บทบาทไม่ถูกต้อง: {role}")
+            roles[role] = int(_number(count, 0, CARD_ROLES[role], f"จำนวน {role}"))  # 0 = not needed (kept)
+        equipment: list[uuid.UUID] = []
+        for item in data.get("equipment") or []:
+            count = int(_number(item.get("count", 1), 0, 5, "จำนวนเครื่องมือ"))
+            equipment += [_uuid(item.get("type_id"), "ชนิดเครื่องมือ")] * count
+        if len(equipment) > 20:
+            raise StoreError("ใส่เครื่องมือได้ไม่เกิน 20 ชิ้นต่อ card")
+        notes = (data.get("notes") or "").strip()[:1000] or None
+        with self.store._transaction(write=True) as conn:
+            if card_id is None:
+                surgeon_id, procedure_id = _uuid(data.get("surgeon_id"), "ศัลยแพทย์"), _uuid(data.get("procedure_id"), "หัตถการ")
+            else:
+                row = conn.execute("SELECT surgeon_id, procedure_id FROM surgeon_preference_cards WHERE card_id = %s",
+                                   (_uuid(card_id, "preference card"),)).fetchone()
+                if row is None:
+                    raise StoreError("ไม่พบ preference card นี้")
+                surgeon_id, procedure_id = row["surgeon_id"], row["procedure_id"]
+            self._own(actor, str(surgeon_id))
+            surgeon = conn.execute("SELECT full_name FROM staff WHERE staff_id = %s AND role = 'SURGEON'",
+                                   (surgeon_id,)).fetchone()
+            procedure = conn.execute("SELECT name FROM procedures WHERE procedure_id = %s", (procedure_id,)).fetchone()
+            if surgeon is None or procedure is None:
+                raise StoreError("ไม่พบศัลยแพทย์หรือหัตถการนี้")
+            known = {r["eq_type_id"] for r in conn.execute("SELECT eq_type_id FROM equipment_types WHERE eq_type_id = ANY(%s)",
+                                                         (list(set(equipment)),))}
+            if set(equipment) - known:
+                raise StoreError("ไม่พบชนิดเครื่องมือบางรายการ")
+            values = (duration, stddev, Jsonb(roles), Jsonb([str(e) for e in equipment]), notes)
+            if card_id is None:
+                try:
+                    card_id = str(conn.execute(
+                        """INSERT INTO surgeon_preference_cards (historical_avg_duration_mins, historical_stddev_mins,
+                               required_staff_roles, required_equipment_types, special_notes, surgeon_id, procedure_id)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING card_id""", (*values, surgeon_id, procedure_id),
+                    ).fetchone()["card_id"])
+                except psycopg.errors.UniqueViolation as exc:
+                    raise StoreError(f"{surgeon['full_name']} มี preference card ของ {procedure['name']} อยู่แล้ว") from exc
+                title = f"เพิ่ม preference card {surgeon['full_name']} · {procedure['name']}"
+            else:
+                conn.execute(
+                    """UPDATE surgeon_preference_cards SET historical_avg_duration_mins = %s, historical_stddev_mins = %s,
+                           required_staff_roles = %s, required_equipment_types = %s, special_notes = %s WHERE card_id = %s""",
+                    (*values, _uuid(card_id, "preference card")))
+                title = f"แก้ไข preference card {surgeon['full_name']} · {procedure['name']}"
+            team = ", ".join(f"{role} x{n}" for role, n in roles.items() if n) or "ไม่มีทีมเพิ่ม"
+            self._log(conn, title, [f"{duration} ± {stddev} นาที · {team} · เครื่องมือ {len(equipment)} ชิ้น"], actor)
+        return {"id": card_id}
+
+    def delete_card(self, card_id: str, *, actor: dict | None = None) -> dict:
+        with self.store._transaction(write=True) as conn:
+            row = conn.execute(
+                """SELECT c.surgeon_id, s.full_name, p.name FROM surgeon_preference_cards c
+                   JOIN staff s ON s.staff_id = c.surgeon_id JOIN procedures p ON p.procedure_id = c.procedure_id
+                   WHERE c.card_id = %s""", (_uuid(card_id, "preference card"),)).fetchone()
+            if row is None:
+                raise StoreError("ไม่พบ preference card นี้")
+            self._own(actor, str(row["surgeon_id"]))
+            conn.execute("DELETE FROM surgeon_preference_cards WHERE card_id = %s", (_uuid(card_id, "preference card"),))
+            self._log(conn, f"ลบ preference card {row['full_name']} · {row['name']}", [], actor)
+        return {"deleted": card_id}
 
     # ---------------------------------------------------------- procedures
 
