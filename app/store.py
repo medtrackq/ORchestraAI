@@ -420,11 +420,17 @@ class ScheduleStore:
     def readiness_next(self) -> dict | None:
         return None
 
-    def claim_digest(self, day: str) -> bool:
-        if day in self.digests:
+    def claim_digest(self, day: str, kind: str = "readiness") -> bool:
+        key = day if kind == "readiness" else f"{kind}:{day}"
+        if key in self.digests:
             return False
-        self.digests.add(day)
+        self.digests.add(key)
         return True
+
+    def waitlist_due(self) -> list[dict]:
+        from .waitlist import alerts
+
+        return alerts(self.pending_rows())
 
     # ------------------------------------------------------------- writes
 

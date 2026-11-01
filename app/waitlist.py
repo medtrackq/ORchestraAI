@@ -89,3 +89,16 @@ def not_found(day: date | None, check) -> dict:
     reasons = check.result.unscheduled.get(check.case.case_id) or ["ไม่มีช่วงที่ทุก Agent ผ่านพร้อมกัน"]
     return {"date": day.isoformat() if day else None, "label": thai_date(day) if day else "วันตัวอย่าง",
             "reason": "; ".join(reasons[:2])}
+
+
+def alerts(rows: list[dict]) -> list[dict]:
+    """Waiting cases past or near the date they should be operated by, most urgent first."""
+    due = [r for r in rows if r.get("due_status") in ("overdue", "soon")]
+    return sorted(due, key=lambda r: (r["days_left"], r.get("code") or ""))
+
+
+def digest_event(day: str, rows: list[dict]) -> dict:
+    """The daily reminder of waiting cases past or near their due date (case codes only, no patient identity)."""
+    return {"type": "waitlist_digest", "day": day, "cases": [
+        {"code": r["code"], "procedure": r["procedure"], "surgeon": r.get("surgeon"), "surgeon_id": r.get("surgeon_id"),
+         "status": r["due_status"], "days_left": r["days_left"], "due_date": r["due_date"]} for r in alerts(rows)]}
