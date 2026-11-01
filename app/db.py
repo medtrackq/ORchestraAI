@@ -704,7 +704,7 @@ class Database:
                     (row["schedule_id"], row["or_id"], row["start_time"], row["end_time"]),
                 )
                 if cur.rowcount != 1:
-                    raise ConflictError(f"{cid} changed in the database while scheduling")
+                    raise ConflictError(f"{cid} ถูกแก้ในฐานข้อมูลระหว่างคำนวณ")
             for cid in changed:
                 row = world.bookings[cid]
                 a = after.assignments[cid]
@@ -743,7 +743,7 @@ class Database:
                         [*values[1:], request_id],
                     )
                     if cur.rowcount != 1:
-                        raise ConflictError(f"{cid}: the waiting request was booked or cancelled meanwhile")
+                        raise ConflictError(f"{cid}: คำขอที่รอจัดถูกจองหรือยกเลิกไปแล้วระหว่างนี้")
                     if world.supply_ids:
                         conn.execute("DELETE FROM supply_reservations WHERE request_id = %s AND status = 'RESERVED'",
                                      (request_id,))
@@ -762,7 +762,7 @@ class Database:
             if activity is not None:
                 self.log_activity(conn, world, activity)
         except psycopg.errors.ExclusionViolation as exc:
-            raise ConflictError("the database already holds an overlapping booking") from exc
+            raise ConflictError("ในฐานข้อมูลมีการจองที่ทับช่วงเวลานี้อยู่แล้ว") from exc
 
     @staticmethod
     def log_activity(conn: psycopg.Connection, world: World, activity: dict) -> None:

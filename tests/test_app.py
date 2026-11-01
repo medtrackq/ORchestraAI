@@ -252,7 +252,7 @@ def test_required_skills_reach_the_engine(owner):
     body = {"case": _case(required_staff_skills={"SCRUB_NURSE": ["CARDIAC"]}), "start": "10:00"}
     r = owner.post("/api/slot-check", json=body).json()
     staffing = next(v for v in r["verdicts"] if v["agent"] == "Staffing Agent")
-    assert any(i["note"] == "nobody has this skill" for i in staffing["items"])
+    assert any(i["note"] == "ไม่มีใครมีทักษะนี้" for i in staffing["items"])
     assert not any(b["case_id"] == r["case_id"] for b in r["result"]["bookings"])
 
     bad = {"case": _case(required_staff_skills={"SCRUB_NURSE": ["drop table"]}), "start": "10:00"}
@@ -289,7 +289,7 @@ def test_supplies_are_checked_when_booking(owner):
     body = {"case": _case(surgeon_id="SUR-ONCALL", required_supplies={"ROBO-DRAPE": 1}), "start": "17:00"}
     r = owner.post("/api/slot-check", json=body).json()
     equipment = next(v for v in r["verdicts"] if v["agent"] == "Equipment & CSSD Agent")
-    assert not equipment["ok"] and "need 1, only 0" in equipment["items"][-1]["note"]
+    assert not equipment["ok"] and "ต้องใช้ 1 แต่เหลือเพียง 0" in equipment["items"][-1]["note"]
     assert "Robotic drape kit" in r["result"]["unscheduled"][-1]["reasons"][0]
 
     body = {"case": _case(surgeon_id="SUR-ONCALL", required_supplies={"MESH-15": 1}), "start": "17:00"}

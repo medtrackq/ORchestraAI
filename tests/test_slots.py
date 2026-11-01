@@ -67,10 +67,10 @@ def test_equipment_conflict_is_negotiated_to_next_ready_slot():
     assert verdicts[STAFFING].ok and verdicts[FACILITY].ok
     assert not verdicts[EQUIPMENT].ok
     assert verdicts[EQUIPMENT].ready_at == hm("12:00")
-    assert "sterilizing" in verdicts[EQUIPMENT].summary()
+    assert "ทำให้ปราศจากเชื้อที่ CSSD ถึง 12:00" in verdicts[EQUIPMENT].summary()
     assert check.assignment.start_min == hm("12:00")
     assert check.result.assignments["B1"] == booked.assignments["B1"]
-    assert any("rejected by Equipment" in line for line in check.log)
+    assert any("ไม่ผ่าน Equipment" in line for line in check.log)
     _valid(check.result, rooms, units, staff, beds)
 
 
@@ -80,7 +80,7 @@ def test_busy_room_and_surgeon_are_reported_with_the_blocking_case():
     b1 = booked.assignments["B1"]
     check = opt.check_slot(booked, case, b1.start_min, verbose=False)
     verdicts = {v.agent: v for v in check.verdicts}
-    assert not verdicts[STAFFING].ok and "busy with B1" in verdicts[STAFFING].summary()
+    assert not verdicts[STAFFING].ok and "ติดเคส B1" in verdicts[STAFFING].summary()
     assert check.assignment.start_min >= b1.end_min
     _valid(check.result, rooms, units, staff, beds)
 
@@ -91,7 +91,7 @@ def test_impossible_request_returns_reasons():
     check = opt.check_slot(booked, case, hm("09:00"), verbose=False)
     assert check.assignment is None
     assert "N1" in check.result.unscheduled
-    assert any("no conflict-free slot" in line for line in check.log)
+    assert any("ไม่มีช่วงที่จองได้" in line for line in check.log)
 
 
 def test_results_export_to_json():

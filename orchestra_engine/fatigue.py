@@ -21,6 +21,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Iterable, Mapping
 
+from . import thai
 from .models import StaffMember, SurgeryCase, Urgency
 from .results import Assignment
 from .timeutil import MINUTES_PER_DAY, fmt
@@ -77,19 +78,19 @@ class FatigueIssue:
         return (self.staff_id, self.case_id, self.kind)
 
     def detail(self) -> str:
-        h = lambda m: f"{m / 60:.1f} h"  # noqa: E731
+        h = thai.hours
         if self.kind == "weekly":
-            text = f"{self.name}: {h(self.actual_mins)} in 7 days > {h(self.limit_mins)} (+{self.minutes} min)"
+            text = f"{self.name}: 7 วัน {h(self.actual_mins)} เกินเกณฑ์ {h(self.limit_mins)} (+{self.minutes} นาที)"
         elif self.kind == "daily":
-            text = f"{self.name}: {h(self.actual_mins)} today > {h(self.limit_mins)} (+{self.minutes} min)"
+            text = f"{self.name}: วันนี้ {h(self.actual_mins)} เกินเกณฑ์ {h(self.limit_mins)} (+{self.minutes} นาที)"
         elif self.kind == "rest":
-            after = self.after_case or "a late case on the previous day"
-            text = (f"{self.name}: {self.case_id} starts {self.minutes} min before the {h(self.limit_mins)} rest "
-                    f"after {after} ends ({fmt(self.until)})")
+            after = f"เคส {self.after_case}" if self.after_case else "เคสดึกของเมื่อวาน"
+            text = (f"{self.name}: {self.case_id} เริ่มก่อนครบเวลาพัก {h(self.limit_mins)} หลัง{after} "
+                    f"{self.minutes} นาที (พักครบ {fmt(self.until)})")
         else:
-            text = (f"{self.name}: {self.case_id} ends at night, only {h(self.actual_mins)} rest before the next "
-                    f"booking at {fmt(self.until)} (needs {h(self.limit_mins)})")
-        return text + (" [EMERGENCY override]" if self.override else "") + (" [already started]" if self.locked else "")
+            text = (f"{self.name}: {self.case_id} เลิกดึก ได้พักเพียง {h(self.actual_mins)} ก่อนเคสถัดไป "
+                    f"{fmt(self.until)} (ต้องพัก {h(self.limit_mins)})")
+        return text + (" [ฉุกเฉิน: ยอมเกินเกณฑ์]" if self.override else "") + (" [เริ่มไปแล้ว]" if self.locked else "")
 
     def to_dict(self) -> dict:
         return {

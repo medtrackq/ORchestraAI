@@ -36,14 +36,14 @@ def test_planned_closure_keeps_the_room_free():
     rooms = [OperatingRoom("OR-1", closures=[(hm("08:00"), hm("12:00"), "deep cleaning")])]
     _, result = solve(rooms, team("A"), [case("X", preferred_start=hm("08:00"))])
     assert result.assignments["X"].start_min == hm("12:00")
-    assert any("reopens after closure (deep cleaning)" in why for why in result.assignments["X"].reasoning)
+    assert any("เปิดอีกครั้งหลังปิดห้อง (deep cleaning)" in why for why in result.assignments["X"].reasoning)
 
 
 def test_room_closed_all_day_is_reported_with_the_reason():
     rooms = [OperatingRoom("OR-1", closures=[(0, 24 * 60, "air handling repair")])]
     _, result = solve(rooms, team("A"), [case("X")])
     reason = result.unscheduled["X"][0]
-    assert "closed" in reason and "air handling repair" in reason
+    assert "ปิด" in reason and "air handling repair" in reason
 
 
 def test_closure_moves_booked_cases_when_the_day_is_replanned():
@@ -56,7 +56,7 @@ def test_closure_moves_booked_cases_when_the_day_is_replanned():
               for r in rooms]
     opt = ORchestraOptimizer(closed, [], staff, time_limit_s=10, num_workers=4)
     errors = validate_schedule(day, cases, closed, [], staff)
-    assert any("is closed 08:00-13:00 (repair)" in e for e in errors)
+    assert any("ปิด 08:00-13:00 (repair)" in e for e in errors)
     after = opt.reschedule(day, cases, now_min=hm("07:00"), verbose=False)
     assert validate_schedule(after, cases, closed, [], staff) == []
     assert len(after.assignments) == 2 and after.changes
@@ -80,7 +80,7 @@ def test_airborne_case_needs_negative_pressure_and_long_cleaning():
     assert a.or_id == "OR-NP" and a.cleanup_end_min - a.end_min == 90
 
     _, result = solve([OperatingRoom("OR-1")], team("A"), [case("TB", airborne=True)])
-    assert "no room with [NEGATIVE_PRESSURE]" in result.unscheduled["TB"][0]
+    assert "ไม่มีห้องที่มี [NEGATIVE_PRESSURE]" in result.unscheduled["TB"][0]
 
 
 def test_slot_scan_names_the_closure():
@@ -88,5 +88,5 @@ def test_slot_scan_names_the_closure():
     opt, day = solve(rooms, team("A"), [])
     check = opt.check_slot(day, case("X"), hm("08:30"), verbose=False)
     facility = next(v for v in check.verdicts if v.agent == "OR Facility Agent")
-    assert not facility.ok and "closed 08:00-10:00 (inspection)" in facility.items[0].note
+    assert not facility.ok and "ปิดห้อง 08:00-10:00 (inspection)" in facility.items[0].note
     assert check.assignment.start_min == hm("10:00")

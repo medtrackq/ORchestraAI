@@ -24,7 +24,7 @@ SYSTEM = (
     "abbreviated) and fill a booking form. Pick the procedure and surgeon only from the codes listed; "
     "use an empty string when nothing fits. Urgency: EMERGENCY for life- or limb-threatening cases that "
     "need surgery now, URGENT for cases that must be done within about 24 hours, otherwise ELECTIVE. "
-    "Write urgency_reason in Thai, one short sentence. Resolve relative dates against the planning "
+    "Write urgency_reason (one short sentence) and notes in Thai. Resolve relative dates against the planning "
     "date given. duration_mins is 0 unless the text states a duration. airborne is true only when the "
     "patient has or is suspected of an airborne infection (e.g. TB, measles, varicella, COVID-19) and needs "
     "a negative-pressure room. Patient identifiers are masked; never guess them."

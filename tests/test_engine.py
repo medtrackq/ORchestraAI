@@ -76,7 +76,7 @@ def test_equipment_waits_for_cssd_sterilization_between_uses():
     _, result = solve(rooms, units, staff, cases)
     first, second = sorted(result.assignments.values(), key=lambda a: a.start_min)
     assert second.start_min >= first.end_min + 120
-    assert any("back from CSSD" in why for why in second.reasoning)
+    assert any("กลับจาก CSSD" in why for why in second.reasoning)
 
 
 def test_equipment_still_in_cssd_delays_start():
@@ -110,7 +110,7 @@ def test_impossible_case_is_reported_with_reasons_not_solved():
     cases = [case("H", "SUR-A", 60, required_capabilities={"HYBRID"}, required_equipment_types=["ROBOT"])]
     _, result = solve(rooms, [], staff, cases)
     reasons = " | ".join(result.unscheduled["H"])
-    assert "Facility" in reasons and "Equipment" in reasons
+    assert "ห้องผ่าตัด:" in reasons and "เครื่องมือ:" in reasons
 
 
 def test_one_person_is_never_in_two_rooms_at_once():
@@ -151,7 +151,7 @@ def test_weekly_hour_cap_prevents_fatigue():
     assert "ANE-TIRED" not in result.assignments["X"].staff_ids
 
     _, result = solve(rooms, [], [s for s in staff if s.staff_id != "ANE-FRESH"], cases)
-    assert "ANESTHESIOLOGIST" in result.unscheduled["X"][0]
+    assert "วิสัญญีแพทย์" in result.unscheduled["X"][0]
 
 
 def test_required_skill_is_enforced():
@@ -245,7 +245,7 @@ def test_validator_detects_double_booking():
                          ("SUR-B", "ANE-B", "SCR-B", "CIR-B")),
     }
     errors = validate_schedule(clash, cases, rooms, [], staff)
-    assert any("room OR-1 double-booked" in e for e in errors)
+    assert any("ห้อง OR-1 ถูกจองซ้อน" in e for e in errors)
 
 
 def test_duplicate_ids_are_rejected():

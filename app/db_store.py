@@ -16,7 +16,7 @@ from datetime import date, datetime, time, timedelta
 import psycopg
 
 
-from orchestra_engine import ORchestraOptimizer, ScheduleResult, fmt, hm
+from orchestra_engine import ORchestraOptimizer, ScheduleResult, fmt, hm, thai
 from orchestra_engine.demo import elective_day
 from orchestra_engine.results import ScheduleChange
 
@@ -538,12 +538,12 @@ class DatabaseStore:
     def _save_change(self, conn, world: World, after: ScheduleResult, kind: str, title: str,
                      case_id: str, new_requests: dict, actor: dict | None = None) -> dict:
         if not after.is_feasible:
-            raise StoreError(f"คำนวณไม่สำเร็จ ({after.status})")
+            raise StoreError(f"คำนวณไม่สำเร็จ ({thai.solver(after.status)})")
         self._guard(world, after)
         tired = self._optimizer(world).new_fatigue(world.result, after)
         data = after.to_dict()
         log = [f"[Master Orchestrator] {c['case_id']}: {'; '.join(c['details'])}" for c in data["changes"]]
-        log += [f"[Master Orchestrator] NOT SCHEDULED {u['case_id']}: {'; '.join(u['reasons'])}"
+        log += [f"[Master Orchestrator] จัดลงตารางไม่ได้ {u['case_id']}: {'; '.join(u['reasons'])}"
                 for u in data["unscheduled"]]
         log += fatigue_log(tired)
         activity = Activity(kind, title, log, data["changes"], data["notifications"],
@@ -695,7 +695,9 @@ class DatabaseStore:
                     "GROUP BY kind", span)}
                 overrides = conn.execute(
                     """SELECT count(*) AS n FROM orchestra_activity a, jsonb_array_elements_text(a.agent_log) line
-                       WHERE a.planning_date BETWEEN %s AND %s AND line LIKE '%%FATIGUE OVERRIDE%%'""", span,
+                       WHERE a.planning_date BETWEEN %s AND %s
+                         AND (line LIKE %s OR line LIKE %s)""",
+                    (*span, f"%{thai.FATIGUE_OVERRIDE}%", f"%{thai.FATIGUE_OVERRIDE_OLD}%"),
                 ).fetchone()["n"]
             cancelled = conn.execute(
                 "SELECT count(*) AS n FROM surgery_requests WHERE status = 'CANCELLED' "
@@ -823,6 +825,7 @@ class DatabaseStore:
             result = self._optimizer(world).solve_schedule(cases, "Demo day", verbose=False)
             history = seed.seed_history(conn, world)  # past cases with actual times for the forecast
             activity = Activity("seed", f"ใส่ข้อมูลตัวอย่างและจอง {len(result.assignments)} เคสของวันนี้",
-                                [f"[Master Orchestrator] demo day: {len(result.assignments)} cases, status {result.status}"])
+                                [f"[Master Orchestrator] วันตัวอย่าง: จอง {len(result.assignments)} เคส "
+                                 f"(ผล {thai.solver(result.status)})"])
             self.db.save(conn, world, result, requests, activity=self._record(conn, world, activity))
         return {"booked": len(result.assignments), "history": history, "date": today.isoformat()}

@@ -32,6 +32,7 @@ from typing import Iterable, Mapping
 
 from ortools.sat.python import cp_model
 
+from . import thai
 from .agents import EQUIPMENT as EQUIPMENT_AGENT
 from .agents import FACILITY, Busy, SlotCheck, scan_slot
 from .agents import STAFFING as STAFFING_AGENT
@@ -155,7 +156,7 @@ class ORchestraOptimizer:
         supplies: Iterable[SupplyItem] = (),
     ) -> None:
         if horizon_mins <= 0:
-            raise ValueError("horizon_mins must be positive")
+            raise ValueError("ช่วงวางแผน (horizon_mins) ต้องมากกว่า 0")
         self.rooms = list(rooms)
         self.equipments = list(equipments)
         self.staff = list(staff)
@@ -212,14 +213,14 @@ class ORchestraOptimizer:
         by_id: dict[str, SurgeryCase] = {}
         for case in [*cases, *new_cases]:
             if case.case_id in by_id:
-                raise ValueError(f"duplicate case_id: {case.case_id}")
+                raise ValueError(f"รหัสเคสซ้ำ: {case.case_id}")
             by_id[case.case_id] = case
         missing = set(current.assignments) - set(by_id)
         if missing:
-            raise ValueError(f"cases missing for scheduled ids: {sorted(missing)}")
+            raise ValueError(f"ไม่พบข้อมูลของเคสที่อยู่ในตาราง: {sorted(missing)}")
         for cid, mins in updates.items():
             if cid not in by_id:
-                raise ValueError(f"unknown case in duration_updates: {cid}")
+                raise ValueError(f"ไม่พบเคสที่จะแก้เวลา: {cid}")
             by_id[cid] = replace(by_id[cid], duration_mins=mins)
 
         frozen = {cid: a for cid, a in current.assignments.items() if a.start_min < now_min}
@@ -266,7 +267,7 @@ class ORchestraOptimizer:
     ) -> ScheduleResult:
         """A case will run longer (or shorter) than planned: ripple the rest."""
         if case_id not in current.assignments:
-            raise ValueError(f"{case_id} is not in the current schedule")
+            raise ValueError(f"{case_id} ไม่อยู่ในตารางตอนนี้")
         return self.reschedule(
             current, cases, now_min=now_min, duration_updates={case_id: new_duration_mins},
             scenario_name=scenario_name, verbose=verbose,
@@ -289,18 +290,19 @@ class ORchestraOptimizer:
            after the requested time where every agent agrees.
         """
         if case.case_id in current.assignments:
-            raise ValueError(f"{case.case_id} is already booked")
+            raise ValueError(f"{case.case_id} จองไว้แล้ว")
         dur, end = case.duration_mins, start_min + case.duration_mins
         verdicts = scan_slot(self, case, start_min, Busy.from_assignments(current.assignments, current.cases))
         ok = all(v.ok for v in verdicts)
         name = self._staff_by_id[case.surgeon_id].name if case.surgeon_id in self._staff_by_id else case.surgeon_id
         log = [
-            f"[Intake -> Master] {case.case_id} {case.procedure} | {name} | {case.urgency.value} | "
-            f"{dur} min | requested {fmt(start_min)}",
-            f"[Master Orchestrator] parallel scan {fmt(start_min)}-{fmt(end)} -> Staffing, Equipment & CSSD, OR Facility",
+            f"[Intake -> Master] {case.case_id} {case.procedure} | {name} | {thai.urgency(case.urgency.value)} | "
+            f"{dur} นาที | ขอเวลา {fmt(start_min)}",
+            f"[Master Orchestrator] ให้ Agent ทั้ง 3 ตรวจช่วง {fmt(start_min)}-{fmt(end)} พร้อมกัน "
+            "(Staffing, Equipment & CSSD, OR Facility)",
         ]
         for v in verdicts:
-            log.append(f"[{v.agent}] {'OK' if v.ok else 'CONFLICT'}: {v.summary()}")
+            log.append(f"[{v.agent}] {'ผ่าน' if v.ok else 'ไม่ผ่าน'}: {v.summary()}")
 
         booked = [current.cases[cid] for cid in current.assignments]
         attempts = []
@@ -310,11 +312,11 @@ class ORchestraOptimizer:
         else:
             rejected = ", ".join(v.agent for v in verdicts if not v.ok)
             hints = ", ".join(
-                f"{v.agent} from {fmt(v.ready_at)}" if v.ready_at is not None else f"{v.agent}: not today"
+                f"{v.agent} พร้อม {fmt(v.ready_at)}" if v.ready_at is not None else f"{v.agent} วันนี้ไม่พร้อม"
                 for v in verdicts if not v.ok
             )
-            log.append(f"[Master Orchestrator] {fmt(start_min)} rejected by {rejected}. Earliest ready: {hints}")
-            log.append("[Master Orchestrator] running CP-SAT for the next slot where all agents agree")
+            log.append(f"[Master Orchestrator] เวลา {fmt(start_min)} ไม่ผ่าน {rejected} · เร็วที่สุดที่พร้อม: {hints}")
+            log.append("[Master Orchestrator] ให้ CP-SAT หาช่วงถัดไปที่ทุก Agent ผ่านพร้อมกัน")
         attempts.append(replace(case, release_min=max(case.release_min, start_min), preferred_start=None))
 
         probe_weights = replace(
@@ -323,7 +325,7 @@ class ORchestraOptimizer:
             emergency_wait_per_min=max(self.weights.emergency_wait_per_min, 100),
             unscheduled_elective=10**7, unscheduled_urgent=10**7, unscheduled_emergency=10**8,
         )
-        title = scenario_name or f"Slot check {case.case_id} @ {fmt(start_min)}"
+        title = scenario_name or f"ตรวจเวลา {case.case_id} @ {fmt(start_min)}"
         for probe in attempts:
             result = self._solve(
                 [*booked, probe], title, now_min=current.now_min, frozen=dict(current.assignments),
@@ -345,21 +347,21 @@ class ORchestraOptimizer:
 
         placed = result.assignments.get(case.case_id)
         if placed is None:
-            log.append("[Master Orchestrator] no conflict-free slot today: " + "; ".join(result.unscheduled[case.case_id]))
+            log.append("[Master Orchestrator] วันนี้ไม่มีช่วงที่จองได้โดยไม่ชนกัน: " + "; ".join(result.unscheduled[case.case_id]))
         else:
             where = f"{placed.or_id} {fmt(placed.start_min)}-{fmt(placed.end_min)}"
-            log.append(f"[Master Orchestrator] {'locked' if placed.start_min == start_min else 'proposed and locked'} {where}"
+            log.append(f"[Master Orchestrator] {'จองตามเวลาที่ขอ' if placed.start_min == start_min else 'เสนอเวลาใหม่และจองแล้ว'} {where}"
                        + (f" ({'; '.join(placed.reasoning)})" if placed.reasoning else ""))
             if placed.equipment_unit_ids:
-                ready = ", ".join(f"{u} back {fmt(t)}" for u, t in placed.equipment_ready_min)
-                log.append(f"[{EQUIPMENT_AGENT}] reserved {', '.join(placed.equipment_unit_ids)}; CSSD queue: {ready}")
+                ready = ", ".join(f"{u} กลับจาก CSSD {fmt(t)}" for u, t in placed.equipment_ready_min)
+                log.append(f"[{EQUIPMENT_AGENT}] จอง {', '.join(placed.equipment_unit_ids)} · คิว CSSD: {ready}")
             if placed.bed_id:
-                log.append(f"[{FACILITY}] reserved {placed.bed_id} from {fmt(placed.recovery_start_min)}")
+                log.append(f"[{FACILITY}] จองเตียง {placed.bed_id} ตั้งแต่ {fmt(placed.recovery_start_min)}")
             team = ", ".join(self._staff_by_id[s].name for s in placed.staff_ids)
-            log.append(f"[{STAFFING_AGENT}] notified team: {team}")
+            log.append(f"[{STAFFING_AGENT}] แจ้งทีมแล้ว: {team}")
             for issue in result.fatigue:
                 if issue.case_id == case.case_id and issue.override:
-                    log.append(f"[{STAFFING_AGENT}] FATIGUE OVERRIDE: {issue.detail()}")
+                    log.append(f"[{STAFFING_AGENT}] {thai.FATIGUE_OVERRIDE}: {issue.detail()}")
         check = SlotCheck(case, start_min, verdicts, result, log)
         if verbose:
             print(f"=== {title} ===\n{check.report()}", end="\n\n")
@@ -379,8 +381,8 @@ class ORchestraOptimizer:
             latest_start = min(latest_start, case.deadline_min)
         if earliest > latest_start:
             return None, [
-                f"Time: earliest start {fmt(earliest)} is after the latest allowed start "
-                f"{fmt(latest_start)} (deadline or end of horizon)"
+                f"เวลา: เริ่มได้เร็วสุด {fmt(earliest)} ซึ่งช้ากว่าเวลาเริ่มล่าสุดที่ยอมได้ "
+                f"{fmt(latest_start)} (กำหนดเวลาของเคส หรือสิ้นสุดช่วงวางแผน)"
             ]
         latest_end = latest_start + dur
 
@@ -399,27 +401,28 @@ class ORchestraOptimizer:
         if not rooms and blocked:
             spans = "; ".join(f"{r.or_id} " + ", ".join(f"{fmt(a)}-{fmt(b)} {why}" for a, b, why in case.room_blocks[r.or_id])
                               for r in blocked)
-            reasons.append(f"Facility: the free time is another owner's OR block ({spans}); "
-                           "book another day, the owner's release, or mark it URGENT if it cannot wait")
+            reasons.append(f"ห้องผ่าตัด: เวลาว่างเป็นบล็อกห้องของคนอื่น ({spans}); "
+                           "จองวันอื่น รอเจ้าของบล็อกคืนเวลา หรือเปลี่ยนเป็นเคสด่วนถ้ารอไม่ได้")
         elif not rooms and elective_only:
             hours = "; ".join(f"{r.or_id} {fmt(r.hours_for(case, horizon)[0])}-{fmt(r.hours_for(case, horizon)[1])}"
                               for r in elective_only)
-            reasons.append(f"Facility: an elective case of {dur} min does not fit the elective hours ({hours}); "
-                           "book another day or mark it URGENT if it cannot wait")
+            reasons.append(f"ห้องผ่าตัด: เคสนัดล่วงหน้า {dur} นาทีไม่พอดีกับเวลาผ่าตัดนัดของห้อง ({hours}); "
+                           "จองวันอื่น หรือเปลี่ยนเป็นเคสด่วนถ้ารอไม่ได้")
         elif not rooms:
-            need = ", ".join(sorted(case.required_capabilities)) or "any"
+            need = ", ".join(sorted(case.required_capabilities))
+            with_need = f"ที่มี [{need}]" if need else ""
             shut = [
-                f"{r.or_id} {r.status}" if not r.is_usable else
-                f"{r.or_id} closed " + ", ".join(f"{fmt(a)}-{fmt(b)}" + (f" ({why})" if why else "")
-                                                 for a, b, why in r.closures)
+                f"{r.or_id} {thai.status(r.status)}" if not r.is_usable else
+                f"{r.or_id} ปิด " + ", ".join(f"{fmt(a)}-{fmt(b)}" + (f" ({why})" if why else "")
+                                              for a, b, why in r.closures)
                 for r in capable if not r.is_usable or r.closures
             ]
             if not capable:
-                reasons.append(f"Facility: no room with [{need}]")
+                reasons.append(f"ห้องผ่าตัด: ไม่มีห้อง{with_need}")
             elif shut:
-                reasons.append(f"Facility: rooms with [{need}] are closed or under maintenance: {'; '.join(shut)}")
+                reasons.append(f"ห้องผ่าตัด: ห้อง{with_need}ปิดหรือซ่อมบำรุงอยู่: {'; '.join(shut)}")
             else:
-                reasons.append(f"Facility: no usable room with [{need}] open long enough for {dur} min")
+                reasons.append(f"ห้องผ่าตัด: ไม่มีห้อง{with_need}ที่เปิดนานพอสำหรับ {dur} นาที")
 
         # Staffing agent: shifts, skills and fatigue limits. EMERGENCY cases
         # may break fatigue limits (at a cost in the solver), normal cases not.
@@ -435,27 +438,28 @@ class ORchestraOptimizer:
             if emergency:
                 return None
             if person.remaining_minutes < dur:
-                return f"would exceed {person.max_weekly_hours:g} h in 7 days ({person.remaining_minutes} min left)"
+                return (f"จะเกินเกณฑ์ {thai.limit_hours(person.max_weekly_hours)} ใน 7 วัน "
+                        f"(เหลือ {person.remaining_minutes} นาที)")
             if person.daily_cap_minutes < dur:
-                return f"case is longer than the {person.max_daily_hours:g} h daily limit"
+                return f"เคสยาวกว่าเกณฑ์ {thai.limit_hours(person.max_daily_hours)} ต่อวัน"
             return None
 
         windows: dict[str, list[tuple[int, int]]] = {}
         surgeon = self._staff_by_id.get(case.surgeon_id)
         if surgeon is None or not surgeon.is_active:
-            reasons.append(f"Staffing: surgeon {case.surgeon_id} not found or inactive")
+            reasons.append(f"บุคลากร: ไม่พบศัลยแพทย์ {case.surgeon_id} หรือปิดการใช้งานอยู่")
         else:
             fit, limit = shift_fit(surgeon), over_limit(surgeon)
             if not fit:
                 resting = not emergency and surgeon.rest_until > earliest and [w for w in surgeon.shifts if fits(*w)]
                 reasons.append(
-                    f"Staffing: {surgeon.name} rests until {fmt(surgeon.rest_until)} after a late case"
+                    f"บุคลากร: {surgeon.name} พักถึง {fmt(surgeon.rest_until)} หลังเคสดึก"
                     if resting else
-                    f"Staffing: {surgeon.name} has no shift that fits {dur} min "
-                    f"between {fmt(earliest)} and {fmt(latest_end)}"
+                    f"บุคลากร: {surgeon.name} ไม่มีเวรที่ว่างพอ {dur} นาที "
+                    f"ระหว่าง {fmt(earliest)} ถึง {fmt(latest_end)}"
                 )
             elif limit:
-                reasons.append(f"Staffing: {surgeon.name} {limit}")
+                reasons.append(f"บุคลากร: {surgeon.name} {limit}")
             else:
                 windows[surgeon.staff_id] = fit
         team: dict[str, tuple[int, list[StaffMember]]] = {}
@@ -474,16 +478,16 @@ class ORchestraOptimizer:
                     candidates.append(person)
                     windows[person.staff_id] = fit
             if len(candidates) < count:
-                label = role + (f" with {', '.join(sorted(skills))}" if skills else "")
+                label = thai.role(role) + (f" ที่มีทักษะ {', '.join(sorted(skills))}" if skills else "")
                 if len(skilled) < count:
                     reasons.append(
-                        f"Staffing: need {count} {label}, only {len(skilled)} active staff "
-                        + ("have the skill" if skills else "in this role")
+                        f"บุคลากร: ต้องการ{label} {count} คน แต่มี{'คนที่มีทักษะนี้' if skills else 'ในบทบาทนี้'}"
+                        f"เพียง {len(skilled)} คน"
                     )
                 else:
                     reasons.append(
-                        f"Staffing: need {count} {label} on shift, rested and within the daily/7-day hour "
-                        f"limits, found {len(candidates)} of {len(skilled)}"
+                        f"บุคลากร: ต้องการ{label} {count} คนที่อยู่เวร ได้พักพอ และไม่เกินเกณฑ์ชั่วโมงต่อวัน/7 วัน "
+                        f"พบ {len(candidates)} จาก {len(skilled)} คน"
                     )
             team[role] = (count, candidates)
 
@@ -501,8 +505,8 @@ class ORchestraOptimizer:
                     for u in self.equipments if u.eq_type == eq_type and u.closures
                 ]
                 reasons.append(
-                    f"Equipment: need {count} x {eq_type} ready by {fmt(latest_start)}, found {len(candidates)}"
-                    + (f" (planned maintenance: {'; '.join(serviced)})" if serviced else "")
+                    f"เครื่องมือ: ต้องการ {eq_type} {count} ชุดที่พร้อมภายใน {fmt(latest_start)} พบ {len(candidates)} ชุด"
+                    + (f" (นัดซ่อมบำรุง: {'; '.join(serviced)})" if serviced else "")
                 )
             units[eq_type] = (count, candidates)
 
@@ -511,11 +515,11 @@ class ORchestraOptimizer:
         for code, qty in sorted(case.required_supplies.items()):
             item = self._supply_by_id.get(code)
             if item is None:
-                reasons.append(f"Inventory: {code} is not a stocked item")
+                reasons.append(f"วัสดุ: ไม่มี {code} ในคลัง")
             elif (item.for_booked if existing or emergency_stock else item.available) < qty:
                 have = item.for_booked if existing or emergency_stock else item.available
                 reasons.append(
-                    f"Inventory: need {qty} x {item.name} ({code}), only {have} available"
+                    f"วัสดุ: ต้องใช้ {item.name} ({code}) {qty} {item.unit} แต่มีเพียง {have}"
                     + (f"; {item.note}" if item.note else "")
                 )
 
@@ -531,11 +535,11 @@ class ORchestraOptimizer:
             ]
             if not beds:
                 closed = [b.bed_id for b in self.beds if b.bed_type == case.recovery_bed_type and not b.is_usable]
-                taken = [f"{b.bed_id} until {fmt(b.available_from)}" for b in self.beds
+                taken = [f"{b.bed_id} ถึง {fmt(b.available_from)}" for b in self.beds
                          if b.bed_type == case.recovery_bed_type and b.is_usable and b.available_from > bed_by]
-                reasons.append(f"Facility: no {case.recovery_bed_type} bed free by {fmt(bed_by)}"
-                               + (f" (occupied: {', '.join(taken)})" if taken else "")
-                               + (f" (closed: {', '.join(closed)})" if closed else ""))
+                reasons.append(f"ห้องผ่าตัด: ไม่มีเตียง {case.recovery_bed_type} ว่างภายใน {fmt(bed_by)}"
+                               + (f" (มีผู้ป่วย: {', '.join(taken)})" if taken else "")
+                               + (f" (ปิด: {', '.join(closed)})" if closed else ""))
 
         if reasons:
             return None, reasons
@@ -549,7 +553,7 @@ class ORchestraOptimizer:
             members = [self._staff_by_id[sid] for sid in a.staff_ids[1:]]
             used_units = [self._unit_by_id[uid] for uid in a.equipment_unit_ids]
         except KeyError as exc:
-            raise ValueError(f"{case.case_id}: locked assignment refers to unknown resource {exc}") from exc
+            raise ValueError(f"{case.case_id}: เคสที่เริ่มแล้วใช้ทรัพยากรที่ไม่มีในระบบ {exc}") from exc
         team: dict[str, list[StaffMember]] = defaultdict(list)
         for person in members:
             team[person.role].append(person)
@@ -595,7 +599,7 @@ class ORchestraOptimizer:
         case_by_id: dict[str, SurgeryCase] = {}
         for case in cases:
             if case.case_id in case_by_id:
-                raise ValueError(f"duplicate case_id: {case.case_id}")
+                raise ValueError(f"รหัสเคสซ้ำ: {case.case_id}")
             case_by_id[case.case_id] = case
 
         unscheduled: dict[str, list[str]] = {}
@@ -642,9 +646,9 @@ class ORchestraOptimizer:
                         ]
                 assignments = self._explain(assignments, plans)
             else:
-                why = " (locked in-progress cases cannot all fit)" if frozen else ""
+                why = " (เคสที่เริ่มไปแล้วใส่ลงตารางพร้อมกันไม่ได้)" if frozen else ""
                 for cid in plans:
-                    unscheduled[cid] = [f"Solver returned {status_name}{why}"]
+                    unscheduled[cid] = [f"Solver จัดไม่ได้: {thai.solver(status_name)}{why}"]
 
         ordered = sorted(unscheduled, key=lambda c: (_URGENCY_RANK[case_by_id[c].urgency], c))
         return ScheduleResult(
@@ -699,21 +703,21 @@ class ORchestraOptimizer:
             used = sum(cases[cid].required_supplies.get(code, 0) for cid in assignments)
             if used + qty > have:
                 out.append(
-                    f"Inventory: {item.name} ({code}) runs out: {used} of {have} go to other cases "
-                    f"today, need {qty}" + (f"; {item.note}" if item.note else "")
+                    f"วัสดุ: {item.name} ({code}) ไม่พอ: วันนี้เคสอื่นใช้ {used} จาก {have} "
+                    f"แต่เคสนี้ต้องใช้ {qty}" + (f"; {item.note}" if item.note else "")
                 )
         return out
 
     def _capacity_reason(self, plan: _Plan) -> str:
-        window = f"between {fmt(plan.earliest)} and {fmt(plan.latest_start)}"
+        window = f"ระหว่าง {fmt(plan.earliest)} ถึง {fmt(plan.latest_start)}"
         if plan.case.urgency is Urgency.EMERGENCY:
             return (
-                f"No conflict-free slot {window}: every eligible room/team/equipment/bed is held by "
-                "locked or higher-priority cases. Escalate: open another room or call in a team"
+                f"ไม่มีช่วงที่ไม่ชนกัน{window}: ห้อง ทีม เครื่องมือ หรือเตียงที่ใช้ได้ ถูกเคสที่เริ่มแล้วหรือเคสที่เร่งด่วนกว่าใช้อยู่ "
+                "ต้องเปิดห้องเพิ่มหรือเรียกทีมเสริม"
             )
         return (
-            f"No conflict-free slot left {window} with the current room, staff, equipment "
-            "and bed load. Postpone to another day"
+            f"ไม่มีช่วงที่ไม่ชนกันเหลือ{window} เมื่อดูห้อง บุคลากร เครื่องมือ และเตียงที่จองไว้แล้ว "
+            "ควรเลื่อนไปวันอื่น"
         )
 
     @staticmethod
@@ -738,22 +742,22 @@ class ORchestraOptimizer:
             notes = []
             if case.urgency is not Urgency.ELECTIVE:
                 notes.append(
-                    f"{case.urgency.value}: starts {a.start_min - plan.earliest} min after "
-                    f"it could first start ({fmt(plan.earliest)})"
+                    f"{thai.urgency(case.urgency.value)}: เริ่มหลังเวลาที่เริ่มได้เร็วสุด ({fmt(plan.earliest)}) "
+                    f"{a.start_min - plan.earliest} นาที"
                 )
             on_preferred = case.preferred_start == a.start_min
             if on_preferred:
-                notes.append("on the surgeon's preferred start time")
+                notes.append("ตรงเวลาที่ศัลยแพทย์ต้องการ")
             elif case.preferred_start is not None:
                 delta = a.start_min - case.preferred_start
-                side = "after" if delta > 0 else "before"
-                notes.append(f"{abs(delta)} min {side} preferred start {fmt(case.preferred_start)}")
+                side = "ช้ากว่า" if delta > 0 else "เร็วกว่า"
+                notes.append(f"{side}เวลาที่ต้องการ ({fmt(case.preferred_start)}) {abs(delta)} นาที")
             if a.start_min > plan.earliest and not on_preferred:
                 blockers = self._blockers(a, assignments, plan)
                 if blockers:
-                    notes.append("waits until " + "; ".join(blockers))
+                    notes.append("รอจน " + "; ".join(blockers))
             if case.deadline_min is not None:
-                notes.append(f"meets deadline {fmt(case.deadline_min)}")
+                notes.append(f"ทันกำหนด {fmt(case.deadline_min)}")
             out[cid] = replace(a, reasoning=tuple(notes))
         return out
 
@@ -764,37 +768,37 @@ class ORchestraOptimizer:
         room = self._room_by_id[a.or_id]
         for b in others:
             if b.or_id == a.or_id and b.cleanup_end_min == a.start_min:
-                found.append(f"{a.or_id} is cleaned after {b.case_id}")
+                found.append(f"{a.or_id} ทำความสะอาดเสร็จหลังเคส {b.case_id}")
         opens = room.hours_for(plan.case, self.horizon_mins)[0]
         if opens == a.start_min and opens > 0:
-            found.append(f"{a.or_id} opens" + (" for elective cases" if opens != room.open_min else ""))
+            found.append(f"{a.or_id} เปิด" + ("รับเคสนัดล่วงหน้า" if opens != room.open_min else ""))
         for _, end, why in room.closures:
             if end == a.start_min:
-                found.append(f"{a.or_id} reopens after closure" + (f" ({why})" if why else ""))
+                found.append(f"{a.or_id} เปิดอีกครั้งหลังปิดห้อง" + (f" ({why})" if why else ""))
         shift_starts = []
         for sid in a.staff_ids:
             name = self._staff_by_id[sid].name
             for b in others:
                 if sid in b.staff_ids and b.end_min == a.start_min:
-                    found.append(f"{name} finishes {b.case_id}")
+                    found.append(f"{name} เสร็จเคส {b.case_id}")
             if any(start == a.start_min for start, _ in self._staff_by_id[sid].shifts):
                 shift_starts.append(name)
         if shift_starts:
-            found.append(f"shift starts at {fmt(a.start_min)} for {', '.join(shift_starts)}")
+            found.append(f"{', '.join(shift_starts)} เริ่มเวร {fmt(a.start_min)}")
         for uid in a.equipment_unit_ids:
             unit = self._unit_by_id[uid]
             for b in others:
                 if any(u == uid and ready == a.start_min for u, ready in b.equipment_ready_min):
-                    found.append(f"{uid} is back from CSSD after {b.case_id}")
+                    found.append(f"{uid} กลับจาก CSSD หลังเคส {b.case_id}")
             if unit.available_at == a.start_min and unit.available_at > 0:
-                found.append(f"{uid} is released by CSSD")
+                found.append(f"{uid} ออกจาก CSSD")
         if a.bed_id is not None:
             bed = self._bed_by_id[a.bed_id]
             for b in others:
                 if b.bed_id == a.bed_id and b.recovery_end_min == a.end_min:
-                    found.append(f"{a.bed_id} frees up after {b.case_id}")
+                    found.append(f"เตียง {a.bed_id} ว่างหลังเคส {b.case_id}")
             if bed.available_from == a.end_min and bed.available_from > 0:
-                found.append(f"{a.bed_id} becomes free")
+                found.append(f"เตียง {a.bed_id} ว่าง")
         return found
 
     # ---------------------------------------------------------------- diff
@@ -810,27 +814,29 @@ class ORchestraOptimizer:
             details: list[str] = []
             if a is not None and b is None:
                 why = "; ".join(new.unscheduled.get(cid, []))
-                details.append(f"REMOVED (was {a.or_id} {fmt(a.start_min)}). {why}")
+                details.append(f"ออกจากตาราง (เดิม {a.or_id} {fmt(a.start_min)})" + (f": {why}" if why else ""))
             elif b is not None and a is None:
-                details.append(f"NEW booking {b.or_id} {fmt(b.start_min)}-{fmt(b.end_min)}")
+                details.append(f"จองใหม่ {b.or_id} {fmt(b.start_min)}-{fmt(b.end_min)}")
             elif a is not None and b is not None:
                 if cid in updates:
                     details.append(
-                        f"duration {a.end_min - a.start_min}->{b.end_min - b.start_min} min, "
-                        f"now ends {fmt(b.end_min)}"
+                        f"ระยะเวลา {a.end_min - a.start_min}->{b.end_min - b.start_min} นาที, "
+                        f"เสร็จ {fmt(b.end_min)}"
                     )
                 if a.start_min != b.start_min:
-                    details.append(f"moved {fmt(a.start_min)}->{fmt(b.start_min)}")
+                    details.append(f"เลื่อนเวลา {fmt(a.start_min)}->{fmt(b.start_min)}")
                 if a.or_id != b.or_id:
-                    details.append(f"room {a.or_id}->{b.or_id}")
+                    details.append(f"ย้ายห้อง {a.or_id}->{b.or_id}")
                 gone = [names.get(s, s) for s in a.staff_ids if s not in b.staff_ids]
                 came = [names.get(s, s) for s in b.staff_ids if s not in a.staff_ids]
                 if gone or came:
-                    details.append(f"team -[{', '.join(gone)}] +[{', '.join(came)}]")
+                    details.append("เปลี่ยนทีม" + (f" ออก: {', '.join(gone)}" if gone else "")
+                                   + (f" เข้า: {', '.join(came)}" if came else ""))
                 if set(a.equipment_unit_ids) != set(b.equipment_unit_ids):
-                    details.append(f"equipment {list(a.equipment_unit_ids)}->{list(b.equipment_unit_ids)}")
+                    details.append(f"เปลี่ยนเครื่องมือ {', '.join(a.equipment_unit_ids) or '-'} -> "
+                                   f"{', '.join(b.equipment_unit_ids) or '-'}")
                 if a.bed_id != b.bed_id:
-                    details.append(f"bed {a.bed_id}->{b.bed_id}")
+                    details.append(f"เปลี่ยนเตียง {a.bed_id or '-'} -> {b.bed_id or '-'}")
             if not details:
                 continue
             changes.append(ScheduleChange(cid, details, a, b))

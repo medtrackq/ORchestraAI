@@ -286,13 +286,20 @@ def test_late_case_needs_rest_before_the_next_day_booking(store, db_url):
     late = _request(store.state(day1), "Dr.Anan", "Emergency appendectomy (open)", "HN-L", duration_mins=60)
     check = store.slot_check(late, "22:30", commit=False, day=day1)  # ends 23:30, 8.5 h before 08:00
     staffing = next(v for v in check["verdicts"] if v["agent"] == "Staffing Agent")
-    assert not staffing["ok"] and "less than 10 h rest" in staffing["items"][0]["note"]
+    assert not staffing["ok"] and "ได้พักไม่ถึง 10 ชม." in staffing["items"][0]["note"]
     assert not any(b["case_id"] == check["case_id"] for b in check["result"]["bookings"])
 
     result = store.emergency(late, "22:30", day=day1)  # an emergency may, with a warning
     issue = next(i for i in result["fatigue"] if i["staff_id"] == anan)
     assert issue["kind"] == "next_day" and issue["override"] and issue["minutes"] == 90
-    assert any("FATIGUE OVERRIDE" in line for line in result["log"])
+    assert any("ข้ามเกณฑ์ความเหนื่อยล้า" in line for line in result["log"])
+    overrides = store.report(day1, day1)["fatigue_overrides"]
+    assert overrides >= 1
+    with psycopg.connect(db_url, autocommit=True) as conn:  # a line written before the messages were Thai
+        conn.execute("""INSERT INTO orchestra_activity (planning_date, kind, title, agent_log, changes, notifications)
+                        VALUES (%s, 'emergency', 'old', '["[Staffing Agent] FATIGUE OVERRIDE: x"]', '[]', '[]')""",
+                     (day1,))
+    assert store.report(day1, day1)["fatigue_overrides"] == overrides + 1
     saved = store.state(day1)
     assert saved["warnings"] == []  # an emergency override is not a conflict
     assert any(i["staff_id"] == anan and i["override"] for i in saved["fatigue"])
@@ -300,7 +307,7 @@ def test_late_case_needs_rest_before_the_next_day_booking(store, db_url):
     rested = {p["staff_id"]: p for p in next_day["staff"]}
     assert rested[anan]["rest_until"] == 23 * 60 + 30 + 10 * 60 - 24 * 60  # 09:30 on day 2
     # Day 2 now shows that the 08:00 case starts inside that rest, for the scheduler to fix.
-    assert any(w.startswith("fatigue rest:") and "09:30" in w for w in next_day["warnings"])
+    assert any(w.startswith("เกินเกณฑ์ความเหนื่อยล้า:") and "09:30" in w for w in next_day["warnings"])
 
 
 def test_app_works_before_migration_004(db_url):

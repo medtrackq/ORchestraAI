@@ -14,6 +14,7 @@ import json
 import re
 from pathlib import Path
 
+from . import thai
 from .agents import EQUIPMENT, FACILITY, STAFFING, AgentVerdict, Busy, SlotCheck, scan_slot
 from .demo import Hospital, build_hospital, elective_day
 from .models import EquipmentUnit, OperatingRoom, StaffMember, StaffRole, SurgeryCase, Urgency
@@ -142,7 +143,7 @@ def _probe(case: SurgeryCase, room: str, start: int, kind: str, label: str) -> d
 
 def _agents(**states: tuple[str, str]) -> dict:
     base = {k: {"glow": "", "pill": p} for k, p in
-            {"intake": "Standby", "master": "Active core", "staff": "Idle", "equip": "Idle", "or": "Idle"}.items()}
+            {"intake": "รอคำขอ", "master": "ศูนย์กลาง", "staff": "ว่าง", "equip": "ว่าง", "or": "ว่าง"}.items()}
     for key, (glow, pill) in states.items():
         base[key] = {"glow": glow, "pill": pill}
     return base
@@ -150,7 +151,7 @@ def _agents(**states: tuple[str, str]) -> dict:
 
 def _verdict_states(verdicts: list[AgentVerdict]) -> dict:
     keys = {STAFFING: "staff", EQUIPMENT: "equip", FACILITY: "or"}
-    return {keys[v.agent]: ("green" if v.ok else "red", "OK" if v.ok else "Conflict") for v in verdicts}
+    return {keys[v.agent]: ("green" if v.ok else "red", "ผ่าน" if v.ok else "ไม่ผ่าน") for v in verdicts}
 
 
 def build_flow(verbose: bool = False) -> dict:
@@ -189,13 +190,13 @@ def build_flow(verbose: bool = False) -> dict:
         "title": "ภาพรวม: ตารางที่จองไว้แล้ว + Agent ทั้ง 5",
         "desc": (
             f"ตารางตั้งต้นมี {len(booked.assignments)} เคสใน {len(h.rooms)} ห้อง "
-            f"(solver: {booked.status}, {booked.wall_time_s:.2f} วินาที) ทุกค่าบนหน้านี้คำนวณจาก orchestra_engine จริง "
+            f"(solver: {thai.solver(booked.status)}, {booked.wall_time_s:.2f} วินาที) ทุกค่าบนหน้านี้คำนวณจาก orchestra_engine จริง "
             "กดปุ่ม 1-5 เพื่อดูแต่ละขั้น"
         ),
         "logs": [
-            f"[System] loaded {len(h.rooms)} rooms, {len(h.staff)} staff, {len(h.equipments)} equipment units, "
-            f"{len(h.beds)} recovery beds",
-            f"[Master Orchestrator] booked schedule: {len(booked.assignments)} cases, status {booked.status}",
+            f"[System] โหลดห้องผ่าตัด {len(h.rooms)} ห้อง บุคลากร {len(h.staff)} คน เครื่องมือ {len(h.equipments)} ชิ้น "
+            f"เตียงพักฟื้น {len(h.beds)} เตียง",
+            f"[Master Orchestrator] ตารางที่จองไว้: {len(booked.assignments)} เคส (ผล {thai.solver(booked.status)})",
             *[f"[Master Orchestrator] {r}: " + ", ".join(f"{a.case_id} {fmt(a.start_min)}-{fmt(a.end_min)}" for a in items)
               for r, items in booked.by_room().items()],
         ],
@@ -215,7 +216,7 @@ def build_flow(verbose: bool = False) -> dict:
             "(รอบนี้คำขอเป็นข้อมูลโครงสร้าง ส่วน NLP/เสียงและการพยากรณ์เวลาจากประวัติยังไม่ได้ทำ)"
         ),
         "logs": [log[0]],
-        "agents": _agents(intake=("cyan", "Parsing request"), master=("gold", "Receiving case")),
+        "agents": _agents(intake=("cyan", "อ่านคำขอ"), master=("gold", "รับเคส")),
         "beams": ["intake-master"],
         "zones": _zones(check.verdicts),
         "zoneTime": fmt(REQUEST_AT),
@@ -229,7 +230,7 @@ def build_flow(verbose: bool = False) -> dict:
             + "; ".join(f"{v.agent} {'ผ่าน' if v.ok else 'ไม่ผ่าน'}" for v in check.verdicts)
         ),
         "logs": [log[1], *scan_lines],
-        "agents": _agents(master=("gold", "Parallel scan"), **_verdict_states(check.verdicts)),
+        "agents": _agents(master=("gold", "สแกนพร้อมกัน"), **_verdict_states(check.verdicts)),
         "beams": ["master-staff", "master-equip", "master-or", "staff-zone", "equip-zone", "or-zone"],
         "zones": _zones(check.verdicts),
         "zoneTime": fmt(REQUEST_AT),
@@ -251,9 +252,9 @@ def build_flow(verbose: bool = False) -> dict:
             "ไม่มีช่วงเวลาที่ทุก Agent ผ่านในวันนี้"
         ),
         "logs": negotiation + lock_lines[:1],
-        "agents": _agents(master=("gold", "Optimizing"), **{
+        "agents": _agents(master=("gold", "กำลังคำนวณ"), **{
             {STAFFING: "staff", EQUIPMENT: "equip", FACILITY: "or"}[v.agent]:
-                ("purple", f"Ready {fmt(v.ready_at)}" if v.ready_at is not None else "Not today")
+                ("purple", f"พร้อม {fmt(v.ready_at)}" if v.ready_at is not None else "วันนี้ไม่ว่าง")
             for v in rejected
         }),
         "beams": [f"master-{k}" for k in ("staff", "equip", "or")
@@ -273,8 +274,8 @@ def build_flow(verbose: bool = False) -> dict:
             f"และเตียง {placed.bed_id} โดยไม่ขยับเคสเดิม ตัวตรวจอิสระยืนยันว่าไม่มีการชนกัน"
         ),
         "logs": lock_lines,
-        "agents": _agents(master=("green", "Schedule locked"), staff=("green", "Team notified"),
-                          equip=("green", "Units reserved"), **{"or": ("green", f"{placed.or_id} reserved")}),
+        "agents": _agents(master=("green", "ล็อกตารางแล้ว"), staff=("green", "แจ้งทีมแล้ว"),
+                          equip=("green", "จองเครื่องมือแล้ว"), **{"or": ("green", f"จอง {placed.or_id} แล้ว")}),
         "beams": ["master-staff", "master-equip", "master-or", "staff-zone", "equip-zone", "or-zone"],
         "zones": _zones(locked_scan),
         "zoneTime": fmt(placed.start_min),
@@ -298,16 +299,16 @@ def build_flow(verbose: bool = False) -> dict:
             + f" และแจ้งเตือน {len(people)} คน"
         ),
         "logs": [
-            f"[Intake & Triage Agent] EMERGENCY {er.case_id} {er.procedure} | {er_name} | {er.duration_mins} min | "
-            f"arrives {fmt(EMERGENCY_AT)}",
-            *[f"[{v.agent}] {'OK' if v.ok else 'CONFLICT'} at {fmt(EMERGENCY_AT)}: {v.summary()}" for v in er_scan],
-            "[Master Orchestrator] locking cases already in progress, re-optimising the rest (ripple effect)",
+            f"[Intake & Triage Agent] ฉุกเฉิน {er.case_id} {er.procedure} | {er_name} | {er.duration_mins} นาที | "
+            f"มาถึง {fmt(EMERGENCY_AT)}",
+            *[f"[{v.agent}] {'ผ่าน' if v.ok else 'ไม่ผ่าน'} เวลา {fmt(EMERGENCY_AT)}: {v.summary()}" for v in er_scan],
+            "[Master Orchestrator] ล็อกเคสที่เริ่มไปแล้ว แล้วจัดเคสที่เหลือใหม่ (ripple effect)",
             *[f"[Master Orchestrator] {c.case_id}: {'; '.join(c.details)}" for c in after.changes],
             *([f"[Master Orchestrator] {er.case_id}: {'; '.join(er_placed.reasoning)}"] if er_placed else []),
-            f"[Staffing Agent] {len(after.notifications)} notifications to {len(people)} staff",
+            f"[Staffing Agent] แจ้งเตือน {len(after.notifications)} ข้อความ ถึง {len(people)} คน",
         ],
-        "agents": _agents(intake=("red", "EMERGENCY"), master=("red", "Auto-rescheduling"),
-                          staff=("orange", "Calling on-call team"), **{"or": ("red", "Clearing a room")}),
+        "agents": _agents(intake=("red", "ฉุกเฉิน"), master=("red", "จัดตารางใหม่อัตโนมัติ"),
+                          staff=("orange", "เรียกทีมเวร"), **{"or": ("red", "เคลียร์ห้อง")}),
         "beams": ["intake-master", "master-staff", "master-or", "or-zone", "staff-zone"],
         "zones": _zones(er_scan),
         "zoneTime": fmt(EMERGENCY_AT),

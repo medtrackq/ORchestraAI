@@ -14,6 +14,7 @@
 | `orchestra_engine/agents.py` | Staffing / Equipment & CSSD / OR Facility Agent สแกน ณ เวลาที่ขอ (`SlotCheck`) |
 | `orchestra_engine/fatigue.py` | Staffing Agent: เกณฑ์ความเหนื่อยล้า (ชม./วัน, ชม./7 วัน, พักหลังเคสดึก) และคะแนน 0-100% |
 | `orchestra_engine/flow.py` | สร้างข้อมูลจริงให้หน้า Flow (`python -m orchestra_engine.flow`) |
+| `orchestra_engine/thai.py` | คำภาษาไทยที่ Agent ใช้ร่วมกัน (บทบาท สถานะห้อง/เครื่องมือ/เตียง ความเร่งด่วน ผลการคำนวณ) · ข้อความทุกข้อความของ Agent เป็นภาษาไทย ส่วนรหัส (ห้อง เครื่องมือ วัสดุ) ชื่อคน ชื่อหัตถการ และชื่อ Agent คงเดิม (`tests/test_thai_messages.py` ตรวจไม่ให้มีข้อความอังกฤษหลุดกลับมา) |
 | `app/` | เว็บแอป FastAPI (หน้าเว็บ `app/static/index.html` + API) สำหรับ Render |
 | `app/db.py`, `app/db_store.py`, `app/seed.py` | โหมด Supabase: อ่าน/เขียนตาราง, lock + ตรวจก่อนบันทึก, ข้อมูลตัวอย่าง |
 | `supabase/migrations/20261101000000_security_and_integrity.sql` | RLS ทุกตาราง, exclusion constraint ใหม่, ตาราง activity |

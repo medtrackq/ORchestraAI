@@ -226,13 +226,13 @@
           <div class="icon-ring" style="color: var(--cyan);">🎙️</div>
           <h3>Intake & Triage Agent</h3>
           <p>รับคำขอ จัดระดับความเร่งด่วน & เวลาผ่าตัด</p>
-          <span class="agent-status-pill" id="pill-intake">Standby</span>
+          <span class="agent-status-pill" id="pill-intake">รอคำขอ</span>
         </div>
         <div class="agent-node master" id="node-master">
           <div class="icon-ring" style="color: var(--gold);">🧠</div>
           <h3>Master Orchestrator</h3>
           <p>ศูนย์กลางเจรจา & CP-SAT Optimization</p>
-          <span class="agent-status-pill" id="pill-master">Active core</span>
+          <span class="agent-status-pill" id="pill-master">ศูนย์กลาง</span>
         </div>
       </div>
       <div class="sub-agents-row">
@@ -240,19 +240,19 @@
           <div class="icon-ring" style="color: var(--green);">👨‍⚕️</div>
           <h3>Staffing Agent</h3>
           <p>ตารางเวร ทักษะ & ชั่วโมงทำงานสะสม</p>
-          <span class="agent-status-pill" id="pill-staff">Idle</span>
+          <span class="agent-status-pill" id="pill-staff">ว่าง</span>
         </div>
         <div class="agent-node" id="node-equip">
           <div class="icon-ring" style="color: var(--purple);">🤖</div>
           <h3>Equipment & CSSD Agent</h3>
           <p>หุ่นยนต์ผ่าตัด ชุดเครื่องมือ & คิวอบฆ่าเชื้อ</p>
-          <span class="agent-status-pill" id="pill-equip">Idle</span>
+          <span class="agent-status-pill" id="pill-equip">ว่าง</span>
         </div>
         <div class="agent-node" id="node-or">
           <div class="icon-ring" style="color: var(--orange);">🏥</div>
           <h3>OR Facility Agent</h3>
           <p>สเปกห้อง เวลาทำความสะอาด & เตียง PACU/ICU</p>
-          <span class="agent-status-pill" id="pill-or">Idle</span>
+          <span class="agent-status-pill" id="pill-or">ว่าง</span>
         </div>
       </div>
     </div>
@@ -344,33 +344,33 @@
  "steps": [
   {
    "title": "ภาพรวม: ตารางที่จองไว้แล้ว + Agent ทั้ง 5",
-   "desc": "ตารางตั้งต้นมี 7 เคสใน 3 ห้อง (solver: OPTIMAL, 0.13 วินาที) ทุกค่าบนหน้านี้คำนวณจาก orchestra_engine จริง กดปุ่ม 1-5 เพื่อดูแต่ละขั้น",
+   "desc": "ตารางตั้งต้นมี 7 เคสใน 3 ห้อง (solver: ดีที่สุด, 0.16 วินาที) ทุกค่าบนหน้านี้คำนวณจาก orchestra_engine จริง กดปุ่ม 1-5 เพื่อดูแต่ละขั้น",
    "logs": [
-    "[System] loaded 3 rooms, 22 staff, 17 equipment units, 6 recovery beds",
-    "[Master Orchestrator] booked schedule: 7 cases, status OPTIMAL",
+    "[System] โหลดห้องผ่าตัด 3 ห้อง บุคลากร 22 คน เครื่องมือ 17 ชิ้น เตียงพักฟื้น 6 เตียง",
+    "[Master Orchestrator] ตารางที่จองไว้: 7 เคส (ผล ดีที่สุด)",
     "[Master Orchestrator] OR-1: C07 08:00-09:00, C06 09:30-10:45, C08 11:30-13:00, C11 13:30-15:30",
     "[Master Orchestrator] OR-2: C04 08:00-11:30, U01 12:00-13:00, U02 13:30-14:30"
    ],
    "agents": {
     "intake": {
      "glow": "",
-     "pill": "Standby"
+     "pill": "รอคำขอ"
     },
     "master": {
      "glow": "",
-     "pill": "Active core"
+     "pill": "ศูนย์กลาง"
     },
     "staff": {
      "glow": "",
-     "pill": "Idle"
+     "pill": "ว่าง"
     },
     "equip": {
      "glow": "",
-     "pill": "Idle"
+     "pill": "ว่าง"
     },
     "or": {
      "glow": "",
-     "pill": "Idle"
+     "pill": "ว่าง"
     }
    },
    "beams": [
@@ -384,51 +384,51 @@
      {
       "label": "Dr.Somchai (Ortho)",
       "state": "ready",
-      "text": "free 09:00-11:30"
+      "text": "ว่าง 09:00-11:30"
      },
      {
-      "label": "Anesthesiologist",
+      "label": "วิสัญญีแพทย์",
       "state": "ready",
-      "text": "1 free (Dr.Prasert (on-call))"
+      "text": "ว่าง 2 คน (Dr.Chaiwat, Dr.Suda)"
      },
      {
-      "label": "Scrub Nurse",
+      "label": "พยาบาลส่งเครื่องมือ",
       "state": "ready",
-      "text": "3 free (Kanya, Sirilak, Duangjai (on-call))"
+      "text": "ว่าง 3 คน (Kanya, Sirilak, Duangjai (on-call))"
      },
      {
-      "label": "Circulating Nurse",
+      "label": "พยาบาลช่วยรอบนอก",
       "state": "ready",
-      "text": "2 free (Ploy, Fah (on-call))"
+      "text": "ว่าง 2 คน (Nok, Fon)"
      }
     ],
     "equip": [
      {
       "label": "KNEE-01 (ORTHO_KNEE_SET)",
       "state": "warn",
-      "text": "sterilizing at CSSD until 12:30"
+      "text": "อยู่ระหว่างทำให้ปราศจากเชื้อที่ CSSD ถึง 12:30"
      },
      {
       "label": "KNEE-02 (ORTHO_KNEE_SET)",
       "state": "busy",
-      "text": "in maintenance"
+      "text": "ซ่อมบำรุง"
      },
      {
       "label": "DV-01 (ROBOT_DA_VINCI)",
       "state": "warn",
-      "text": "in use by C04, back from CSSD 12:30"
+      "text": "ใช้กับเคส C04 อยู่ กลับจาก CSSD 12:30"
      }
     ],
     "or": [
      {
       "label": "OR-3",
       "state": "ready",
-      "text": "free 09:00-12:00 incl. 30 min clean"
+      "text": "ว่าง 09:00-12:00 (รวมทำความสะอาด 30 นาที)"
      },
      {
-      "label": "PACU bed",
+      "label": "เตียง PACU",
       "state": "ready",
-      "text": "2 free from 11:30 (PACU-2, PACU-3)"
+      "text": "ว่าง 2 เตียงตั้งแต่ 11:30 (PACU-2, PACU-3)"
      }
     ]
    },
@@ -518,28 +518,28 @@
    "title": "Step 1: Intake & Triage รับคำขอผ่าตัด",
    "desc": "Dr.Somchai (Ortho) ขอจอง Robotic-assisted total knee arthroplasty (N01) เวลา 09:00 ระยะเวลา 150 นาที ต้องใช้ห้อง LAMINAR_FLOW, ROBOTIC_READY และ ROBOT_DA_VINCI, ORTHO_KNEE_SET (รอบนี้คำขอเป็นข้อมูลโครงสร้าง ส่วน NLP/เสียงและการพยากรณ์เวลาจากประวัติยังไม่ได้ทำ)",
    "logs": [
-    "[Intake -> Master] N01 Robotic-assisted total knee arthroplasty | Dr.Somchai (Ortho) | ELECTIVE | 150 min | requested 09:00"
+    "[Intake -> Master] N01 Robotic-assisted total knee arthroplasty | Dr.Somchai (Ortho) | นัดล่วงหน้า | 150 นาที | ขอเวลา 09:00"
    ],
    "agents": {
     "intake": {
      "glow": "cyan",
-     "pill": "Parsing request"
+     "pill": "อ่านคำขอ"
     },
     "master": {
      "glow": "gold",
-     "pill": "Receiving case"
+     "pill": "รับเคส"
     },
     "staff": {
      "glow": "",
-     "pill": "Idle"
+     "pill": "ว่าง"
     },
     "equip": {
      "glow": "",
-     "pill": "Idle"
+     "pill": "ว่าง"
     },
     "or": {
      "glow": "",
-     "pill": "Idle"
+     "pill": "ว่าง"
     }
    },
    "beams": [
@@ -550,51 +550,51 @@
      {
       "label": "Dr.Somchai (Ortho)",
       "state": "ready",
-      "text": "free 09:00-11:30"
+      "text": "ว่าง 09:00-11:30"
      },
      {
-      "label": "Anesthesiologist",
+      "label": "วิสัญญีแพทย์",
       "state": "ready",
-      "text": "1 free (Dr.Prasert (on-call))"
+      "text": "ว่าง 2 คน (Dr.Chaiwat, Dr.Suda)"
      },
      {
-      "label": "Scrub Nurse",
+      "label": "พยาบาลส่งเครื่องมือ",
       "state": "ready",
-      "text": "3 free (Kanya, Sirilak, Duangjai (on-call))"
+      "text": "ว่าง 3 คน (Kanya, Sirilak, Duangjai (on-call))"
      },
      {
-      "label": "Circulating Nurse",
+      "label": "พยาบาลช่วยรอบนอก",
       "state": "ready",
-      "text": "2 free (Ploy, Fah (on-call))"
+      "text": "ว่าง 2 คน (Nok, Fon)"
      }
     ],
     "equip": [
      {
       "label": "KNEE-01 (ORTHO_KNEE_SET)",
       "state": "warn",
-      "text": "sterilizing at CSSD until 12:30"
+      "text": "อยู่ระหว่างทำให้ปราศจากเชื้อที่ CSSD ถึง 12:30"
      },
      {
       "label": "KNEE-02 (ORTHO_KNEE_SET)",
       "state": "busy",
-      "text": "in maintenance"
+      "text": "ซ่อมบำรุง"
      },
      {
       "label": "DV-01 (ROBOT_DA_VINCI)",
       "state": "warn",
-      "text": "in use by C04, back from CSSD 12:30"
+      "text": "ใช้กับเคส C04 อยู่ กลับจาก CSSD 12:30"
      }
     ],
     "or": [
      {
       "label": "OR-3",
       "state": "ready",
-      "text": "free 09:00-12:00 incl. 30 min clean"
+      "text": "ว่าง 09:00-12:00 (รวมทำความสะอาด 30 นาที)"
      },
      {
-      "label": "PACU bed",
+      "label": "เตียง PACU",
       "state": "ready",
-      "text": "2 free from 11:30 (PACU-2, PACU-3)"
+      "text": "ว่าง 2 เตียงตั้งแต่ 11:30 (PACU-2, PACU-3)"
      }
     ]
    },
@@ -695,31 +695,31 @@
    "title": "Step 2: สแกนทรัพยากรพร้อมกันที่ 09:00",
    "desc": "Master Orchestrator ส่งเวลาเป้าหมายให้ Agent ทั้ง 3 ตรวจพร้อมกัน: Staffing Agent ผ่าน; Equipment & CSSD Agent ไม่ผ่าน; OR Facility Agent ผ่าน",
    "logs": [
-    "[Master Orchestrator] parallel scan 09:00-11:30 -> Staffing, Equipment & CSSD, OR Facility",
-    "[Staffing Agent] OK: Dr.Somchai (Ortho) free 09:00-11:30; Anesthesiologist 1 free (Dr.Prasert (on-call)); Scrub Nurse 3 free (Kanya, Sirilak, Duangjai (on-call)); Circulating Nurse 2 free (Ploy, Fah (on-call))",
-    "[Equipment & CSSD Agent] CONFLICT: KNEE-01 (ORTHO_KNEE_SET) sterilizing at CSSD until 12:30; KNEE-02 (ORTHO_KNEE_SET) in maintenance; DV-01 (ROBOT_DA_VINCI) in use by C04, back from CSSD 12:30",
-    "[OR Facility Agent] OK: OR-3 free 09:00-12:00 incl. 30 min clean; PACU bed 2 free from 11:30 (PACU-2, PACU-3)"
+    "[Master Orchestrator] ให้ Agent ทั้ง 3 ตรวจช่วง 09:00-11:30 พร้อมกัน (Staffing, Equipment & CSSD, OR Facility)",
+    "[Staffing Agent] ผ่าน: Dr.Somchai (Ortho): ว่าง 09:00-11:30; วิสัญญีแพทย์: ว่าง 2 คน (Dr.Chaiwat, Dr.Suda); พยาบาลส่งเครื่องมือ: ว่าง 3 คน (Kanya, Sirilak, Duangjai (on-call)); พยาบาลช่วยรอบนอก: ว่าง 2 คน (Nok, Fon)",
+    "[Equipment & CSSD Agent] ไม่ผ่าน: KNEE-01 (ORTHO_KNEE_SET): อยู่ระหว่างทำให้ปราศจากเชื้อที่ CSSD ถึง 12:30; KNEE-02 (ORTHO_KNEE_SET): ซ่อมบำรุง; DV-01 (ROBOT_DA_VINCI): ใช้กับเคส C04 อยู่ กลับจาก CSSD 12:30",
+    "[OR Facility Agent] ผ่าน: OR-3: ว่าง 09:00-12:00 (รวมทำความสะอาด 30 นาที); เตียง PACU: ว่าง 2 เตียงตั้งแต่ 11:30 (PACU-2, PACU-3)"
    ],
    "agents": {
     "intake": {
      "glow": "",
-     "pill": "Standby"
+     "pill": "รอคำขอ"
     },
     "master": {
      "glow": "gold",
-     "pill": "Parallel scan"
+     "pill": "สแกนพร้อมกัน"
     },
     "staff": {
      "glow": "green",
-     "pill": "OK"
+     "pill": "ผ่าน"
     },
     "equip": {
      "glow": "red",
-     "pill": "Conflict"
+     "pill": "ไม่ผ่าน"
     },
     "or": {
      "glow": "green",
-     "pill": "OK"
+     "pill": "ผ่าน"
     }
    },
    "beams": [
@@ -735,51 +735,51 @@
      {
       "label": "Dr.Somchai (Ortho)",
       "state": "ready",
-      "text": "free 09:00-11:30"
+      "text": "ว่าง 09:00-11:30"
      },
      {
-      "label": "Anesthesiologist",
+      "label": "วิสัญญีแพทย์",
       "state": "ready",
-      "text": "1 free (Dr.Prasert (on-call))"
+      "text": "ว่าง 2 คน (Dr.Chaiwat, Dr.Suda)"
      },
      {
-      "label": "Scrub Nurse",
+      "label": "พยาบาลส่งเครื่องมือ",
       "state": "ready",
-      "text": "3 free (Kanya, Sirilak, Duangjai (on-call))"
+      "text": "ว่าง 3 คน (Kanya, Sirilak, Duangjai (on-call))"
      },
      {
-      "label": "Circulating Nurse",
+      "label": "พยาบาลช่วยรอบนอก",
       "state": "ready",
-      "text": "2 free (Ploy, Fah (on-call))"
+      "text": "ว่าง 2 คน (Nok, Fon)"
      }
     ],
     "equip": [
      {
       "label": "KNEE-01 (ORTHO_KNEE_SET)",
       "state": "warn",
-      "text": "sterilizing at CSSD until 12:30"
+      "text": "อยู่ระหว่างทำให้ปราศจากเชื้อที่ CSSD ถึง 12:30"
      },
      {
       "label": "KNEE-02 (ORTHO_KNEE_SET)",
       "state": "busy",
-      "text": "in maintenance"
+      "text": "ซ่อมบำรุง"
      },
      {
       "label": "DV-01 (ROBOT_DA_VINCI)",
       "state": "warn",
-      "text": "in use by C04, back from CSSD 12:30"
+      "text": "ใช้กับเคส C04 อยู่ กลับจาก CSSD 12:30"
      }
     ],
     "or": [
      {
       "label": "OR-3",
       "state": "ready",
-      "text": "free 09:00-12:00 incl. 30 min clean"
+      "text": "ว่าง 09:00-12:00 (รวมทำความสะอาด 30 นาที)"
      },
      {
-      "label": "PACU bed",
+      "label": "เตียง PACU",
       "state": "ready",
-      "text": "2 free from 11:30 (PACU-2, PACU-3)"
+      "text": "ว่าง 2 เตียงตั้งแต่ 11:30 (PACU-2, PACU-3)"
      }
     ]
    },
@@ -880,30 +880,30 @@
    "title": "Step 3: เจรจาและหาช่วงเวลาใหม่ (CP-SAT)",
    "desc": "Agent ที่ปฏิเสธแจ้งเวลาที่ตัวเองพร้อม (Equipment & CSSD Agent พร้อม 12:30) แล้ว Master ให้ CP-SAT หาช่วงแรกที่ทุก Agent ผ่านพร้อมกัน ได้ OR-3 12:30-15:00",
    "logs": [
-    "[Master Orchestrator] 09:00 rejected by Equipment & CSSD Agent. Earliest ready: Equipment & CSSD Agent from 12:30",
-    "[Master Orchestrator] running CP-SAT for the next slot where all agents agree",
-    "[Master Orchestrator] proposed and locked OR-3 12:30-15:00 (waits until KNEE-01 is released by CSSD; DV-01 is back from CSSD after C04)"
+    "[Master Orchestrator] เวลา 09:00 ไม่ผ่าน Equipment & CSSD Agent · เร็วที่สุดที่พร้อม: Equipment & CSSD Agent พร้อม 12:30",
+    "[Master Orchestrator] ให้ CP-SAT หาช่วงถัดไปที่ทุก Agent ผ่านพร้อมกัน",
+    "[Master Orchestrator] เสนอเวลาใหม่และจองแล้ว OR-3 12:30-15:00 (รอจน KNEE-01 ออกจาก CSSD; DV-01 กลับจาก CSSD หลังเคส C04)"
    ],
    "agents": {
     "intake": {
      "glow": "",
-     "pill": "Standby"
+     "pill": "รอคำขอ"
     },
     "master": {
      "glow": "gold",
-     "pill": "Optimizing"
+     "pill": "กำลังคำนวณ"
     },
     "staff": {
      "glow": "",
-     "pill": "Idle"
+     "pill": "ว่าง"
     },
     "equip": {
      "glow": "purple",
-     "pill": "Ready 12:30"
+     "pill": "พร้อม 12:30"
     },
     "or": {
      "glow": "",
-     "pill": "Idle"
+     "pill": "ว่าง"
     }
    },
    "beams": [
@@ -914,51 +914,51 @@
      {
       "label": "Dr.Somchai (Ortho)",
       "state": "ready",
-      "text": "free 09:00-11:30"
+      "text": "ว่าง 09:00-11:30"
      },
      {
-      "label": "Anesthesiologist",
+      "label": "วิสัญญีแพทย์",
       "state": "ready",
-      "text": "1 free (Dr.Prasert (on-call))"
+      "text": "ว่าง 2 คน (Dr.Chaiwat, Dr.Suda)"
      },
      {
-      "label": "Scrub Nurse",
+      "label": "พยาบาลส่งเครื่องมือ",
       "state": "ready",
-      "text": "3 free (Kanya, Sirilak, Duangjai (on-call))"
+      "text": "ว่าง 3 คน (Kanya, Sirilak, Duangjai (on-call))"
      },
      {
-      "label": "Circulating Nurse",
+      "label": "พยาบาลช่วยรอบนอก",
       "state": "ready",
-      "text": "2 free (Ploy, Fah (on-call))"
+      "text": "ว่าง 2 คน (Nok, Fon)"
      }
     ],
     "equip": [
      {
       "label": "KNEE-01 (ORTHO_KNEE_SET)",
       "state": "warn",
-      "text": "sterilizing at CSSD until 12:30"
+      "text": "อยู่ระหว่างทำให้ปราศจากเชื้อที่ CSSD ถึง 12:30"
      },
      {
       "label": "KNEE-02 (ORTHO_KNEE_SET)",
       "state": "busy",
-      "text": "in maintenance"
+      "text": "ซ่อมบำรุง"
      },
      {
       "label": "DV-01 (ROBOT_DA_VINCI)",
       "state": "warn",
-      "text": "in use by C04, back from CSSD 12:30"
+      "text": "ใช้กับเคส C04 อยู่ กลับจาก CSSD 12:30"
      }
     ],
     "or": [
      {
       "label": "OR-3",
       "state": "ready",
-      "text": "free 09:00-12:00 incl. 30 min clean"
+      "text": "ว่าง 09:00-12:00 (รวมทำความสะอาด 30 นาที)"
      },
      {
-      "label": "PACU bed",
+      "label": "เตียง PACU",
       "state": "ready",
-      "text": "2 free from 11:30 (PACU-2, PACU-3)"
+      "text": "ว่าง 2 เตียงตั้งแต่ 11:30 (PACU-2, PACU-3)"
      }
     ]
    },
@@ -1059,31 +1059,31 @@
    "title": "Step 4: ล็อกตารางสำเร็จ",
    "desc": "N01 ถูกล็อกที่ OR-3 12:30-15:00 (ทำความสะอาดเสร็จ 15:30) จองเครื่องมือ KNEE-01, DV-01 และเตียง PACU-2 โดยไม่ขยับเคสเดิม ตัวตรวจอิสระยืนยันว่าไม่มีการชนกัน",
    "logs": [
-    "[Master Orchestrator] proposed and locked OR-3 12:30-15:00 (waits until KNEE-01 is released by CSSD; DV-01 is back from CSSD after C04)",
-    "[Equipment & CSSD Agent] reserved KNEE-01, DV-01; CSSD queue: KNEE-01 back 17:00, DV-01 back 16:00",
-    "[OR Facility Agent] reserved PACU-2 from 15:00",
-    "[Staffing Agent] notified team: Dr.Somchai (Ortho), Dr.Suda, Kanya, Dao"
+    "[Master Orchestrator] เสนอเวลาใหม่และจองแล้ว OR-3 12:30-15:00 (รอจน KNEE-01 ออกจาก CSSD; DV-01 กลับจาก CSSD หลังเคส C04)",
+    "[Equipment & CSSD Agent] จอง KNEE-01, DV-01 · คิว CSSD: KNEE-01 กลับจาก CSSD 17:00, DV-01 กลับจาก CSSD 16:00",
+    "[OR Facility Agent] จองเตียง PACU-2 ตั้งแต่ 15:00",
+    "[Staffing Agent] แจ้งทีมแล้ว: Dr.Somchai (Ortho), Dr.Prasert (on-call), Kanya, Nok"
    ],
    "agents": {
     "intake": {
      "glow": "",
-     "pill": "Standby"
+     "pill": "รอคำขอ"
     },
     "master": {
      "glow": "green",
-     "pill": "Schedule locked"
+     "pill": "ล็อกตารางแล้ว"
     },
     "staff": {
      "glow": "green",
-     "pill": "Team notified"
+     "pill": "แจ้งทีมแล้ว"
     },
     "equip": {
      "glow": "green",
-     "pill": "Units reserved"
+     "pill": "จองเครื่องมือแล้ว"
     },
     "or": {
      "glow": "green",
-     "pill": "OR-3 reserved"
+     "pill": "จอง OR-3 แล้ว"
     }
    },
    "beams": [
@@ -1099,51 +1099,51 @@
      {
       "label": "Dr.Somchai (Ortho)",
       "state": "ready",
-      "text": "free 12:30-15:00"
+      "text": "ว่าง 12:30-15:00"
      },
      {
-      "label": "Anesthesiologist",
+      "label": "วิสัญญีแพทย์",
       "state": "ready",
-      "text": "2 free (Dr.Ratana, Dr.Suda)"
+      "text": "ว่าง 2 คน (Dr.Chaiwat, Dr.Prasert (on-call))"
      },
      {
-      "label": "Scrub Nurse",
+      "label": "พยาบาลส่งเครื่องมือ",
       "state": "ready",
-      "text": "4 free (Kanya, Jintana, Sirilak...)"
+      "text": "ว่าง 4 คน (Kanya, Jintana, Sirilak...)"
      },
      {
-      "label": "Circulating Nurse",
+      "label": "พยาบาลช่วยรอบนอก",
       "state": "ready",
-      "text": "2 free (Dao, Fah (on-call))"
+      "text": "ว่าง 2 คน (Nok, Fah (on-call))"
      }
     ],
     "equip": [
      {
       "label": "KNEE-01 (ORTHO_KNEE_SET)",
       "state": "ready",
-      "text": "ready"
+      "text": "พร้อม"
      },
      {
       "label": "KNEE-02 (ORTHO_KNEE_SET)",
       "state": "busy",
-      "text": "in maintenance"
+      "text": "ซ่อมบำรุง"
      },
      {
       "label": "DV-01 (ROBOT_DA_VINCI)",
       "state": "ready",
-      "text": "ready"
+      "text": "พร้อม"
      }
     ],
     "or": [
      {
       "label": "OR-3",
       "state": "ready",
-      "text": "free 12:30-15:30 incl. 30 min clean"
+      "text": "ว่าง 12:30-15:30 (รวมทำความสะอาด 30 นาที)"
      },
      {
-      "label": "PACU bed",
+      "label": "เตียง PACU",
       "state": "ready",
-      "text": "3 free from 15:00 (PACU-2, PACU-3, PACU-4)"
+      "text": "ว่าง 3 เตียงตั้งแต่ 15:00 (PACU-2, PACU-3, PACU-4)"
      }
     ]
    },
@@ -1242,38 +1242,38 @@
   },
   {
    "title": "Step 5: เคสฉุกเฉินเข้ามา 12:15 (Ripple Effect)",
-   "desc": "Emergency craniotomy (traumatic subdural haematoma) โดย Dr.Thanakorn (Neuro, on-call) ได้ห้อง OR-3 เวลา 12:15 เคสที่เริ่มไปแล้วถูกล็อกไว้ เลื่อน 1 เคส: N01 moved 12:30->14:45, team -[Dr.Suda, Kanya] +[Dr.Ratana, Jintana] และแจ้งเตือน 7 คน",
+   "desc": "Emergency craniotomy (traumatic subdural haematoma) โดย Dr.Thanakorn (Neuro, on-call) ได้ห้อง OR-3 เวลา 12:15 เคสที่เริ่มไปแล้วถูกล็อกไว้ เลื่อน 1 เคส: N01 เลื่อนเวลา 12:30->14:45, เปลี่ยนทีม ออก: Kanya, Nok เข้า: Jintana, Dao และแจ้งเตือน 8 คน",
    "logs": [
-    "[Intake & Triage Agent] EMERGENCY E01 Emergency craniotomy (traumatic subdural haematoma) | Dr.Thanakorn (Neuro, on-call) | 120 min | arrives 12:15",
-    "[Staffing Agent] OK at 12:15: Dr.Thanakorn (Neuro, on-call) free 12:15-14:15; Anesthesiologist 1 free (Dr.Ratana); Scrub Nurse 3 free (Jintana, Sirilak, Duangjai (on-call)); Circulating Nurse 1 free (Fah (on-call))",
-    "[Equipment & CSSD Agent] OK at 12:15: CRANI-01 (NEURO_CRANIOTOMY_SET) ready",
-    "[OR Facility Agent] CONFLICT at 12:15: OR-1 busy with C08, clean at 13:30; OR-2 busy with U01, clean at 13:30; OR-3 booked for N01 at 12:30; ICU_SURGICAL bed 2 free from 14:15 (ICU-1, ICU-2)",
-    "[Master Orchestrator] locking cases already in progress, re-optimising the rest (ripple effect)",
-    "[Master Orchestrator] E01: NEW booking OR-3 12:15-14:15",
-    "[Master Orchestrator] N01: moved 12:30->14:45; team -[Dr.Suda, Kanya] +[Dr.Ratana, Jintana]",
-    "[Master Orchestrator] E01: EMERGENCY: starts 0 min after it could first start (12:15)",
-    "[Staffing Agent] 10 notifications to 7 staff"
+    "[Intake & Triage Agent] ฉุกเฉิน E01 Emergency craniotomy (traumatic subdural haematoma) | Dr.Thanakorn (Neuro, on-call) | 120 นาที | มาถึง 12:15",
+    "[Staffing Agent] ผ่าน เวลา 12:15: Dr.Thanakorn (Neuro, on-call): ว่าง 12:15-14:15; วิสัญญีแพทย์: ว่าง 1 คน (Dr.Chaiwat); พยาบาลส่งเครื่องมือ: ว่าง 3 คน (Jintana, Sirilak, Duangjai (on-call)); พยาบาลช่วยรอบนอก: ว่าง 1 คน (Fah (on-call))",
+    "[Equipment & CSSD Agent] ผ่าน เวลา 12:15: CRANI-01 (NEURO_CRANIOTOMY_SET): พร้อม",
+    "[OR Facility Agent] ไม่ผ่าน เวลา 12:15: OR-1: ติดเคส C08 ทำความสะอาดเสร็จ 13:30; OR-2: ติดเคส U01 ทำความสะอาดเสร็จ 13:30; OR-3: มีเคส N01 เวลา 12:30; เตียง ICU_SURGICAL: ว่าง 2 เตียงตั้งแต่ 14:15 (ICU-1, ICU-2)",
+    "[Master Orchestrator] ล็อกเคสที่เริ่มไปแล้ว แล้วจัดเคสที่เหลือใหม่ (ripple effect)",
+    "[Master Orchestrator] E01: จองใหม่ OR-3 12:15-14:15",
+    "[Master Orchestrator] N01: เลื่อนเวลา 12:30->14:45; เปลี่ยนทีม ออก: Kanya, Nok เข้า: Jintana, Dao",
+    "[Master Orchestrator] E01: ฉุกเฉิน: เริ่มหลังเวลาที่เริ่มได้เร็วสุด (12:15) 0 นาที",
+    "[Staffing Agent] แจ้งเตือน 10 ข้อความ ถึง 8 คน"
    ],
    "agents": {
     "intake": {
      "glow": "red",
-     "pill": "EMERGENCY"
+     "pill": "ฉุกเฉิน"
     },
     "master": {
      "glow": "red",
-     "pill": "Auto-rescheduling"
+     "pill": "จัดตารางใหม่อัตโนมัติ"
     },
     "staff": {
      "glow": "orange",
-     "pill": "Calling on-call team"
+     "pill": "เรียกทีมเวร"
     },
     "equip": {
      "glow": "",
-     "pill": "Idle"
+     "pill": "ว่าง"
     },
     "or": {
      "glow": "red",
-     "pill": "Clearing a room"
+     "pill": "เคลียร์ห้อง"
     }
    },
    "beams": [
@@ -1288,51 +1288,51 @@
      {
       "label": "Dr.Thanakorn (Neuro, on-call)",
       "state": "ready",
-      "text": "free 12:15-14:15"
+      "text": "ว่าง 12:15-14:15"
      },
      {
-      "label": "Anesthesiologist",
+      "label": "วิสัญญีแพทย์",
       "state": "ready",
-      "text": "1 free (Dr.Ratana)"
+      "text": "ว่าง 1 คน (Dr.Chaiwat)"
      },
      {
-      "label": "Scrub Nurse",
+      "label": "พยาบาลส่งเครื่องมือ",
       "state": "ready",
-      "text": "3 free (Jintana, Sirilak, Duangjai (on-call))"
+      "text": "ว่าง 3 คน (Jintana, Sirilak, Duangjai (on-call))"
      },
      {
-      "label": "Circulating Nurse",
+      "label": "พยาบาลช่วยรอบนอก",
       "state": "ready",
-      "text": "1 free (Fah (on-call))"
+      "text": "ว่าง 1 คน (Fah (on-call))"
      }
     ],
     "equip": [
      {
       "label": "CRANI-01 (NEURO_CRANIOTOMY_SET)",
       "state": "ready",
-      "text": "ready"
+      "text": "พร้อม"
      }
     ],
     "or": [
      {
       "label": "OR-1",
       "state": "warn",
-      "text": "busy with C08, clean at 13:30"
+      "text": "ติดเคส C08 ทำความสะอาดเสร็จ 13:30"
      },
      {
       "label": "OR-2",
       "state": "warn",
-      "text": "busy with U01, clean at 13:30"
+      "text": "ติดเคส U01 ทำความสะอาดเสร็จ 13:30"
      },
      {
       "label": "OR-3",
       "state": "warn",
-      "text": "booked for N01 at 12:30"
+      "text": "มีเคส N01 เวลา 12:30"
      },
      {
-      "label": "ICU_SURGICAL bed",
+      "label": "เตียง ICU_SURGICAL",
       "state": "ready",
-      "text": "2 free from 14:15 (ICU-1, ICU-2)"
+      "text": "ว่าง 2 เตียงตั้งแต่ 14:15 (ICU-1, ICU-2)"
      }
     ]
    },
@@ -1446,15 +1446,19 @@
   "booked": {
    "scenario": "Booked schedule",
    "status": "OPTIMAL",
-   "objective": -164.0,
+   "objective": 320.0,
    "now_min": 0,
-   "wall_time_s": 0.128,
+   "wall_time_s": 0.157,
    "bookings": [
     {
      "case_id": "C07",
      "procedure": "Laparoscopic appendectomy",
      "patient_hn": "HN-0007",
+     "patient_name": null,
      "urgency": "URGENT",
+     "airborne": false,
+     "supplies": {},
+     "infection_risk": "CLEAN",
      "or_id": "OR-1",
      "start_min": 480,
      "end_min": 540,
@@ -1476,8 +1480,8 @@
        "name": "Orathai"
       },
       {
-       "staff_id": "CIR-2",
-       "name": "Ploy"
+       "staff_id": "CIR-1",
+       "name": "Nok"
       }
      ],
      "equipment": [
@@ -1491,15 +1495,19 @@
      "recovery_end_min": 600,
      "frozen": false,
      "reasoning": [
-      "URGENT: starts 0 min after it could first start (08:00)",
-      "meets deadline 12:00"
+      "ด่วน: เริ่มหลังเวลาที่เริ่มได้เร็วสุด (08:00) 0 นาที",
+      "ทันกำหนด 12:00"
      ]
     },
     {
      "case_id": "C04",
      "procedure": "Robotic radical prostatectomy",
      "patient_hn": "HN-0004",
+     "patient_name": null,
      "urgency": "ELECTIVE",
+     "airborne": false,
+     "supplies": {},
+     "infection_risk": "CLEAN",
      "or_id": "OR-2",
      "start_min": 480,
      "end_min": 690,
@@ -1521,8 +1529,8 @@
        "name": "Malee"
       },
       {
-       "staff_id": "CIR-3",
-       "name": "Fon"
+       "staff_id": "CIR-ONCALL",
+       "name": "Fah (on-call)"
       }
      ],
      "equipment": [
@@ -1540,14 +1548,18 @@
      "recovery_end_min": 750,
      "frozen": false,
      "reasoning": [
-      "on the surgeon's preferred start time"
+      "ตรงเวลาที่ศัลยแพทย์ต้องการ"
      ]
     },
     {
      "case_id": "C06",
      "procedure": "Laparoscopic cholecystectomy",
      "patient_hn": "HN-0006",
+     "patient_name": null,
      "urgency": "ELECTIVE",
+     "airborne": false,
+     "supplies": {},
+     "infection_risk": "CLEAN",
      "or_id": "OR-1",
      "start_min": 570,
      "end_min": 645,
@@ -1561,16 +1573,16 @@
        "name": "Dr.Napat (General)"
       },
       {
-       "staff_id": "ANE-4",
-       "name": "Dr.Suda"
+       "staff_id": "ANE-ONCALL",
+       "name": "Dr.Prasert (on-call)"
       },
       {
        "staff_id": "SCR-3",
        "name": "Orathai"
       },
       {
-       "staff_id": "CIR-1",
-       "name": "Nok"
+       "staff_id": "CIR-2",
+       "name": "Ploy"
       }
      ],
      "equipment": [
@@ -1584,15 +1596,19 @@
      "recovery_end_min": 705,
      "frozen": false,
      "reasoning": [
-      "90 min after preferred start 08:00",
-      "waits until OR-1 is cleaned after C07"
+      "ช้ากว่าเวลาที่ต้องการ (08:00) 90 นาที",
+      "รอจน OR-1 ทำความสะอาดเสร็จหลังเคส C07"
      ]
     },
     {
      "case_id": "C08",
      "procedure": "Laparoscopic inguinal hernia repair (TEP)",
      "patient_hn": "HN-0008",
+     "patient_name": null,
      "urgency": "ELECTIVE",
+     "airborne": false,
+     "supplies": {},
+     "infection_risk": "CLEAN",
      "or_id": "OR-1",
      "start_min": 690,
      "end_min": 780,
@@ -1606,8 +1622,8 @@
        "name": "Dr.Napat (General)"
       },
       {
-       "staff_id": "ANE-2",
-       "name": "Dr.Chaiwat"
+       "staff_id": "ANE-3",
+       "name": "Dr.Ratana"
       },
       {
        "staff_id": "SCR-3",
@@ -1629,14 +1645,18 @@
      "recovery_end_min": 840,
      "frozen": false,
      "reasoning": [
-      "on the surgeon's preferred start time"
+      "ตรงเวลาที่ศัลยแพทย์ต้องการ"
      ]
     },
     {
      "case_id": "U01",
      "procedure": "Transurethral resection of prostate (TURP)",
      "patient_hn": "HN-0012",
+     "patient_name": null,
      "urgency": "ELECTIVE",
+     "airborne": false,
+     "supplies": {},
+     "infection_risk": "CLEAN",
      "or_id": "OR-2",
      "start_min": 720,
      "end_min": 780,
@@ -1673,14 +1693,18 @@
      "recovery_end_min": 840,
      "frozen": false,
      "reasoning": [
-      "on the surgeon's preferred start time"
+      "ตรงเวลาที่ศัลยแพทย์ต้องการ"
      ]
     },
     {
      "case_id": "C11",
      "procedure": "Laparoscopic sleeve gastrectomy",
      "patient_hn": "HN-0011",
+     "patient_name": null,
      "urgency": "ELECTIVE",
+     "airborne": false,
+     "supplies": {},
+     "infection_risk": "CLEAN",
      "or_id": "OR-1",
      "start_min": 810,
      "end_min": 930,
@@ -1694,21 +1718,21 @@
        "name": "Dr.Napat (General)"
       },
       {
-       "staff_id": "ANE-ONCALL",
-       "name": "Dr.Prasert (on-call)"
+       "staff_id": "ANE-4",
+       "name": "Dr.Suda"
       },
       {
        "staff_id": "SCR-3",
        "name": "Orathai"
       },
       {
-       "staff_id": "CIR-1",
-       "name": "Nok"
+       "staff_id": "CIR-3",
+       "name": "Fon"
       }
      ],
      "equipment": [
       {
-       "unit_id": "LAP-03",
+       "unit_id": "LAP-01",
        "back_from_cssd_min": 1020
       }
      ],
@@ -1717,14 +1741,18 @@
      "recovery_end_min": 990,
      "frozen": false,
      "reasoning": [
-      "on the surgeon's preferred start time"
+      "ตรงเวลาที่ศัลยแพทย์ต้องการ"
      ]
     },
     {
      "case_id": "U02",
      "procedure": "Ureteroscopy with laser lithotripsy",
      "patient_hn": "HN-0013",
+     "patient_name": null,
      "urgency": "ELECTIVE",
+     "airborne": false,
+     "supplies": {},
+     "infection_risk": "CLEAN",
      "or_id": "OR-2",
      "start_min": 810,
      "end_min": 870,
@@ -1746,8 +1774,8 @@
        "name": "Malee"
       },
       {
-       "staff_id": "CIR-3",
-       "name": "Fon"
+       "staff_id": "CIR-4",
+       "name": "Dao"
       }
      ],
      "equipment": [
@@ -1761,13 +1789,14 @@
      "recovery_end_min": 930,
      "frozen": false,
      "reasoning": [
-      "on the surgeon's preferred start time"
+      "ตรงเวลาที่ศัลยแพทย์ต้องการ"
      ]
     }
    ],
    "unscheduled": [],
    "changes": [],
-   "notifications": []
+   "notifications": [],
+   "fatigue": []
   },
   "slotCheck": {
    "case_id": "N01",
@@ -1783,25 +1812,25 @@
       {
        "resource": "Dr.Somchai (Ortho)",
        "ok": true,
-       "note": "free 09:00-11:30",
+       "note": "ว่าง 09:00-11:30",
        "ready_at_min": 540
       },
       {
-       "resource": "Anesthesiologist",
+       "resource": "วิสัญญีแพทย์",
        "ok": true,
-       "note": "1 free (Dr.Prasert (on-call))",
+       "note": "ว่าง 2 คน (Dr.Chaiwat, Dr.Suda)",
        "ready_at_min": 540
       },
       {
-       "resource": "Scrub Nurse",
+       "resource": "พยาบาลส่งเครื่องมือ",
        "ok": true,
-       "note": "3 free (Kanya, Sirilak, Duangjai (on-call))",
+       "note": "ว่าง 3 คน (Kanya, Sirilak, Duangjai (on-call))",
        "ready_at_min": 540
       },
       {
-       "resource": "Circulating Nurse",
+       "resource": "พยาบาลช่วยรอบนอก",
        "ok": true,
-       "note": "2 free (Ploy, Fah (on-call))",
+       "note": "ว่าง 2 คน (Nok, Fon)",
        "ready_at_min": 540
       }
      ]
@@ -1814,19 +1843,19 @@
       {
        "resource": "KNEE-01 (ORTHO_KNEE_SET)",
        "ok": false,
-       "note": "sterilizing at CSSD until 12:30",
+       "note": "อยู่ระหว่างทำให้ปราศจากเชื้อที่ CSSD ถึง 12:30",
        "ready_at_min": 750
       },
       {
        "resource": "KNEE-02 (ORTHO_KNEE_SET)",
        "ok": false,
-       "note": "in maintenance",
+       "note": "ซ่อมบำรุง",
        "ready_at_min": null
       },
       {
        "resource": "DV-01 (ROBOT_DA_VINCI)",
        "ok": false,
-       "note": "in use by C04, back from CSSD 12:30",
+       "note": "ใช้กับเคส C04 อยู่ กลับจาก CSSD 12:30",
        "ready_at_min": 750
       }
      ]
@@ -1839,43 +1868,47 @@
       {
        "resource": "OR-3",
        "ok": true,
-       "note": "free 09:00-12:00 incl. 30 min clean",
+       "note": "ว่าง 09:00-12:00 (รวมทำความสะอาด 30 นาที)",
        "ready_at_min": 540
       },
       {
-       "resource": "PACU bed",
+       "resource": "เตียง PACU",
        "ok": true,
-       "note": "2 free from 11:30 (PACU-2, PACU-3)",
+       "note": "ว่าง 2 เตียงตั้งแต่ 11:30 (PACU-2, PACU-3)",
        "ready_at_min": 540
       }
      ]
     }
    ],
    "log": [
-    "[Intake -> Master] N01 Robotic-assisted total knee arthroplasty | Dr.Somchai (Ortho) | ELECTIVE | 150 min | requested 09:00",
-    "[Master Orchestrator] parallel scan 09:00-11:30 -> Staffing, Equipment & CSSD, OR Facility",
-    "[Staffing Agent] OK: Dr.Somchai (Ortho) free 09:00-11:30; Anesthesiologist 1 free (Dr.Prasert (on-call)); Scrub Nurse 3 free (Kanya, Sirilak, Duangjai (on-call)); Circulating Nurse 2 free (Ploy, Fah (on-call))",
-    "[Equipment & CSSD Agent] CONFLICT: KNEE-01 (ORTHO_KNEE_SET) sterilizing at CSSD until 12:30; KNEE-02 (ORTHO_KNEE_SET) in maintenance; DV-01 (ROBOT_DA_VINCI) in use by C04, back from CSSD 12:30",
-    "[OR Facility Agent] OK: OR-3 free 09:00-12:00 incl. 30 min clean; PACU bed 2 free from 11:30 (PACU-2, PACU-3)",
-    "[Master Orchestrator] 09:00 rejected by Equipment & CSSD Agent. Earliest ready: Equipment & CSSD Agent from 12:30",
-    "[Master Orchestrator] running CP-SAT for the next slot where all agents agree",
-    "[Master Orchestrator] proposed and locked OR-3 12:30-15:00 (waits until KNEE-01 is released by CSSD; DV-01 is back from CSSD after C04)",
-    "[Equipment & CSSD Agent] reserved KNEE-01, DV-01; CSSD queue: KNEE-01 back 17:00, DV-01 back 16:00",
-    "[OR Facility Agent] reserved PACU-2 from 15:00",
-    "[Staffing Agent] notified team: Dr.Somchai (Ortho), Dr.Suda, Kanya, Dao"
+    "[Intake -> Master] N01 Robotic-assisted total knee arthroplasty | Dr.Somchai (Ortho) | นัดล่วงหน้า | 150 นาที | ขอเวลา 09:00",
+    "[Master Orchestrator] ให้ Agent ทั้ง 3 ตรวจช่วง 09:00-11:30 พร้อมกัน (Staffing, Equipment & CSSD, OR Facility)",
+    "[Staffing Agent] ผ่าน: Dr.Somchai (Ortho): ว่าง 09:00-11:30; วิสัญญีแพทย์: ว่าง 2 คน (Dr.Chaiwat, Dr.Suda); พยาบาลส่งเครื่องมือ: ว่าง 3 คน (Kanya, Sirilak, Duangjai (on-call)); พยาบาลช่วยรอบนอก: ว่าง 2 คน (Nok, Fon)",
+    "[Equipment & CSSD Agent] ไม่ผ่าน: KNEE-01 (ORTHO_KNEE_SET): อยู่ระหว่างทำให้ปราศจากเชื้อที่ CSSD ถึง 12:30; KNEE-02 (ORTHO_KNEE_SET): ซ่อมบำรุง; DV-01 (ROBOT_DA_VINCI): ใช้กับเคส C04 อยู่ กลับจาก CSSD 12:30",
+    "[OR Facility Agent] ผ่าน: OR-3: ว่าง 09:00-12:00 (รวมทำความสะอาด 30 นาที); เตียง PACU: ว่าง 2 เตียงตั้งแต่ 11:30 (PACU-2, PACU-3)",
+    "[Master Orchestrator] เวลา 09:00 ไม่ผ่าน Equipment & CSSD Agent · เร็วที่สุดที่พร้อม: Equipment & CSSD Agent พร้อม 12:30",
+    "[Master Orchestrator] ให้ CP-SAT หาช่วงถัดไปที่ทุก Agent ผ่านพร้อมกัน",
+    "[Master Orchestrator] เสนอเวลาใหม่และจองแล้ว OR-3 12:30-15:00 (รอจน KNEE-01 ออกจาก CSSD; DV-01 กลับจาก CSSD หลังเคส C04)",
+    "[Equipment & CSSD Agent] จอง KNEE-01, DV-01 · คิว CSSD: KNEE-01 กลับจาก CSSD 17:00, DV-01 กลับจาก CSSD 16:00",
+    "[OR Facility Agent] จองเตียง PACU-2 ตั้งแต่ 15:00",
+    "[Staffing Agent] แจ้งทีมแล้ว: Dr.Somchai (Ortho), Dr.Prasert (on-call), Kanya, Nok"
    ],
    "result": {
-    "scenario": "Slot check N01 @ 09:00",
+    "scenario": "ตรวจเวลา N01 @ 09:00",
     "status": "OPTIMAL",
-    "objective": 21015.0,
+    "objective": 21115.0,
     "now_min": 0,
-    "wall_time_s": 0.008,
+    "wall_time_s": 0.01,
     "bookings": [
      {
       "case_id": "C07",
       "procedure": "Laparoscopic appendectomy",
       "patient_hn": "HN-0007",
+      "patient_name": null,
       "urgency": "URGENT",
+      "airborne": false,
+      "supplies": {},
+      "infection_risk": "CLEAN",
       "or_id": "OR-1",
       "start_min": 480,
       "end_min": 540,
@@ -1897,8 +1930,8 @@
         "name": "Orathai"
        },
        {
-        "staff_id": "CIR-2",
-        "name": "Ploy"
+        "staff_id": "CIR-1",
+        "name": "Nok"
        }
       ],
       "equipment": [
@@ -1912,15 +1945,19 @@
       "recovery_end_min": 600,
       "frozen": false,
       "reasoning": [
-       "URGENT: starts 0 min after it could first start (08:00)",
-       "meets deadline 12:00"
+       "ด่วน: เริ่มหลังเวลาที่เริ่มได้เร็วสุด (08:00) 0 นาที",
+       "ทันกำหนด 12:00"
       ]
      },
      {
       "case_id": "C04",
       "procedure": "Robotic radical prostatectomy",
       "patient_hn": "HN-0004",
+      "patient_name": null,
       "urgency": "ELECTIVE",
+      "airborne": false,
+      "supplies": {},
+      "infection_risk": "CLEAN",
       "or_id": "OR-2",
       "start_min": 480,
       "end_min": 690,
@@ -1942,8 +1979,8 @@
         "name": "Malee"
        },
        {
-        "staff_id": "CIR-3",
-        "name": "Fon"
+        "staff_id": "CIR-ONCALL",
+        "name": "Fah (on-call)"
        }
       ],
       "equipment": [
@@ -1961,14 +1998,18 @@
       "recovery_end_min": 750,
       "frozen": false,
       "reasoning": [
-       "on the surgeon's preferred start time"
+       "ตรงเวลาที่ศัลยแพทย์ต้องการ"
       ]
      },
      {
       "case_id": "C06",
       "procedure": "Laparoscopic cholecystectomy",
       "patient_hn": "HN-0006",
+      "patient_name": null,
       "urgency": "ELECTIVE",
+      "airborne": false,
+      "supplies": {},
+      "infection_risk": "CLEAN",
       "or_id": "OR-1",
       "start_min": 570,
       "end_min": 645,
@@ -1982,16 +2023,16 @@
         "name": "Dr.Napat (General)"
        },
        {
-        "staff_id": "ANE-4",
-        "name": "Dr.Suda"
+        "staff_id": "ANE-ONCALL",
+        "name": "Dr.Prasert (on-call)"
        },
        {
         "staff_id": "SCR-3",
         "name": "Orathai"
        },
        {
-        "staff_id": "CIR-1",
-        "name": "Nok"
+        "staff_id": "CIR-2",
+        "name": "Ploy"
        }
       ],
       "equipment": [
@@ -2005,15 +2046,19 @@
       "recovery_end_min": 705,
       "frozen": false,
       "reasoning": [
-       "90 min after preferred start 08:00",
-       "waits until OR-1 is cleaned after C07"
+       "ช้ากว่าเวลาที่ต้องการ (08:00) 90 นาที",
+       "รอจน OR-1 ทำความสะอาดเสร็จหลังเคส C07"
       ]
      },
      {
       "case_id": "C08",
       "procedure": "Laparoscopic inguinal hernia repair (TEP)",
       "patient_hn": "HN-0008",
+      "patient_name": null,
       "urgency": "ELECTIVE",
+      "airborne": false,
+      "supplies": {},
+      "infection_risk": "CLEAN",
       "or_id": "OR-1",
       "start_min": 690,
       "end_min": 780,
@@ -2027,8 +2072,8 @@
         "name": "Dr.Napat (General)"
        },
        {
-        "staff_id": "ANE-2",
-        "name": "Dr.Chaiwat"
+        "staff_id": "ANE-3",
+        "name": "Dr.Ratana"
        },
        {
         "staff_id": "SCR-3",
@@ -2050,14 +2095,18 @@
       "recovery_end_min": 840,
       "frozen": false,
       "reasoning": [
-       "on the surgeon's preferred start time"
+       "ตรงเวลาที่ศัลยแพทย์ต้องการ"
       ]
      },
      {
       "case_id": "U01",
       "procedure": "Transurethral resection of prostate (TURP)",
       "patient_hn": "HN-0012",
+      "patient_name": null,
       "urgency": "ELECTIVE",
+      "airborne": false,
+      "supplies": {},
+      "infection_risk": "CLEAN",
       "or_id": "OR-2",
       "start_min": 720,
       "end_min": 780,
@@ -2094,14 +2143,18 @@
       "recovery_end_min": 840,
       "frozen": false,
       "reasoning": [
-       "on the surgeon's preferred start time"
+       "ตรงเวลาที่ศัลยแพทย์ต้องการ"
       ]
      },
      {
       "case_id": "N01",
       "procedure": "Robotic-assisted total knee arthroplasty",
       "patient_hn": "HN-0101",
+      "patient_name": null,
       "urgency": "ELECTIVE",
+      "airborne": false,
+      "supplies": {},
+      "infection_risk": "CLEAN",
       "or_id": "OR-3",
       "start_min": 750,
       "end_min": 900,
@@ -2115,16 +2168,16 @@
         "name": "Dr.Somchai (Ortho)"
        },
        {
-        "staff_id": "ANE-4",
-        "name": "Dr.Suda"
+        "staff_id": "ANE-ONCALL",
+        "name": "Dr.Prasert (on-call)"
        },
        {
         "staff_id": "SCR-2",
         "name": "Kanya"
        },
        {
-        "staff_id": "CIR-4",
-        "name": "Dao"
+        "staff_id": "CIR-1",
+        "name": "Nok"
        }
       ],
       "equipment": [
@@ -2142,14 +2195,18 @@
       "recovery_end_min": 960,
       "frozen": false,
       "reasoning": [
-       "waits until KNEE-01 is released by CSSD; DV-01 is back from CSSD after C04"
+       "รอจน KNEE-01 ออกจาก CSSD; DV-01 กลับจาก CSSD หลังเคส C04"
       ]
      },
      {
       "case_id": "C11",
       "procedure": "Laparoscopic sleeve gastrectomy",
       "patient_hn": "HN-0011",
+      "patient_name": null,
       "urgency": "ELECTIVE",
+      "airborne": false,
+      "supplies": {},
+      "infection_risk": "CLEAN",
       "or_id": "OR-1",
       "start_min": 810,
       "end_min": 930,
@@ -2163,21 +2220,21 @@
         "name": "Dr.Napat (General)"
        },
        {
-        "staff_id": "ANE-ONCALL",
-        "name": "Dr.Prasert (on-call)"
+        "staff_id": "ANE-4",
+        "name": "Dr.Suda"
        },
        {
         "staff_id": "SCR-3",
         "name": "Orathai"
        },
        {
-        "staff_id": "CIR-1",
-        "name": "Nok"
+        "staff_id": "CIR-3",
+        "name": "Fon"
        }
       ],
       "equipment": [
        {
-        "unit_id": "LAP-03",
+        "unit_id": "LAP-01",
         "back_from_cssd_min": 1020
        }
       ],
@@ -2186,14 +2243,18 @@
       "recovery_end_min": 990,
       "frozen": false,
       "reasoning": [
-       "on the surgeon's preferred start time"
+       "ตรงเวลาที่ศัลยแพทย์ต้องการ"
       ]
      },
      {
       "case_id": "U02",
       "procedure": "Ureteroscopy with laser lithotripsy",
       "patient_hn": "HN-0013",
+      "patient_name": null,
       "urgency": "ELECTIVE",
+      "airborne": false,
+      "supplies": {},
+      "infection_risk": "CLEAN",
       "or_id": "OR-2",
       "start_min": 810,
       "end_min": 870,
@@ -2215,8 +2276,8 @@
         "name": "Malee"
        },
        {
-        "staff_id": "CIR-3",
-        "name": "Fon"
+        "staff_id": "CIR-4",
+        "name": "Dao"
        }
       ],
       "equipment": [
@@ -2230,7 +2291,7 @@
       "recovery_end_min": 930,
       "frozen": false,
       "reasoning": [
-       "on the surgeon's preferred start time"
+       "ตรงเวลาที่ศัลยแพทย์ต้องการ"
       ]
      }
     ],
@@ -2239,7 +2300,7 @@
      {
       "case_id": "N01",
       "details": [
-       "NEW booking OR-3 12:30-15:00"
+       "จองใหม่ OR-3 12:30-15:00"
       ]
      }
     ],
@@ -2248,41 +2309,46 @@
       "staff_id": "SUR-ORTHO",
       "name": "Dr.Somchai (Ortho)",
       "case_id": "N01",
-      "message": "[ORchestraAI] N01 Robotic-assisted total knee arthroplasty (HN HN-0101): NEW booking OR-3 12:30-15:00"
+      "message": "[ORchestraAI] N01 Robotic-assisted total knee arthroplasty (HN HN-0101): จองใหม่ OR-3 12:30-15:00"
      },
      {
-      "staff_id": "ANE-4",
-      "name": "Dr.Suda",
+      "staff_id": "ANE-ONCALL",
+      "name": "Dr.Prasert (on-call)",
       "case_id": "N01",
-      "message": "[ORchestraAI] N01 Robotic-assisted total knee arthroplasty (HN HN-0101): NEW booking OR-3 12:30-15:00"
+      "message": "[ORchestraAI] N01 Robotic-assisted total knee arthroplasty (HN HN-0101): จองใหม่ OR-3 12:30-15:00"
      },
      {
       "staff_id": "SCR-2",
       "name": "Kanya",
       "case_id": "N01",
-      "message": "[ORchestraAI] N01 Robotic-assisted total knee arthroplasty (HN HN-0101): NEW booking OR-3 12:30-15:00"
+      "message": "[ORchestraAI] N01 Robotic-assisted total knee arthroplasty (HN HN-0101): จองใหม่ OR-3 12:30-15:00"
      },
      {
-      "staff_id": "CIR-4",
-      "name": "Dao",
+      "staff_id": "CIR-1",
+      "name": "Nok",
       "case_id": "N01",
-      "message": "[ORchestraAI] N01 Robotic-assisted total knee arthroplasty (HN HN-0101): NEW booking OR-3 12:30-15:00"
+      "message": "[ORchestraAI] N01 Robotic-assisted total knee arthroplasty (HN HN-0101): จองใหม่ OR-3 12:30-15:00"
      }
-    ]
+    ],
+    "fatigue": []
    }
   },
   "emergency": {
    "scenario": "Emergency insert",
    "status": "OPTIMAL",
-   "objective": 1172.0,
+   "objective": 1506.0,
    "now_min": 735,
-   "wall_time_s": 0.067,
+   "wall_time_s": 0.107,
    "bookings": [
     {
      "case_id": "C07",
      "procedure": "Laparoscopic appendectomy",
      "patient_hn": "HN-0007",
+     "patient_name": null,
      "urgency": "URGENT",
+     "airborne": false,
+     "supplies": {},
+     "infection_risk": "CLEAN",
      "or_id": "OR-1",
      "start_min": 480,
      "end_min": 540,
@@ -2304,8 +2370,8 @@
        "name": "Orathai"
       },
       {
-       "staff_id": "CIR-2",
-       "name": "Ploy"
+       "staff_id": "CIR-1",
+       "name": "Nok"
       }
      ],
      "equipment": [
@@ -2324,7 +2390,11 @@
      "case_id": "C04",
      "procedure": "Robotic radical prostatectomy",
      "patient_hn": "HN-0004",
+     "patient_name": null,
      "urgency": "ELECTIVE",
+     "airborne": false,
+     "supplies": {},
+     "infection_risk": "CLEAN",
      "or_id": "OR-2",
      "start_min": 480,
      "end_min": 690,
@@ -2346,8 +2416,8 @@
        "name": "Malee"
       },
       {
-       "staff_id": "CIR-3",
-       "name": "Fon"
+       "staff_id": "CIR-ONCALL",
+       "name": "Fah (on-call)"
       }
      ],
      "equipment": [
@@ -2370,7 +2440,11 @@
      "case_id": "C06",
      "procedure": "Laparoscopic cholecystectomy",
      "patient_hn": "HN-0006",
+     "patient_name": null,
      "urgency": "ELECTIVE",
+     "airborne": false,
+     "supplies": {},
+     "infection_risk": "CLEAN",
      "or_id": "OR-1",
      "start_min": 570,
      "end_min": 645,
@@ -2384,16 +2458,16 @@
        "name": "Dr.Napat (General)"
       },
       {
-       "staff_id": "ANE-4",
-       "name": "Dr.Suda"
+       "staff_id": "ANE-ONCALL",
+       "name": "Dr.Prasert (on-call)"
       },
       {
        "staff_id": "SCR-3",
        "name": "Orathai"
       },
       {
-       "staff_id": "CIR-1",
-       "name": "Nok"
+       "staff_id": "CIR-2",
+       "name": "Ploy"
       }
      ],
      "equipment": [
@@ -2412,7 +2486,11 @@
      "case_id": "C08",
      "procedure": "Laparoscopic inguinal hernia repair (TEP)",
      "patient_hn": "HN-0008",
+     "patient_name": null,
      "urgency": "ELECTIVE",
+     "airborne": false,
+     "supplies": {},
+     "infection_risk": "CLEAN",
      "or_id": "OR-1",
      "start_min": 690,
      "end_min": 780,
@@ -2426,8 +2504,8 @@
        "name": "Dr.Napat (General)"
       },
       {
-       "staff_id": "ANE-2",
-       "name": "Dr.Chaiwat"
+       "staff_id": "ANE-3",
+       "name": "Dr.Ratana"
       },
       {
        "staff_id": "SCR-3",
@@ -2454,7 +2532,11 @@
      "case_id": "U01",
      "procedure": "Transurethral resection of prostate (TURP)",
      "patient_hn": "HN-0012",
+     "patient_name": null,
      "urgency": "ELECTIVE",
+     "airborne": false,
+     "supplies": {},
+     "infection_risk": "CLEAN",
      "or_id": "OR-2",
      "start_min": 720,
      "end_min": 780,
@@ -2496,7 +2578,11 @@
      "case_id": "E01",
      "procedure": "Emergency craniotomy (traumatic subdural haematoma)",
      "patient_hn": "HN-9002",
+     "patient_name": null,
      "urgency": "EMERGENCY",
+     "airborne": false,
+     "supplies": {},
+     "infection_risk": "CLEAN",
      "or_id": "OR-3",
      "start_min": 735,
      "end_min": 855,
@@ -2510,16 +2596,16 @@
        "name": "Dr.Thanakorn (Neuro, on-call)"
       },
       {
-       "staff_id": "ANE-3",
-       "name": "Dr.Ratana"
+       "staff_id": "ANE-ONCALL",
+       "name": "Dr.Prasert (on-call)"
       },
       {
-       "staff_id": "SCR-2",
-       "name": "Kanya"
+       "staff_id": "SCR-ONCALL",
+       "name": "Duangjai (on-call)"
       },
       {
-       "staff_id": "CIR-4",
-       "name": "Dao"
+       "staff_id": "CIR-1",
+       "name": "Nok"
       }
      ],
      "equipment": [
@@ -2533,14 +2619,18 @@
      "recovery_end_min": 2295,
      "frozen": false,
      "reasoning": [
-      "EMERGENCY: starts 0 min after it could first start (12:15)"
+      "ฉุกเฉิน: เริ่มหลังเวลาที่เริ่มได้เร็วสุด (12:15) 0 นาที"
      ]
     },
     {
      "case_id": "C11",
      "procedure": "Laparoscopic sleeve gastrectomy",
      "patient_hn": "HN-0011",
+     "patient_name": null,
      "urgency": "ELECTIVE",
+     "airborne": false,
+     "supplies": {},
+     "infection_risk": "CLEAN",
      "or_id": "OR-1",
      "start_min": 810,
      "end_min": 930,
@@ -2554,21 +2644,21 @@
        "name": "Dr.Napat (General)"
       },
       {
-       "staff_id": "ANE-ONCALL",
-       "name": "Dr.Prasert (on-call)"
+       "staff_id": "ANE-4",
+       "name": "Dr.Suda"
       },
       {
        "staff_id": "SCR-3",
        "name": "Orathai"
       },
       {
-       "staff_id": "CIR-1",
-       "name": "Nok"
+       "staff_id": "CIR-3",
+       "name": "Fon"
       }
      ],
      "equipment": [
       {
-       "unit_id": "LAP-03",
+       "unit_id": "LAP-01",
        "back_from_cssd_min": 1020
       }
      ],
@@ -2577,14 +2667,18 @@
      "recovery_end_min": 990,
      "frozen": false,
      "reasoning": [
-      "on the surgeon's preferred start time"
+      "ตรงเวลาที่ศัลยแพทย์ต้องการ"
      ]
     },
     {
      "case_id": "U02",
      "procedure": "Ureteroscopy with laser lithotripsy",
      "patient_hn": "HN-0013",
+     "patient_name": null,
      "urgency": "ELECTIVE",
+     "airborne": false,
+     "supplies": {},
+     "infection_risk": "CLEAN",
      "or_id": "OR-2",
      "start_min": 810,
      "end_min": 870,
@@ -2606,8 +2700,8 @@
        "name": "Malee"
       },
       {
-       "staff_id": "CIR-3",
-       "name": "Fon"
+       "staff_id": "CIR-4",
+       "name": "Dao"
       }
      ],
      "equipment": [
@@ -2621,14 +2715,18 @@
      "recovery_end_min": 930,
      "frozen": false,
      "reasoning": [
-      "on the surgeon's preferred start time"
+      "ตรงเวลาที่ศัลยแพทย์ต้องการ"
      ]
     },
     {
      "case_id": "N01",
      "procedure": "Robotic-assisted total knee arthroplasty",
      "patient_hn": "HN-0101",
+     "patient_name": null,
      "urgency": "ELECTIVE",
+     "airborne": false,
+     "supplies": {},
+     "infection_risk": "CLEAN",
      "or_id": "OR-3",
      "start_min": 885,
      "end_min": 1035,
@@ -2642,8 +2740,8 @@
        "name": "Dr.Somchai (Ortho)"
       },
       {
-       "staff_id": "ANE-3",
-       "name": "Dr.Ratana"
+       "staff_id": "ANE-ONCALL",
+       "name": "Dr.Prasert (on-call)"
       },
       {
        "staff_id": "SCR-4",
@@ -2669,8 +2767,8 @@
      "recovery_end_min": 1095,
      "frozen": false,
      "reasoning": [
-      "345 min after preferred start 09:00",
-      "waits until OR-3 is cleaned after E01"
+      "ช้ากว่าเวลาที่ต้องการ (09:00) 345 นาที",
+      "รอจน OR-3 ทำความสะอาดเสร็จหลังเคส E01"
      ]
     }
    ],
@@ -2679,14 +2777,14 @@
     {
      "case_id": "E01",
      "details": [
-      "NEW booking OR-3 12:15-14:15"
+      "จองใหม่ OR-3 12:15-14:15"
      ]
     },
     {
      "case_id": "N01",
      "details": [
-      "moved 12:30->14:45",
-      "team -[Dr.Suda, Kanya] +[Dr.Ratana, Jintana]"
+      "เลื่อนเวลา 12:30->14:45",
+      "เปลี่ยนทีม ออก: Kanya, Nok เข้า: Jintana, Dao"
      ]
     }
    ],
@@ -2695,63 +2793,64 @@
      "staff_id": "SUR-NEURO",
      "name": "Dr.Thanakorn (Neuro, on-call)",
      "case_id": "E01",
-     "message": "[ORchestraAI] E01 Emergency craniotomy (traumatic subdural haematoma) (HN HN-9002): NEW booking OR-3 12:15-14:15"
+     "message": "[ORchestraAI] E01 Emergency craniotomy (traumatic subdural haematoma) (HN HN-9002): จองใหม่ OR-3 12:15-14:15"
     },
     {
-     "staff_id": "ANE-3",
-     "name": "Dr.Ratana",
+     "staff_id": "ANE-ONCALL",
+     "name": "Dr.Prasert (on-call)",
      "case_id": "E01",
-     "message": "[ORchestraAI] E01 Emergency craniotomy (traumatic subdural haematoma) (HN HN-9002): NEW booking OR-3 12:15-14:15"
+     "message": "[ORchestraAI] E01 Emergency craniotomy (traumatic subdural haematoma) (HN HN-9002): จองใหม่ OR-3 12:15-14:15"
     },
     {
-     "staff_id": "SCR-2",
-     "name": "Kanya",
+     "staff_id": "SCR-ONCALL",
+     "name": "Duangjai (on-call)",
      "case_id": "E01",
-     "message": "[ORchestraAI] E01 Emergency craniotomy (traumatic subdural haematoma) (HN HN-9002): NEW booking OR-3 12:15-14:15"
+     "message": "[ORchestraAI] E01 Emergency craniotomy (traumatic subdural haematoma) (HN HN-9002): จองใหม่ OR-3 12:15-14:15"
     },
     {
-     "staff_id": "CIR-4",
-     "name": "Dao",
+     "staff_id": "CIR-1",
+     "name": "Nok",
      "case_id": "E01",
-     "message": "[ORchestraAI] E01 Emergency craniotomy (traumatic subdural haematoma) (HN HN-9002): NEW booking OR-3 12:15-14:15"
+     "message": "[ORchestraAI] E01 Emergency craniotomy (traumatic subdural haematoma) (HN HN-9002): จองใหม่ OR-3 12:15-14:15"
     },
     {
      "staff_id": "SUR-ORTHO",
      "name": "Dr.Somchai (Ortho)",
      "case_id": "N01",
-     "message": "[ORchestraAI] N01 Robotic-assisted total knee arthroplasty (HN HN-0101): moved 12:30->14:45; team -[Dr.Suda, Kanya] +[Dr.Ratana, Jintana]"
+     "message": "[ORchestraAI] N01 Robotic-assisted total knee arthroplasty (HN HN-0101): เลื่อนเวลา 12:30->14:45; เปลี่ยนทีม ออก: Kanya, Nok เข้า: Jintana, Dao"
     },
     {
-     "staff_id": "ANE-4",
-     "name": "Dr.Suda",
+     "staff_id": "ANE-ONCALL",
+     "name": "Dr.Prasert (on-call)",
      "case_id": "N01",
-     "message": "[ORchestraAI] N01 Robotic-assisted total knee arthroplasty (HN HN-0101): moved 12:30->14:45; team -[Dr.Suda, Kanya] +[Dr.Ratana, Jintana]"
+     "message": "[ORchestraAI] N01 Robotic-assisted total knee arthroplasty (HN HN-0101): เลื่อนเวลา 12:30->14:45; เปลี่ยนทีม ออก: Kanya, Nok เข้า: Jintana, Dao"
     },
     {
      "staff_id": "SCR-2",
      "name": "Kanya",
      "case_id": "N01",
-     "message": "[ORchestraAI] N01 Robotic-assisted total knee arthroplasty (HN HN-0101): moved 12:30->14:45; team -[Dr.Suda, Kanya] +[Dr.Ratana, Jintana]"
+     "message": "[ORchestraAI] N01 Robotic-assisted total knee arthroplasty (HN HN-0101): เลื่อนเวลา 12:30->14:45; เปลี่ยนทีม ออก: Kanya, Nok เข้า: Jintana, Dao"
     },
     {
-     "staff_id": "CIR-4",
-     "name": "Dao",
+     "staff_id": "CIR-1",
+     "name": "Nok",
      "case_id": "N01",
-     "message": "[ORchestraAI] N01 Robotic-assisted total knee arthroplasty (HN HN-0101): moved 12:30->14:45; team -[Dr.Suda, Kanya] +[Dr.Ratana, Jintana]"
-    },
-    {
-     "staff_id": "ANE-3",
-     "name": "Dr.Ratana",
-     "case_id": "N01",
-     "message": "[ORchestraAI] N01 Robotic-assisted total knee arthroplasty (HN HN-0101): moved 12:30->14:45; team -[Dr.Suda, Kanya] +[Dr.Ratana, Jintana]"
+     "message": "[ORchestraAI] N01 Robotic-assisted total knee arthroplasty (HN HN-0101): เลื่อนเวลา 12:30->14:45; เปลี่ยนทีม ออก: Kanya, Nok เข้า: Jintana, Dao"
     },
     {
      "staff_id": "SCR-4",
      "name": "Jintana",
      "case_id": "N01",
-     "message": "[ORchestraAI] N01 Robotic-assisted total knee arthroplasty (HN HN-0101): moved 12:30->14:45; team -[Dr.Suda, Kanya] +[Dr.Ratana, Jintana]"
+     "message": "[ORchestraAI] N01 Robotic-assisted total knee arthroplasty (HN HN-0101): เลื่อนเวลา 12:30->14:45; เปลี่ยนทีม ออก: Kanya, Nok เข้า: Jintana, Dao"
+    },
+    {
+     "staff_id": "CIR-4",
+     "name": "Dao",
+     "case_id": "N01",
+     "message": "[ORchestraAI] N01 Robotic-assisted total knee arthroplasty (HN HN-0101): เลื่อนเวลา 12:30->14:45; เปลี่ยนทีม ออก: Kanya, Nok เข้า: Jintana, Dao"
     }
-   ]
+   ],
+   "fatigue": []
   }
  }
 }
@@ -2883,8 +2982,8 @@
     step.logs.forEach((line, i) => {
       logTimers.push(setTimeout(() => {
         let cls = 'log-entry';
-        if (/CONFLICT|EMERGENCY|rejected|no conflict-free/.test(line)) cls += ' bad';
-        else if (/\bOK\b|locked|reserved|notified|NEW booking/.test(line)) cls += ' good';
+        if (/ไม่ผ่าน|ฉุกเฉิน|ไม่มีช่วง/.test(line)) cls += ' bad';
+        else if (/ผ่าน|จอง|แจ้งทีม|ล็อก/.test(line)) cls += ' good';
         box.appendChild(el('div', cls, line));
         box.scrollTop = box.scrollHeight;
       }, i * 160));

@@ -45,7 +45,7 @@ def test_elective_hours_bind_elective_cases_only():
     _, result = solve(rooms, [case("EL", minutes=120, preferred_start=hm("15:00"))])
     assert result.assignments["EL"].end_min <= hm("16:00")
     _, result = solve(rooms, [case("LATE", minutes=120, release_min=hm("15:00"))])
-    assert "elective hours" in result.unscheduled["LATE"][0] and "OR-1 08:00-16:00" in result.unscheduled["LATE"][0]
+    assert "เวลาผ่าตัดนัดของห้อง" in result.unscheduled["LATE"][0] and "OR-1 08:00-16:00" in result.unscheduled["LATE"][0]
     _, result = solve(rooms, [case("UR", minutes=120, urgency=Urgency.URGENT, release_min=hm("17:00"))])
     assert result.assignments["UR"].start_min == hm("17:00")  # urgent cases may use the evening
 
@@ -55,7 +55,7 @@ def test_slot_scan_explains_elective_hours():
     opt, day = solve(rooms, [])
     check = opt.check_slot(day, case("X"), hm("07:00"), verbose=False)
     facility = next(v for v in check.verdicts if v.agent == "OR Facility Agent")
-    assert "elective hours are 08:00-16:00" in facility.items[0].note
+    assert "เวลาผ่าตัดนัดของห้องคือ 08:00-16:00" in facility.items[0].note
     assert check.assignment.start_min == hm("08:00")
 
 
@@ -67,7 +67,7 @@ def test_closed_or_occupied_beds_are_not_used():
     a = result.assignments["BIG"]
     assert a.bed_id == "ICU-2" and a.end_min >= hm("14:00")
     _, result = solve(rooms, [case("BIG", minutes=120, requires_icu_post_op=True)], beds=beds[:1])
-    assert "closed: ICU-1" in result.unscheduled["BIG"][0]
+    assert "ปิด: ICU-1" in result.unscheduled["BIG"][0]
 
 
 def test_recovery_time_per_case_holds_the_bed():
@@ -93,11 +93,11 @@ def test_planned_maintenance_keeps_the_machine_free():
     assert a.end_min <= hm("08:00") or a.start_min >= hm("12:00")  # never during the service visit
     whole_day = [EquipmentUnit("DV-01", "ROBOT", 0, False, closures=[(0, 24 * 60, "sent for repair")])]
     _, result = solve(rooms, [case("R", required_equipment_types=["ROBOT"])], units=whole_day)
-    assert "planned maintenance: DV-01 00:00" in result.unscheduled["R"][0] and "sent for repair" in result.unscheduled["R"][0]
+    assert "นัดซ่อมบำรุง: DV-01 00:00" in result.unscheduled["R"][0] and "sent for repair" in result.unscheduled["R"][0]
     opt, day = solve(rooms, [], units=robot)
     check = opt.check_slot(day, case("R2", required_equipment_types=["ROBOT"]), hm("09:00"), verbose=False)
     equipment = next(v for v in check.verdicts if v.agent == "Equipment & CSSD Agent")
-    assert "planned maintenance 08:00-12:00 (service visit)" in equipment.items[0].note
+    assert "นัดซ่อมบำรุง 08:00-12:00 (service visit)" in equipment.items[0].note
 
 
 def test_cssd_queue_orders_trays_by_slack():
@@ -116,4 +116,4 @@ def test_cssd_queue_orders_trays_by_slack():
     [job, _] = cssd_queue(result.assignments, trays, now_min=hm("09:05"))
     assert job["reported"] and job["ready"] == "11:00" and job["slack_mins"] == -30 and job["level"] == "late"
     errors = validate_schedule(result, cases, rooms, trays, STAFF)
-    assert any("TRAY-1 not back from CSSD until 11:00" in e for e in errors)
+    assert any("TRAY-1 ยังไม่กลับจาก CSSD จนถึง 11:00" in e for e in errors)

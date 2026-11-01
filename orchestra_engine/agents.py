@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Mapping
 
 from .fatigue import day_minutes, is_late_end
 from .models import SurgeryCase, Urgency
+from . import thai
 from .results import Assignment, ScheduleResult
 from .timeutil import fmt
 
@@ -28,8 +29,7 @@ FACILITY = "OR Facility Agent"
 
 _FAR = 10**9
 _NO_CASE = SimpleNamespace(required_supplies={})
-OTHER_DAY = "a booking on another day"
-_STATUS_WORDS = {"STERILIZING": "sterilizing at CSSD", "IN_USE": "in use", "MAINTENANCE": "in maintenance"}
+OTHER_DAY = thai.OTHER_DAY
 
 Span = tuple[int, int, str]  # (start, end, case_id)
 
@@ -50,7 +50,7 @@ class AgentVerdict:
     ready_at: int | None  # earliest start the agent could support; None = not in horizon
 
     def summary(self) -> str:
-        return "; ".join(f"{i.resource} {i.note}" for i in self.items)
+        return "; ".join(f"{i.resource}: {i.note}" for i in self.items)
 
 
 @dataclass
@@ -189,14 +189,14 @@ def _fatigue_limits(p, case: SurgeryCase, start: int, busy: Busy) -> tuple[list[
     problems = []
     left = p.remaining_minutes - busy.load.get(p.staff_id, 0)
     if left < dur:
-        problems.append(f"7-day hour limit {p.max_weekly_hours:g} h reached ({max(left, 0)} min left)")
+        problems.append(f"ครบเกณฑ์ {thai.limit_hours(p.max_weekly_hours)} ใน 7 วันแล้ว (เหลือ {max(left, 0)} นาที)")
     left_today = p.daily_cap_minutes - busy.day_load.get(p.staff_id, 0)
     if left_today < dur:
-        problems.append(f"daily limit {p.max_daily_hours:g} h reached ({max(left_today, 0)} min left today)")
+        problems.append(f"ครบเกณฑ์ {thai.limit_hours(p.max_daily_hours)} ต่อวันแล้ว (วันนี้เหลือ {max(left_today, 0)} นาที)")
     resting = [(e, c) for s, e, c in rests if s <= start < e]
     if resting:
         until, after = max(resting)
-        problems.append(f"resting until {fmt(until)} after late case {after}")
+        problems.append(f"พักถึง {fmt(until)} หลังเคสดึก {after}")
     if rest and is_late_end(end):
         later = [(s, c) for s, _, c in spans if s >= end]
         if p.next_booking_min is not None:
@@ -204,7 +204,7 @@ def _fatigue_limits(p, case: SurgeryCase, start: int, busy: Busy) -> tuple[list[
         clash = [(s, c) for s, c in later if s < end + rest]
         if clash:
             s, c = min(clash)
-            problems.append(f"ends at night with less than {p.rest_hours:g} h rest before {c} at {fmt(s)}")
+            problems.append(f"เลิกดึก ได้พักไม่ถึง {thai.limit_hours(p.rest_hours)} ก่อน {c} เวลา {fmt(s)}")
     return problems, rests
 
 
@@ -216,7 +216,7 @@ def _staffing(opt, case: SurgeryCase, start: int, busy: Busy) -> AgentVerdict:
 
     def person(p) -> ResourceStatus:
         if not p.is_active:
-            return ResourceStatus(p.name, False, "inactive")
+            return ResourceStatus(p.name, False, "ปิดการใช้งานอยู่")
         spans = busy.staff.get(p.staff_id, [])
         limits, rests = _fatigue_limits(p, case, start, busy)
         hours_left = (p.remaining_minutes - busy.load.get(p.staff_id, 0) >= dur
@@ -225,22 +225,23 @@ def _staffing(opt, case: SurgeryCase, start: int, busy: Busy) -> AgentVerdict:
         nxt = earliest_free(blocked, dur, start, list(p.shifts), dur, latest) if emergency or hours_left else None
         clash = _clash(spans, start, end)
         if clash:
-            note = _clash_note(clash, start, "busy with {case} until {end}", "booked for {case} at {start}")
+            note = _clash_note(clash, start, "ติดเคส {case} ถึง {end}", "มีเคส {case} เวลา {start}")
             return ResourceStatus(p.name, False, note, nxt)
         if not any(a <= start and end <= b for a, b in p.shifts):
-            shifts = ", ".join(f"{fmt(a)}-{fmt(b)}" for a, b in p.shifts) or "none"
-            return ResourceStatus(p.name, False, f"off shift (shifts {shifts})", nxt)
+            shifts = ", ".join(f"{fmt(a)}-{fmt(b)}" for a, b in p.shifts)
+            return ResourceStatus(p.name, False, f"ไม่อยู่เวร (เวร {shifts})" if shifts else "ไม่มีเวรวันนี้", nxt)
         if limits and not emergency:
             return ResourceStatus(p.name, False, "; ".join(limits), nxt)
         if limits:
-            return ResourceStatus(p.name, True, "free but OVER fatigue limit (emergency): " + "; ".join(limits), start)
-        return ResourceStatus(p.name, True, f"free {fmt(start)}-{fmt(end)}", start)
+            return ResourceStatus(p.name, True, "ว่าง แต่เกินเกณฑ์ความเหนื่อยล้า (ฉุกเฉินจึงใช้ได้): " + "; ".join(limits),
+                                  start)
+        return ResourceStatus(p.name, True, f"ว่าง {fmt(start)}-{fmt(end)}", start)
 
     items: list[ResourceStatus] = []
     readies: list[int | None] = []
     surgeon = opt._staff_by_id.get(case.surgeon_id)
     if surgeon is None:
-        items.append(ResourceStatus(case.surgeon_id, False, "unknown surgeon"))
+        items.append(ResourceStatus(case.surgeon_id, False, "ไม่พบศัลยแพทย์คนนี้"))
         readies.append(None)
     else:
         status = person(surgeon)
@@ -257,18 +258,18 @@ def _staffing(opt, case: SurgeryCase, start: int, busy: Busy) -> AgentVerdict:
         ]
         states = [person(p) for p in pool]
         free = [s for s in states if s.ok]
-        label = role.replace("_", " ").title() + (f" [{', '.join(sorted(skills))}]" if skills else "")
+        label = thai.role(role) + (f" [{', '.join(sorted(skills))}]" if skills else "")
         if not pool:
-            items.append(ResourceStatus(label, False, "nobody has this skill" if skills else "nobody in this role"))
+            items.append(ResourceStatus(label, False, "ไม่มีใครมีทักษะนี้" if skills else "ไม่มีบุคลากรในบทบาทนี้"))
             readies.append(None)
         elif len(free) >= count:
             names = ", ".join(s.resource for s in free[:3]) + ("..." if len(free) > 3 else "")
-            items.append(ResourceStatus(label, True, f"{len(free)} free ({names})", start))
+            items.append(ResourceStatus(label, True, f"ว่าง {len(free)} คน ({names})", start))
             readies.append(start)
         else:
             ready = _kth_ready(states, count)
-            when = f"enough from {fmt(ready)}" if ready is not None else "not enough today"
-            items.append(ResourceStatus(label, False, f"{len(free)}/{count} free, {when}", ready))
+            when = f"ครบตั้งแต่ {fmt(ready)}" if ready is not None else "วันนี้ไม่ครบ"
+            items.append(ResourceStatus(label, False, f"ว่าง {len(free)} จาก {count} คนที่ต้องการ, {when}", ready))
             readies.append(ready)
     return AgentVerdict(STAFFING, all(i.ok for i in items), items, _combine(readies))
 
@@ -282,7 +283,7 @@ def _equipment(opt, case: SurgeryCase, start: int, busy: Busy) -> AgentVerdict:
     for eq_type, count in sorted(case.equipment_counts.items()):
         units = [u for u in opt.equipments if u.eq_type == eq_type]
         if not units:
-            items.append(ResourceStatus(eq_type, False, "no unit of this type"))
+            items.append(ResourceStatus(eq_type, False, "ไม่มีเครื่องชนิดนี้"))
             readies.append(None)
             ok = False
             continue
@@ -290,27 +291,27 @@ def _equipment(opt, case: SurgeryCase, start: int, busy: Busy) -> AgentVerdict:
         for u in units:
             label = f"{u.unit_id} ({eq_type})"
             if not u.is_usable:
-                states.append(ResourceStatus(label, False, _STATUS_WORDS.get(u.status, u.status.lower())))
+                states.append(ResourceStatus(label, False, thai.status(u.status)))
                 continue
             occupy = dur + u.reprocess_mins
             spans = busy.unit.get(u.unit_id, []) + [(a, b, OTHER_DAY) for a, b in u.blocked]
-            service = [(a, b, "maintenance") for a, b, _ in u.closures]
+            service = [(a, b, "ซ่อมบำรุง") for a, b, _ in u.closures]
             nxt = earliest_free(spans + service, occupy, start, [(u.available_at, _FAR)], 0, latest)
             clash = _clash(spans, start, start + occupy)
             shut = u.closed_at(start, start + occupy)
             if shut:
                 why = f" ({shut[2]})" if shut[2] else ""
-                states.append(ResourceStatus(label, False, f"planned maintenance {fmt(shut[0])}-{fmt(shut[1])}{why}", nxt))
+                states.append(ResourceStatus(label, False, f"นัดซ่อมบำรุง {fmt(shut[0])}-{fmt(shut[1])}{why}", nxt))
             elif u.available_at > start:
-                word = _STATUS_WORDS.get(u.status, "not available")
-                states.append(ResourceStatus(label, False, f"{word} until {fmt(u.available_at)}", nxt))
+                word = "ยังไม่พร้อม" if u.status == "AVAILABLE" else thai.status(u.status)
+                states.append(ResourceStatus(label, False, f"{word} ถึง {fmt(u.available_at)}", nxt))
             elif clash:
                 note = _clash_note(
-                    clash, start, "in use by {case}, back from CSSD {end}", "needed by {case} at {start}"
+                    clash, start, "ใช้กับเคส {case} อยู่ กลับจาก CSSD {end}", "เคส {case} ต้องใช้เวลา {start}"
                 )
                 states.append(ResourceStatus(label, False, note, nxt))
             else:
-                states.append(ResourceStatus(label, True, "ready", start))
+                states.append(ResourceStatus(label, True, "พร้อม", start))
         items.extend(states)
         if sum(s.ok for s in states) >= count:
             readies.append(start)
@@ -321,7 +322,7 @@ def _equipment(opt, case: SurgeryCase, start: int, busy: Busy) -> AgentVerdict:
     for code, qty in sorted(case.required_supplies.items()):
         item = opt._supply_by_id.get(code)
         if item is None:
-            items.append(ResourceStatus(code, False, "not a stocked item"))
+            items.append(ResourceStatus(code, False, "ไม่มีรายการนี้ในคลัง"))
             readies.append(None)
             ok = False
             continue
@@ -329,9 +330,9 @@ def _equipment(opt, case: SurgeryCase, start: int, busy: Busy) -> AgentVerdict:
         left = shelf - busy.supply.get(code, 0)
         label = f"{item.name} ({code})"
         if left >= qty:
-            items.append(ResourceStatus(label, True, f"need {qty}, {left} {item.unit} left for today", start))
+            items.append(ResourceStatus(label, True, f"ต้องใช้ {qty}, วันนี้เหลือ {left} {item.unit}", start))
         else:
-            note = f"need {qty}, only {max(left, 0)} {item.unit} left" + (f"; {item.note}" if item.note else "")
+            note = f"ต้องใช้ {qty} แต่เหลือเพียง {max(left, 0)} {item.unit}" + (f"; {item.note}" if item.note else "")
             items.append(ResourceStatus(label, False, note))
             readies.append(None)
             ok = False
@@ -347,37 +348,37 @@ def _facility(opt, case: SurgeryCase, start: int, busy: Busy) -> AgentVerdict:
     rooms = [r for r in opt.rooms if r.supports(case.required_capabilities)]
     if not rooms:
         need = ", ".join(sorted(case.required_capabilities))
-        items.append(ResourceStatus("Rooms", False, f"no room with [{need}]"))
+        items.append(ResourceStatus("ห้องผ่าตัด", False, f"ไม่มีห้องที่มี [{need}]"))
     room_states = []
     for r in rooms:
         turnover = r.turnover_for(case)
         if not r.is_usable:
-            room_states.append(ResourceStatus(r.or_id, False, r.status.lower()))
+            room_states.append(ResourceStatus(r.or_id, False, thai.status(r.status)))
             continue
         spans = busy.room.get(r.or_id, []) + [(a, b, OTHER_DAY) for a, b in r.blocked]
-        closures = [(a, b, "closure") for a, b, _ in r.closures]
+        closures = [(a, b, "ปิดห้อง") for a, b, _ in r.closures]
         blocks = list(case.room_blocks.get(r.or_id, ()))  # another owner's OR block
         lo, hi = r.hours_for(case, horizon)
-        nxt = earliest_free(spans + closures + [(a, b, "block") for a, b, _ in blocks], dur + turnover, start,
+        nxt = earliest_free(spans + closures + [(a, b, "บล็อก") for a, b, _ in blocks], dur + turnover, start,
                             [(lo, hi)], dur, latest)
         clash = _clash(spans, start, end + turnover)
         shut = r.closed_at(start, end + turnover)
         held = next((blk for blk in blocks if blk[0] < end + turnover and start < blk[1]), None)
         if start < r.open_min or end > r.close(horizon):
-            room_states.append(ResourceStatus(r.or_id, False, "closed at that time", nxt))
+            room_states.append(ResourceStatus(r.or_id, False, "ห้องไม่เปิดช่วงเวลานั้น", nxt))
         elif start < lo or end > hi:
-            room_states.append(ResourceStatus(r.or_id, False, f"elective hours are {fmt(lo)}-{fmt(hi)}", nxt))
+            room_states.append(ResourceStatus(r.or_id, False, f"เวลาผ่าตัดนัดของห้องคือ {fmt(lo)}-{fmt(hi)}", nxt))
         elif shut:
             why = f" ({shut[2]})" if shut[2] else ""
-            room_states.append(ResourceStatus(r.or_id, False, f"closed {fmt(shut[0])}-{fmt(shut[1])}{why}", nxt))
+            room_states.append(ResourceStatus(r.or_id, False, f"ปิดห้อง {fmt(shut[0])}-{fmt(shut[1])}{why}", nxt))
         elif held:
             room_states.append(ResourceStatus(r.or_id, False, f"{held[2]} {fmt(held[0])}-{fmt(held[1])}", nxt))
         elif clash:
-            note = _clash_note(clash, start, "busy with {case}, clean at {end}", "booked for {case} at {start}")
+            note = _clash_note(clash, start, "ติดเคส {case} ทำความสะอาดเสร็จ {end}", "มีเคส {case} เวลา {start}")
             room_states.append(ResourceStatus(r.or_id, False, note, nxt))
         else:
             room_states.append(
-                ResourceStatus(r.or_id, True, f"free {fmt(start)}-{fmt(end + turnover)} incl. {turnover} min clean", start)
+                ResourceStatus(r.or_id, True, f"ว่าง {fmt(start)}-{fmt(end + turnover)} (รวมทำความสะอาด {turnover} นาที)", start)
             )
     items.extend(room_states)
     room_ok = any(s.ok for s in room_states)
@@ -398,11 +399,12 @@ def _facility(opt, case: SurgeryCase, start: int, busy: Busy) -> AgentVerdict:
                 nexts.append(nxt)
         bed_ok = bool(free)
         if free:
-            items.append(ResourceStatus(f"{bed_type} bed", True, f"{len(free)} free from {fmt(end)} ({', '.join(free)})", start))
+            items.append(ResourceStatus(f"เตียง {bed_type}", True, f"ว่าง {len(free)} เตียงตั้งแต่ {fmt(end)} ({', '.join(free)})",
+                                        start))
             readies.append(start)
         else:
             ready = min(nexts, default=None)
-            when = f"first frees for a {fmt(ready)} start" if ready is not None else "none today"
-            items.append(ResourceStatus(f"{bed_type} bed", False, f"all busy at {fmt(end)}, {when}", ready))
+            when = f"ว่างพอถ้าเริ่มผ่าตัด {fmt(ready)}" if ready is not None else "วันนี้ไม่มีเตียงว่าง"
+            items.append(ResourceStatus(f"เตียง {bed_type}", False, f"เต็มทุกเตียงเวลา {fmt(end)}, {when}", ready))
             readies.append(ready)
     return AgentVerdict(FACILITY, room_ok and bed_ok, items, _combine(readies))
