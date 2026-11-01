@@ -66,6 +66,7 @@ class Weights:
     day_spread_per_quarter: int = 2  # ... each extra 15 min on one person costs this (spreads the day)
     fatigue_override: int = 2000  # an EMERGENCY case breaks one person's fatigue limit
     fatigue_over_per_min: int = 10  # per minute over a weekly / daily hour limit
+    other_room: int = 30  # a case placed outside its preferred rooms (its surgeon's own OR block)
 
 
 @dataclass
@@ -117,9 +118,11 @@ def _subtract(windows: list[tuple[int, int]], holes) -> list[tuple[int, int]]:
 
 
 def _open_windows(room: OperatingRoom, horizon: int, case: SurgeryCase | None = None) -> list[tuple[int, int]]:
-    """When the room can be used (by ``case``): opening / elective hours minus planned closures."""
+    """When the room can be used (by ``case``): opening / elective hours minus planned closures
+    (and minus other owners' OR blocks the case may not use)."""
     hours = room.hours_for(case, horizon) if case is not None else (room.open_min, room.close(horizon))
-    return _subtract([hours], room.closures)
+    blocks = case.room_blocks.get(room.or_id, ()) if case is not None else ()
+    return _subtract([hours], list(room.closures) + list(blocks))
 
 
 def _index(items: list, attr: str) -> dict:
@@ -391,7 +394,14 @@ class ORchestraOptimizer:
         rooms = [r for r in capable if r.is_usable and any(fits(a, b) for a, b in _open_windows(r, horizon, case))]
         elective_only = [r for r in capable if r.is_usable and r not in rooms
                          and any(fits(a, b) for a, b in _open_windows(r, horizon))]
-        if not rooms and elective_only:
+        blocked = [r for r in capable if r.is_usable and r not in rooms and case.room_blocks.get(r.or_id)
+                   and any(fits(a, b) for a, b in _subtract([r.hours_for(case, horizon)], r.closures))]
+        if not rooms and blocked:
+            spans = "; ".join(f"{r.or_id} " + ", ".join(f"{fmt(a)}-{fmt(b)} {why}" for a, b, why in case.room_blocks[r.or_id])
+                              for r in blocked)
+            reasons.append(f"Facility: the free time is another owner's OR block ({spans}); "
+                           "book another day, the owner's release, or mark it URGENT if it cannot wait")
+        elif not rooms and elective_only:
             hours = "; ".join(f"{r.or_id} {fmt(r.hours_for(case, horizon)[0])}-{fmt(r.hours_for(case, horizon)[1])}"
                               for r in elective_only)
             reasons.append(f"Facility: an elective case of {dur} min does not fit the elective hours ({hours}); "
@@ -902,6 +912,12 @@ class _ModelBuilder:
                     m.add(start >= lo).only_enforce_if(x)
                 if hi < p.latest_start + dur:
                     m.add(start + dur <= hi).only_enforce_if(x)
+                for i, (a, b, _) in enumerate(case.room_blocks.get(room.or_id, ())):  # another owner's OR block
+                    before = m.new_bool_var(f"block_before[{cid},{room.or_id},{i}]")
+                    m.add(start + occupied <= a).only_enforce_if([x, before])
+                    m.add(start >= b).only_enforce_if([x, before.Not()])
+                if case.preferred_rooms and room.or_id not in case.preferred_rooms:
+                    self.objective.append(self.weights.other_room * x)
         m.add(sum(rooms.values()) == scheduled)
 
         # People: surgeon is fixed; other roles are chosen from candidates.

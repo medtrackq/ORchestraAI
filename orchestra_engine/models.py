@@ -296,6 +296,9 @@ class SurgeryCase:
     patient_name: str | None = None
     airborne: bool = False
     required_supplies: dict[str, int] = field(default_factory=dict)  # supply code -> quantity
+    # OR blocks: room -> spans this case may not use (another owner's block), with the reason shown
+    room_blocks: dict[str, tuple[tuple[int, int, str], ...]] = field(default_factory=dict)
+    preferred_rooms: tuple[str, ...] = ()  # e.g. the surgeon's own block today: other rooms cost a little
 
     def __post_init__(self) -> None:
         if self.duration_mins <= 0:
@@ -313,6 +316,9 @@ class SurgeryCase:
             if count < 0:
                 raise ValueError(f"{self.case_id}: negative staff count for {role}")
         self.required_supplies = {str(k): int(v) for k, v in self.required_supplies.items() if int(v) > 0}
+        self.room_blocks = {str(r): tuple((int(a), int(b), str(why)) for a, b, why in spans)
+                            for r, spans in self.room_blocks.items() if spans}
+        self.preferred_rooms = tuple(self.preferred_rooms)
 
     @property
     def equipment_counts(self) -> Counter[str]:

@@ -701,6 +701,150 @@ class HospitalAdmin:
             self._log(conn, f"ลบ preference card {row['full_name']} · {row['name']}", [], actor)
         return {"deleted": card_id}
 
+    # ------------------------------------------------------------ OR blocks
+
+    def _blocks_ready(self, conn) -> None:
+        if not self.db.has_blocks(conn):
+            raise StoreError("ยังใช้บล็อกห้องผ่าตัดไม่ได้: ให้รัน supabase/migrations/20261111000000_or_blocks.sql ใน Supabase ก่อน")
+
+    def blocks(self, day: str | None = None) -> dict:
+        """Every weekly block, the choices for the form, and (``day``) that date's blocks with their release state."""
+        from .blocks import DAY_TH
+
+        with self.store._transaction(write=False) as conn:
+            rooms = [r["room_code"] for r in conn.execute("SELECT room_code FROM operating_rooms ORDER BY room_code")]
+            surgeons = [{"id": str(r["staff_id"]), "name": r["full_name"], "specialty": r["specialty"]}
+                        for r in conn.execute("SELECT staff_id, full_name, specialty FROM staff "
+                                              "WHERE role = 'SURGEON' AND is_active ORDER BY full_name")]
+            specialties = sorted({s["specialty"].strip() for s in surgeons if (s["specialty"] or "").strip()})
+            if not self.db.has_blocks(conn):
+                return {"ready": False, "blocks": [], "rooms": rooms, "surgeons": surgeons, "specialties": specialties,
+                        "days": DAY_TH, "on_day": None}
+            rows = self.db.block_rows(conn)
+            on_day = None
+            if day:
+                when = _date(day)
+                on_day = {"date": when.isoformat(), "weekday": DAY_TH[when.weekday()],
+                          "blocks": [b.to_dict() for b in self.db.day_blocks(conn, when, self.db.today())]}
+        clock = lambda t: t.strftime("%H:%M")  # noqa: E731
+        return {"ready": True, "rooms": rooms, "surgeons": surgeons, "specialties": specialties, "days": DAY_TH,
+                "on_day": on_day,
+                "blocks": [{"id": str(r["block_id"]), "room": r["room"], "weekday": r["weekday"], "start": clock(r["start_time"]),
+                            "end": clock(r["end_time"]), "owner_kind": r["owner_kind"], "owner": r["owner"],
+                            "specialty": r["specialty"], "surgeon_id": str(r["surgeon_id"]) if r["surgeon_id"] else None,
+                            "release_days": r["release_days"],
+                            "valid_from": r["valid_from"].isoformat() if r["valid_from"] else None,
+                            "valid_to": r["valid_to"].isoformat() if r["valid_to"] else None, "note": r["note"]}
+                           for r in rows]}
+
+    def save_block(self, data: dict, *, block_id: str | None = None, actor: dict | None = None) -> dict:
+        """Add a block on one or more weekdays, or change one block."""
+        from .blocks import DAY_TH, OWNER_KINDS
+
+        start, end = _time(data.get("start") or ""), _time(data.get("end") or "")
+        if end <= start:
+            raise StoreError("เวลาสิ้นสุดของบล็อกต้องหลังเวลาเริ่ม")
+        days = sorted({int(d) for d in (data.get("weekdays") or [])})
+        if not days or any(not 0 <= d <= 6 for d in days):
+            raise StoreError("เลือกวันในสัปดาห์อย่างน้อย 1 วัน")
+        if block_id is not None and len(days) != 1:
+            raise StoreError("แก้ไขบล็อกได้ทีละวัน")
+        kind = data.get("owner_kind")
+        if kind not in OWNER_KINDS:
+            raise StoreError("เลือกเจ้าของบล็อก: แผนก หรือ ศัลยแพทย์")
+        specialty = " ".join(str(data.get("specialty") or "").split())[:100] or None
+        surgeon = _uuid(data.get("surgeon_id"), "ศัลยแพทย์") if kind == "SURGEON" else None
+        if kind == "SPECIALTY" and not specialty:
+            raise StoreError("ใส่ชื่อแผนก/ความเชี่ยวชาญ (ตรงกับช่องความเชี่ยวชาญของศัลยแพทย์)")
+        release = int(_number(data.get("release_days", 2), 0, 60, "จำนวนวันที่ปล่อยบล็อก"))
+        valid_from = _date(data["valid_from"], "วันที่เริ่มใช้") if data.get("valid_from") else None
+        valid_to = _date(data["valid_to"], "วันที่สิ้นสุด") if data.get("valid_to") else None
+        if valid_from and valid_to and valid_to < valid_from:
+            raise StoreError("วันที่สิ้นสุดต้องไม่ก่อนวันที่เริ่มใช้")
+        note = (data.get("note") or "").strip()[:200] or None
+        with self.store._transaction(write=True) as conn:
+            self._blocks_ready(conn)
+            room = conn.execute("SELECT or_id FROM operating_rooms WHERE room_code = %s", (data.get("room"),)).fetchone()
+            if room is None:
+                raise StoreError(f"ไม่พบห้อง {data.get('room')}")
+            if surgeon is not None and conn.execute(
+                    "SELECT 1 FROM staff WHERE staff_id = %s AND role = 'SURGEON'", (surgeon,)).fetchone() is None:
+                raise StoreError("ไม่พบศัลยแพทย์นี้")
+            for d in days:
+                clash = conn.execute(
+                    """SELECT b.start_time, b.end_time, COALESCE(b.specialty, s.full_name) AS owner FROM or_blocks b
+                       LEFT JOIN staff s ON s.staff_id = b.surgeon_id
+                       WHERE b.or_id = %s AND b.weekday = %s AND b.block_id IS DISTINCT FROM %s
+                         AND b.start_time < %s AND b.end_time > %s
+                         AND (b.valid_to IS NULL OR %s::date IS NULL OR b.valid_to >= %s::date)
+                         AND (b.valid_from IS NULL OR %s::date IS NULL OR b.valid_from <= %s::date)""",
+                    (room["or_id"], d, _uuid(block_id, "บล็อก") if block_id else None, end, start,
+                     valid_from, valid_from, valid_to, valid_to)).fetchone()
+                if clash:
+                    raise StoreError(f"{data.get('room')} วัน{DAY_TH[d]} {clash['start_time'].strftime('%H:%M')}-"
+                                     f"{clash['end_time'].strftime('%H:%M')} เป็นบล็อกของ {clash['owner']} อยู่แล้ว")
+            values = dict(or_id=room["or_id"], start_time=start, end_time=end, owner_kind=kind, specialty=specialty,
+                          surgeon_id=surgeon, release_days=release, valid_from=valid_from, valid_to=valid_to, note=note)
+            ids = []
+            if block_id is None:
+                for d in days:
+                    cols = {**values, "weekday": d, "created_by": None if actor is None else
+                            f"{actor.get('name')} ({actor.get('role')})"}
+                    ids.append(str(conn.execute(
+                        f"INSERT INTO or_blocks ({', '.join(cols)}) VALUES ({', '.join(['%s'] * len(cols))}) RETURNING block_id",
+                        list(cols.values())).fetchone()["block_id"]))
+            else:
+                cols = {**values, "weekday": days[0]}
+                cur = conn.execute(f"UPDATE or_blocks SET {', '.join(f'{k} = %s' for k in cols)} WHERE block_id = %s",
+                                   [*cols.values(), _uuid(block_id, "บล็อก")])
+                if cur.rowcount != 1:
+                    raise StoreError("ไม่พบบล็อกนี้")
+                ids.append(block_id)
+            owner = specialty if kind == "SPECIALTY" else conn.execute(
+                "SELECT full_name FROM staff WHERE staff_id = %s", (surgeon,)).fetchone()["full_name"]
+            when = ", ".join(DAY_TH[d] for d in days)
+            self._log(conn, f"{'เพิ่ม' if block_id is None else 'แก้ไข'}บล็อกห้อง {data.get('room')} วัน{when} "
+                            f"{start.strftime('%H:%M')}-{end.strftime('%H:%M')}: {owner}",
+                      [f"ปล่อยให้คนอื่น {release} วันก่อนผ่าตัด" + (f" · {note}" if note else "")], actor)
+        return {"ids": ids}
+
+    def delete_block(self, block_id: str, *, actor: dict | None = None) -> dict:
+        with self.store._transaction(write=True) as conn:
+            self._blocks_ready(conn)
+            row = conn.execute(
+                """DELETE FROM or_blocks b USING operating_rooms o WHERE b.block_id = %s AND o.or_id = b.or_id
+                   RETURNING o.room_code, b.weekday, b.start_time, b.end_time""", (_uuid(block_id, "บล็อก"),)).fetchone()
+            if row is None:
+                raise StoreError("ไม่พบบล็อกนี้")
+            from .blocks import DAY_TH
+
+            self._log(conn, f"ลบบล็อกห้อง {row['room_code']} วัน{DAY_TH[row['weekday']]} "
+                            f"{row['start_time'].strftime('%H:%M')}-{row['end_time'].strftime('%H:%M')}", [], actor)
+        return {"deleted": block_id}
+
+    def release_block(self, block_id: str, day: str, *, undo: bool = False, actor: dict | None = None) -> dict:
+        """The owner gives one date of a block back to everyone (or takes it back)."""
+        when = _date(day)
+        with self.store._transaction(write=True) as conn:
+            self._blocks_ready(conn)
+            row = conn.execute(
+                """SELECT b.weekday, o.room_code, COALESCE(b.specialty, s.full_name) AS owner FROM or_blocks b
+                   JOIN operating_rooms o USING (or_id) LEFT JOIN staff s ON s.staff_id = b.surgeon_id
+                   WHERE b.block_id = %s""", (_uuid(block_id, "บล็อก"),)).fetchone()
+            if row is None:
+                raise StoreError("ไม่พบบล็อกนี้")
+            if row["weekday"] != when.weekday():
+                raise StoreError("บล็อกนี้ไม่ได้อยู่ในวันที่เลือก")
+            if undo:
+                conn.execute("DELETE FROM or_block_releases WHERE block_id = %s AND day = %s", (_uuid(block_id, "บล็อก"), when))
+            else:
+                conn.execute("""INSERT INTO or_block_releases (block_id, day, released_by) VALUES (%s, %s, %s)
+                                ON CONFLICT DO NOTHING""", (_uuid(block_id, "บล็อก"), when,
+                                                             None if actor is None else f"{actor.get('name')} ({actor.get('role')})"))
+            self._log(conn, f"{'ยกเลิกการคืน' if undo else 'คืน'}บล็อก {row['room_code']} ของ {row['owner']} "
+                            f"วันที่ {when.isoformat()}", [], actor, when)
+        return {"block_id": block_id, "day": when.isoformat(), "released": not undo}
+
     # ---------------------------------------------------------- procedures
 
     def procedures(self) -> dict:

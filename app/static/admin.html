@@ -134,7 +134,7 @@
 <header class="top">
   <div class="brand">
     <span class="orb" aria-hidden="true"></span>
-    <div><h1 id="page-title">ข้อมูลโรงพยาบาล</h1><p id="page-sub">เวรและวันลา · ห้องผ่าตัดและเตียง · บุคลากร · เครื่องมือ · หัตถการ · preference card · วัสดุ/รากเทียม · นำเข้าจาก Excel — ระบบใช้ข้อมูลนี้จัดตารางทันที</p></div>
+    <div><h1 id="page-title">ข้อมูลโรงพยาบาล</h1><p id="page-sub">เวรและวันลา · ห้องผ่าตัดและเตียง · บุคลากร · เครื่องมือ · หัตถการ · preference card · บล็อกห้อง · วัสดุ/รากเทียม · นำเข้าจาก Excel — ระบบใช้ข้อมูลนี้จัดตารางทันที</p></div>
   </div>
   <nav>
     <a class="btn" href="/">← กลับไปตารางผ่าตัด</a>
@@ -151,6 +151,7 @@
     <button class="tab" role="tab" aria-selected="false" data-tab="equipment" data-perm="hospital_view equipment">เครื่องมือ</button>
     <button class="tab" role="tab" aria-selected="false" data-tab="procedures" data-perm="hospital_view">หัตถการ</button>
     <button class="tab" role="tab" aria-selected="false" data-tab="cards" data-perm="cards">Preference card</button>
+    <button class="tab" role="tab" aria-selected="false" data-tab="blocks" data-perm="hospital_view">บล็อกห้อง</button>
     <button class="tab" role="tab" aria-selected="false" data-tab="inventory" data-perm="inventory_view">วัสดุ/รากเทียม</button>
     <button class="tab" role="tab" aria-selected="false" data-tab="io" data-perm="hospital_data">นำเข้า/ส่งออก Excel</button>
   </div>
@@ -303,6 +304,49 @@
     <div id="proc-add-box"><h3>เพิ่มหัตถการ</h3><form id="form-proc" class="row-item"></form></div>
   </section>
 
+  <!-- Weekly OR blocks -->
+  <section class="card" data-panel="blocks" hidden>
+    <h2>บล็อกห้องผ่าตัดรายสัปดาห์</h2>
+    <p class="hint">ช่วงเวลาของห้องที่จัดให้แผนก (ตรงกับช่อง "ความเชี่ยวชาญ" ของศัลยแพทย์) หรือศัลยแพทย์คนใดคนหนึ่ง ·
+      เคส elective ใหม่ของคนอื่นจองทับบล็อกไม่ได้ จนกว่าจะเหลือไม่ถึง N วันก่อนผ่าตัด หรือเจ้าของคืนบล็อกวันนั้น ·
+      เคส urgent/ฉุกเฉินใช้ได้เสมอ · เจ้าของบล็อกได้ห้องของตัวเองก่อน · เคสที่จองไว้แล้วไม่ถูกย้าย</p>
+    <p class="readonly" id="blocks-missing" hidden>ยังใช้บล็อกห้องไม่ได้: ให้รัน supabase/migrations/20261111000000_or_blocks.sql ใน Supabase ก่อน</p>
+    <div class="roster-scroll" style="margin-top:12px"><table class="roster" id="blocks-grid"></table></div>
+    <div id="block-form-box"><h3 id="block-form-title">เพิ่มบล็อก</h3>
+      <form id="form-block" class="row-item">
+        <div class="grid">
+          <label>ห้อง<select name="room" required></select></label>
+          <label>เริ่ม<input type="time" name="start" value="08:00" required></label>
+          <label>สิ้นสุด<input type="time" name="end" value="16:00" required></label>
+          <label>เปิดให้คนอื่นก่อนผ่าตัด (วัน)<input type="number" name="release_days" min="0" max="60" value="2" required></label>
+        </div>
+        <fieldset><legend>วันในสัปดาห์</legend><div class="checks" id="block-days"></div></fieldset>
+        <fieldset><legend>เจ้าของบล็อก</legend>
+          <div class="checks">
+            <label><input type="radio" name="owner_kind" value="SPECIALTY" checked>แผนก / ความเชี่ยวชาญ</label>
+            <label><input type="radio" name="owner_kind" value="SURGEON">ศัลยแพทย์คนเดียว</label>
+          </div>
+          <div class="grid" style="margin-top:8px">
+            <label id="block-specialty-box">แผนก (ตรงกับความเชี่ยวชาญของศัลยแพทย์)<input type="text" name="specialty" list="block-specialties" maxlength="100" placeholder="เช่น Orthopedics"></label>
+            <label id="block-surgeon-box" hidden>ศัลยแพทย์<select name="surgeon_id"></select></label>
+          </div>
+          <datalist id="block-specialties"></datalist>
+        </fieldset>
+        <div class="grid">
+          <label>ใช้ตั้งแต่ (ไม่บังคับ)<input type="date" name="valid_from"></label>
+          <label>ใช้ถึง (ไม่บังคับ)<input type="date" name="valid_to"></label>
+          <label style="grid-column: span 2">หมายเหตุ<input type="text" name="note" maxlength="200"></label>
+        </div>
+        <div class="actions"><button class="btn" type="button" id="block-cancel" hidden>ยกเลิกการแก้ไข</button>
+          <button class="btn primary" type="submit">บันทึกบล็อก</button></div>
+      </form>
+    </div>
+    <h3>คืนบล็อกเฉพาะวัน</h3>
+    <p class="hint">เมื่อแผนกแจ้งว่าไม่ใช้บล็อกวันนั้น กดคืนเพื่อเปิดให้ทุกคนจองได้ทันที (ไม่ต้องรอถึงวันที่ระบบเปิดเอง)</p>
+    <div class="toolbar"><label>วันที่<input type="date" id="block-day"></label></div>
+    <div class="rows" id="block-day-list"></div>
+  </section>
+
   <!-- Surgeon preference cards -->
   <section class="card" data-panel="cards" hidden>
     <h2>Preference card ของศัลยแพทย์</h2>
@@ -437,7 +481,7 @@
     document.querySelectorAll('[data-panel]').forEach(p => { p.hidden = p.dataset.panel !== name; });
     $('#affected').hidden = true;
     const load = { roster: loadRoster, rooms: loadRooms, staff: loadStaff, equipment: loadEquipment, inventory: loadInventory,
-                   procedures: loadProcedures, cards: loadCards, io: loadIo }[name];
+                   procedures: loadProcedures, cards: loadCards, io: loadIo, blocks: loadBlocks }[name];
     history.replaceState(null, '', '#' + name);
     load().catch(e => toast(e.message));
   }
@@ -1121,6 +1165,97 @@
   });
   ['#card-surgeon', '#card-off'].forEach(id => $(id).addEventListener('change', () => { if (CARDS) renderCards(); }));
   $('#card-q').addEventListener('input', () => { if (CARDS) renderCards(); });
+
+  // ---------------------------------------------------------- OR blocks
+  let BLOCKS = null, BLOCK_EDIT = null;
+  const WEEK_TH = ['จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์', 'อาทิตย์'];
+  async function loadBlocks() {
+    BLOCKS = await api('/api/admin/blocks' + ($('#block-day').value ? '?day=' + $('#block-day').value : ''));
+    $('#blocks-missing').hidden = BLOCKS.ready;
+    const edit = can('roster') && BLOCKS.ready;
+    $('#block-form-box').hidden = !edit;
+    const f = $('#form-block');
+    if (!f.elements['room'].options.length) {
+      f.elements['room'].innerHTML = BLOCKS.rooms.map(r => `<option>${esc(r)}</option>`).join('');
+      $('#block-days').innerHTML = WEEK_TH.map((d, i) => `<label><input type="checkbox" name="weekday" value="${i}" ${i < 5 ? '' : ''}>${d}</label>`).join('');
+      if (!$('#block-day').value) $('#block-day').value = localToday();
+    }
+    f.elements['surgeon_id'].innerHTML = BLOCKS.surgeons.map(x => `<option value="${esc(x.id)}">${esc(x.name)}${x.specialty ? ' · ' + esc(x.specialty) : ''}</option>`).join('');
+    $('#block-specialties').innerHTML = BLOCKS.specialties.map(x => `<option value="${esc(x)}">`).join('');
+    renderBlockGrid(edit);
+    renderBlockDay();
+  }
+  function renderBlockGrid(edit) {
+    const rows = BLOCKS.rooms.map(room => `<tr><td class="person"><b>${esc(room)}</b></td>${WEEK_TH.map((_, d) => {
+      const list = BLOCKS.blocks.filter(b => b.room === room && b.weekday === d);
+      return `<td>${list.map(b => `<div class="chip" title="${esc((b.note || '') + (b.valid_from || b.valid_to ? ` ใช้ ${b.valid_from || '…'} ถึง ${b.valid_to || '…'}` : ''))}">
+          <span>${esc(b.start)}–${esc(b.end)}<br><b>${esc(b.owner)}</b><br><small>คืน ${b.release_days} วันก่อน${b.valid_to ? ' · ถึง ' + esc(b.valid_to) : ''}</small></span>
+          ${edit ? `<span><button type="button" data-edit-block="${esc(b.id)}" aria-label="แก้ไข">✎</button><button type="button" data-del-block="${esc(b.id)}" aria-label="ลบ">×</button></span>` : ''}</div>`).join('')}</td>`;
+    }).join('')}</tr>`).join('');
+    $('#blocks-grid').innerHTML = `<thead><tr><th>ห้อง</th>${WEEK_TH.map(d => `<th>${d}</th>`).join('')}</tr></thead><tbody>${rows}</tbody>`;
+    $('#blocks-grid').querySelectorAll('[data-edit-block]').forEach(b => b.addEventListener('click', () => startBlockEdit(b.dataset.editBlock)));
+    $('#blocks-grid').querySelectorAll('[data-del-block]').forEach(b => b.addEventListener('click', () => {
+      if (!confirm('ลบบล็อกนี้? (เคสที่จองไว้แล้วไม่ถูกย้าย)')) return;
+      busy(b, async () => { await api('/api/admin/blocks/' + b.dataset.delBlock, {}, 'DELETE'); showAffected([], 'ลบบล็อกแล้ว', true); await loadBlocks(); });
+    }));
+  }
+  function ownerFields() {
+    const kind = $('#form-block').querySelector('input[name="owner_kind"]:checked').value;
+    $('#block-specialty-box').hidden = kind !== 'SPECIALTY';
+    $('#block-surgeon-box').hidden = kind !== 'SURGEON';
+  }
+  $('#form-block').querySelectorAll('input[name="owner_kind"]').forEach(r => r.addEventListener('change', ownerFields));
+  function startBlockEdit(id) {
+    const b = BLOCKS.blocks.find(x => x.id === id), f = $('#form-block');
+    BLOCK_EDIT = id;
+    f.elements['room'].value = b.room; f.elements['start'].value = b.start; f.elements['end'].value = b.end;
+    f.elements['release_days'].value = b.release_days;
+    f.querySelectorAll('input[name="weekday"]').forEach(x => { x.checked = Number(x.value) === b.weekday; });
+    f.querySelector(`input[name="owner_kind"][value="${b.owner_kind}"]`).checked = true;
+    f.elements['specialty'].value = b.specialty || ''; if (b.surgeon_id) f.elements['surgeon_id'].value = b.surgeon_id;
+    f.elements['valid_from'].value = b.valid_from || ''; f.elements['valid_to'].value = b.valid_to || ''; f.elements['note'].value = b.note || '';
+    ownerFields();
+    $('#block-form-title').textContent = `แก้ไขบล็อก ${b.room} วัน${WEEK_TH[b.weekday]}`;
+    $('#block-cancel').hidden = false;
+    $('#block-form-box').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+  function endBlockEdit() {
+    BLOCK_EDIT = null; $('#block-form-title').textContent = 'เพิ่มบล็อก'; $('#block-cancel').hidden = true;
+  }
+  $('#block-cancel').addEventListener('click', endBlockEdit);
+  $('#form-block').addEventListener('submit', e => {
+    e.preventDefault();
+    const f = e.target, kind = f.querySelector('input[name="owner_kind"]:checked').value;
+    const body = { room: f.elements['room'].value, start: f.elements['start'].value, end: f.elements['end'].value,
+      weekdays: [...f.querySelectorAll('input[name="weekday"]:checked')].map(x => Number(x.value)), owner_kind: kind,
+      specialty: kind === 'SPECIALTY' ? f.elements['specialty'].value.trim() : null,
+      surgeon_id: kind === 'SURGEON' ? f.elements['surgeon_id'].value : null,
+      release_days: Number(f.elements['release_days'].value), valid_from: f.elements['valid_from'].value || null,
+      valid_to: f.elements['valid_to'].value || null, note: f.elements['note'].value.trim() || null };
+    busy(f.querySelector('[type="submit"]'), async () => {
+      await api('/api/admin/blocks' + (BLOCK_EDIT ? '/' + BLOCK_EDIT : ''), body, BLOCK_EDIT ? 'PATCH' : 'POST');
+      showAffected([], BLOCK_EDIT ? 'แก้ไขบล็อกแล้ว · ใช้กับการจองครั้งถัดไป' : 'เพิ่มบล็อกแล้ว · ใช้กับการจองครั้งถัดไป (เคสที่จองไว้แล้วไม่ถูกย้าย)', true);
+      endBlockEdit();
+      await loadBlocks();
+    });
+  });
+  function renderBlockDay() {
+    const box = $('#block-day-list'), d = BLOCKS.on_day;
+    if (!d) { box.innerHTML = ''; return; }
+    const edit = can('roster');
+    box.innerHTML = d.blocks.map(b => `<div class="row-item"><div class="title">
+        <span><b>${esc(b.room)} ${esc(b.start)}–${esc(b.end)}</b> · ${esc(b.owner)}</span>
+        ${b.released ? `<span class="badge ok">${esc(b.released_why)}</span>` : `<span class="badge">ยังเป็นของเจ้าของ (เปิดเอง ${b.release_days} วันก่อน)</span>`}</div>
+        ${edit && !b.released ? `<div><button class="btn small" type="button" data-release="${esc(b.id)}">คืนบล็อกวันที่ ${esc(d.date)} ให้ทุกคน</button></div>` : ''}
+        ${edit && b.released_why && b.released_why.startsWith('เจ้าของคืน') ? `<div><button class="btn small" type="button" data-unrelease="${esc(b.id)}">ยกเลิกการคืน</button></div>` : ''}
+      </div>`).join('') || `<p class="hint">วัน${esc(d.weekday)}ที่ ${esc(d.date)} ไม่มีบล็อก</p>`;
+    box.querySelectorAll('[data-release],[data-unrelease]').forEach(b => b.addEventListener('click', () => busy(b, async () => {
+      await api(`/api/admin/blocks/${b.dataset.release || b.dataset.unrelease}/release`, { day: d.date, undo: !!b.dataset.unrelease });
+      showAffected([], b.dataset.release ? `คืนบล็อกวันที่ ${d.date} แล้ว · ทุกคนจองได้` : 'ยกเลิกการคืนแล้ว', true);
+      await loadBlocks();
+    })));
+  }
+  $('#block-day').addEventListener('change', () => loadBlocks().catch(e => toast(e.message)));
 
   // ------------------------------------------------- Excel import / export
   let IO_FILE = null, IO_REPORT = null;

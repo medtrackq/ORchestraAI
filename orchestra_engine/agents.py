@@ -356,10 +356,13 @@ def _facility(opt, case: SurgeryCase, start: int, busy: Busy) -> AgentVerdict:
             continue
         spans = busy.room.get(r.or_id, []) + [(a, b, OTHER_DAY) for a, b in r.blocked]
         closures = [(a, b, "closure") for a, b, _ in r.closures]
+        blocks = list(case.room_blocks.get(r.or_id, ()))  # another owner's OR block
         lo, hi = r.hours_for(case, horizon)
-        nxt = earliest_free(spans + closures, dur + turnover, start, [(lo, hi)], dur, latest)
+        nxt = earliest_free(spans + closures + [(a, b, "block") for a, b, _ in blocks], dur + turnover, start,
+                            [(lo, hi)], dur, latest)
         clash = _clash(spans, start, end + turnover)
         shut = r.closed_at(start, end + turnover)
+        held = next((blk for blk in blocks if blk[0] < end + turnover and start < blk[1]), None)
         if start < r.open_min or end > r.close(horizon):
             room_states.append(ResourceStatus(r.or_id, False, "closed at that time", nxt))
         elif start < lo or end > hi:
@@ -367,6 +370,8 @@ def _facility(opt, case: SurgeryCase, start: int, busy: Busy) -> AgentVerdict:
         elif shut:
             why = f" ({shut[2]})" if shut[2] else ""
             room_states.append(ResourceStatus(r.or_id, False, f"closed {fmt(shut[0])}-{fmt(shut[1])}{why}", nxt))
+        elif held:
+            room_states.append(ResourceStatus(r.or_id, False, f"{held[2]} {fmt(held[0])}-{fmt(held[1])}", nxt))
         elif clash:
             note = _clash_note(clash, start, "busy with {case}, clean at {end}", "booked for {case} at {start}")
             room_states.append(ResourceStatus(r.or_id, False, note, nxt))

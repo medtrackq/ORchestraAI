@@ -20,6 +20,7 @@ from orchestra_engine import ORchestraOptimizer, ScheduleResult, fmt, hm
 from orchestra_engine.demo import elective_day
 from orchestra_engine.results import ScheduleChange
 
+from . import blocks as bk
 from . import cancellations as cx
 from . import milestones as ms
 from . import readiness as rd
@@ -177,9 +178,11 @@ class DatabaseStore:
             readiness = self._readiness(conn, world)
             following = self._readiness_next(conn, world.day, world) if readiness is not None else None
             steps, steps_ready = self._milestones(conn, world)
+            blocks = self.db.day_blocks(conn, world.day, self.db.today())
         return {**self._state(world, activity), "pending": pending, "readiness": readiness or {},
                 "readiness_ready": readiness is not None, "readiness_next": following, "cancel_reasons": cx.options(),
-                "milestones": steps, "milestones_ready": steps_ready}
+                "milestones": steps, "milestones_ready": steps_ready,
+                "blocks": [b.to_dict() for b in blocks or []], "blocks_ready": blocks is not None}
 
     # ------------------------------------------------- steps on the day
 
@@ -474,6 +477,11 @@ class DatabaseStore:
             request_id, existing = self._request_id(conn, data, actor)
             case = build_case(world.hospital, data,
                               case_code(request_id, data.get("urgency") or "ELECTIVE", set(world.result.cases)))
+            blocks = self.db.day_blocks(conn, world.day, self.db.today())
+            if blocks:  # a new elective case keeps out of other owners' OR blocks and prefers its own
+                surgeon = next((s for s in world.hospital.staff if s.staff_id == case.surgeon_id), None)
+                held, own = bk.case_limits(blocks, case.urgency, case.surgeon_id, surgeon.specialty if surgeon else None)
+                case = replace(case, room_blocks=held, preferred_rooms=own)
             request = {**self._request(data, request_id), "existing": existing} if commit else None
             check = self._optimizer(world).check_slot(world.result, case, start, verbose=False)
             out = check.to_dict()
@@ -708,6 +716,7 @@ class DatabaseStore:
             cancellations = self._cancellations(conn, first, last)
             earlier_cancel = self._cancellations(conn, *before)
             stages, stages_ready = self._stage_cases(conn, first, last)
+            block_use = self._block_usage(conn, first, last)
         extra = {
             "waiting": waiting, "cancelled": cancelled, "fatigue_overrides": overrides,
             "emergencies_inserted": counts.get("emergency", 0), "replans": counts.get("replan", 0),
@@ -718,11 +727,36 @@ class DatabaseStore:
         report["cancellations"] = cancellations and cx.summarize(cancellations[0], report["cases"], waiting=cancellations[1])
         report["cancellations_ready"] = cancellations is not None
         report["stages"], report["stages_ready"] = ms.segment_stats(stages), stages_ready
+        report["blocks"], report["blocks_ready"] = block_use or [], block_use is not None
         report["previous"] = {**earlier["kpi"], "cases": earlier["cases"]}
         if earlier_cancel is not None:
             report["previous"]["cancellations"] = cx.summarize(earlier_cancel[0], earlier["cases"], waiting=earlier_cancel[1])
         report["previous_range"] = [before[0].isoformat(), before[1].isoformat()]
         return report
+
+    def _block_usage(self, conn, first: date, last: date) -> list[dict] | None:
+        """Report: each block owner's hours, used by their own cases and by others (None before migration 012)."""
+        if not self.db.has_blocks(conn):
+            return None
+        occ = bk.occurrences(self.db.block_rows(conn), first, last)
+        given = {(str(r["block_id"]), r["day"]) for r in conn.execute(
+            "SELECT block_id, day FROM or_block_releases WHERE day BETWEEN %s AND %s", (first, last))}
+        for o in occ:
+            o["given_back"] = (str(o["block_id"]), o["day"]) in given
+        tz = self.db.tz
+        cases = [
+            {"room": r["room_code"], "start": r["s"], "end": r["e"],
+             "surgeon_id": str(r["primary_surgeon_id"]) if r["primary_surgeon_id"] else None, "specialty": r["specialty"]}
+            for r in conn.execute(
+                """SELECT o.room_code, r.primary_surgeon_id, st.specialty,
+                          COALESCE(s.actual_start_time, s.start_time) AS s,
+                          CASE WHEN s.actual_end_time > s.actual_start_time THEN s.actual_end_time ELSE s.end_time END AS e
+                   FROM scheduled_surgeries s JOIN surgery_requests r USING (request_id)
+                   JOIN operating_rooms o ON o.or_id = s.or_id LEFT JOIN staff st ON st.staff_id = r.primary_surgeon_id
+                   WHERE s.status IS DISTINCT FROM 'CANCELLED' AND s.start_time >= %s AND s.start_time < %s""",
+                (datetime.combine(first, time(), tzinfo=tz), datetime.combine(last + timedelta(days=1), time(), tzinfo=tz)))
+        ]
+        return bk.usage(occ, cases, tz)
 
     def _stage_cases(self, conn, first: date, last: date) -> tuple[list[dict], bool]:
         """Each case's step times (minutes since the epoch) for the report's time-per-step table."""

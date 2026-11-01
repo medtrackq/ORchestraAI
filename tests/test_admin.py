@@ -318,17 +318,18 @@ def test_planned_equipment_maintenance(admin, store):
                                     "end_time": "13:00", "reason": "PM ประจำปี"}, actor=ADMIN)
     assert result["affected"] == []
     assert admin.equipment()["maintenance"][0]["reason"] == "PM ประจำปี"
+    robotic = next(p for p in store.state(day)["options"]["procedures"] if p["name"] == "Robotic partial nephrectomy")
     data = _request(store.state(day), "Dr.Kittipong", "Robotic partial nephrectomy", "HN-M1",
-                    required_supplies={})
+                    required_supplies={}, required_staff_skills=robotic["skills"])
     check = store.slot_check(data, "09:00", commit=False, day=day)
     equipment = next(v for v in check["verdicts"] if v["agent"] == "Equipment & CSSD Agent")
     assert any("planned maintenance 07:00-13:00 (PM ประจำปี)" in i["note"] for i in equipment["items"])
-    today = store.db.today().isoformat()
-    clash = admin.add_maintenance({"serial": "DV-01", "start_date": today, "end_date": today, "start_time": "00:00",
-                                   "end_time": "23:59", "reason": "เสีย"})  # today's robotic cases need it
-    assert clash["affected"][0]["date"] == today and "planned maintenance" in clash["affected"][0]["problems"][0]
+    assert store.slot_check(data, "13:30", commit=True, day=day)["booked"]  # after the morning's maintenance
+    clash = admin.add_maintenance({"serial": "DV-01", "start_date": day, "end_date": day, "start_time": "13:00",
+                                   "end_time": "23:59", "reason": "เสีย"})  # tomorrow's robotic case needs it
+    assert clash["affected"][0]["date"] == day and "planned maintenance" in clash["affected"][0]["problems"][0]
     admin.delete_maintenance(clash["id"])
-    assert store.state()["warnings"] == []
+    assert store.state(day)["warnings"] == []
 
 
 def test_recovery_beds_are_managed(admin, store):

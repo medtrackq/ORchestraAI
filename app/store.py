@@ -334,6 +334,7 @@ class ScheduleStore:
             "milestones": {cid: ms.summarize(self._case_minutes(cid), a.start_min, self._clock(), late=False)
                            for cid, a in self.result.assignments.items()},  # demo day: elapsed by the clock, no "late"
             "milestones_ready": True,
+            "blocks": [], "blocks_ready": False,  # OR blocks need the Supabase hospital data
             **fatigue_view(self.hospital, self.result),
             **facility_view(self.hospital, self.result),
         }
@@ -692,6 +693,7 @@ class ScheduleStore:
         report["stages"] = ms.segment_stats([{k: v for k, v in self._case_minutes(cid).items() if v is not None}
                                              for cid in self.result.assignments])
         report["stages_ready"] = True
+        report["blocks"], report["blocks_ready"] = [], False
         report["previous"], report["previous_range"] = None, None
         return report
 
