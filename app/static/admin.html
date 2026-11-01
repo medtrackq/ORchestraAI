@@ -197,6 +197,25 @@
       <button class="btn danger" type="button" id="delete-selected" hidden>ลบที่เลือก</button>
     </div>
     <div class="roster-scroll"><table class="roster" id="roster"></table></div>
+
+    <h3>ตารางเวรทั้งเดือนด้วย Excel</h3>
+    <p class="hint">ดาวน์โหลดตารางเวรเป็นไฟล์ Excel (คน × วัน) แก้ใน Excel แล้วอัปโหลดกลับ · ช่องหนึ่งใส่รหัสเวร เช่น ช บ ด OC ล ลป
+      หลายเวรคั่นด้วย / (ช/บ) หรือใส่เวลาเอง (07:30-15:30) · แก้รหัสเวรของโรงพยาบาลได้ที่แผ่น "รหัสเวร"</p>
+    <div class="io-actions">
+      <label style="flex:0 1 170px">เดือน<input type="month" id="rx-month"></label>
+      <label style="flex:0 1 200px">บทบาท<select id="rx-role"></select></label>
+      <button class="btn" type="button" id="rx-export">ดาวน์โหลดตารางเวร (.xlsx)</button>
+    </div>
+    <div id="rx-upload" hidden>
+      <div class="io-actions">
+        <label style="flex:0 1 360px">ไฟล์ตารางเวร .xlsx หรือ .csv<input type="file" id="rx-file" accept=".xlsx,.csv"></label>
+        <button class="btn primary" type="button" id="rx-check" disabled>ตรวจไฟล์</button>
+      </div>
+      <p class="hint">ทุกคนและทุกวันที่มีในไฟล์ ระบบแทนเวรเดิมของวันนั้นด้วยสิ่งที่อยู่ในช่อง (<b>ช่องว่าง = ไม่มีเวร</b>) ·
+        คนหรือวันที่ไม่มีในไฟล์ไม่ถูกแตะ · ถ้าหัวคอลัมน์เป็นเลข 1-31 ระบบใช้เดือนจากชื่อแผ่นหรือเดือนที่เลือกข้างบน ·
+        ระบบแสดงผลก่อน ยังไม่บันทึกจนกว่าจะกดยืนยัน</p>
+      <div id="rx-result"></div>
+    </div>
   </section>
 
   <!-- Rooms and closures -->
@@ -303,7 +322,7 @@
   <section class="card" data-panel="io" hidden>
     <h2>นำเข้า/ส่งออกข้อมูลด้วย Excel</h2>
     <p class="hint">ไฟล์เดียวมีทุกแผ่น: ห้องผ่าตัด เตียงพักฟื้น ชนิดเครื่องมือ เครื่องมือรายชิ้น บุคลากร วัสดุ หัตถการ และ preference card
-      (เวรและวันลายังใส่ที่แท็บเวรและวันลา)</p>
+      · <b>ตารางเวรและวันลาทั้งเดือน</b> ใช้ไฟล์ Excel แยกที่แท็บเวรและวันลา</p>
 
     <h3>1. ดาวน์โหลดไฟล์</h3>
     <div class="io-actions">
@@ -454,7 +473,68 @@
       $('#view-from').value = today;
     }
     renderPeoplePicker();
+    if (!$('#rx-role').options.length) {
+      $('#rx-role').innerHTML = roleOptions(STAFF.roles);
+      $('#rx-month').value = localToday().slice(0, 7);
+    }
+    $('#rx-upload').hidden = !editable;
     await loadGrid();
+  }
+
+  // ---------------------------------------------------- roster in Excel
+  let RX_FILE = null;
+  const thaiDate = iso => { const [y, m, d] = iso.split('-').map(Number); return `${d} ${MONTH_SHORT[m - 1]}`; };
+  const MONTH_SHORT = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'];
+  $('#rx-export').addEventListener('click', e => {
+    const q = new URLSearchParams({ month: $('#rx-month').value || localToday().slice(0, 7) });
+    if ($('#rx-role').value) q.set('role', $('#rx-role').value);
+    download('/api/admin/roster.xlsx?' + q, e.target);
+  });
+  $('#rx-file').addEventListener('change', e => {
+    RX_FILE = e.target.files[0] || null;
+    $('#rx-check').disabled = !RX_FILE;
+    $('#rx-result').innerHTML = '';
+  });
+  async function sendRoster(commit) {
+    if (RX_FILE.size > 5 * 1024 * 1024) throw new Error('ไฟล์ใหญ่เกิน 5 MB');
+    return api('/api/admin/roster/import', { filename: RX_FILE.name, content: await fileBase64(RX_FILE), commit,
+      month: $('#rx-month').value || null });
+  }
+  $('#rx-check').addEventListener('click', e => busy(e.target, async () => {
+    $('#rx-result').innerHTML = '';
+    renderRosterReport(await sendRoster(false));
+  }));
+  function renderRosterReport(r) {
+    const errors = r.errors.map(x => `<li>${x.sheet ? 'แผ่น ' + esc(x.sheet) + ' ' : ''}${x.cell ? 'ช่อง ' + esc(x.cell) + ': ' : ''}${esc(x.message)}</li>`);
+    const people = r.changes.slice(0, 80).map(c => `<li><b>${esc(c.name)}</b> <small>(${c.days.length} วัน)</small><br>
+        <small>${c.days.slice(0, 31).map(d => `${thaiDate(d.date)}: ${esc(d.before)} → <b>${esc(d.after)}</b>`).join(' · ')}</small></li>`).join('');
+    let verdict;
+    if (r.committed) verdict = `<div class="affected"><span class="ok">✓ นำเข้าตารางเวรแล้ว: ${r.days} วันที่เปลี่ยน ของ ${r.changes.length} คน</span></div>`;
+    else if (r.errors.length) verdict = `<p class="readonly">พบช่องที่ต้องแก้ ${r.errors.length} ช่อง — แก้ในไฟล์แล้วอัปโหลดใหม่ (ยังไม่มีอะไรถูกบันทึก)</p>`;
+    else if (!r.days) verdict = '<p class="readonly">ตารางเวรในไฟล์ตรงกับในระบบทุกวัน ไม่มีอะไรต้องนำเข้า</p>';
+    else verdict = `<div class="io-actions"><button class="btn primary" type="button" id="rx-commit">ยืนยันนำเข้า ${r.days} วันที่เปลี่ยน</button>
+        <span class="hint">ตรวจแล้วไม่มีช่องที่ผิด</span></div>`;
+    $('#rx-result').innerHTML = `<div class="row-item">
+        <div class="title"><b>${esc(r.filename)}</b>${r.committed ? '<span class="badge ok">บันทึกแล้ว</span>' : '<span class="badge">ผลการตรวจ ยังไม่บันทึก</span>'}</div>
+        <div class="stock"><span>บุคลากร <b>${r.people}</b> คน</span>
+          ${r.from ? `<span>วันที่ <b>${thaiDate(r.from)} – ${thaiDate(r.to)}</b></span>` : ''}
+          <span>วันที่เปลี่ยน <b>${r.days}</b></span><span>เวรใหม่ <b>${r.added}</b></span>
+          <span>เวรเดิมที่ถูกแทน <b>${r.removed}</b></span><span class="hint">ไม่เปลี่ยน ${r.unchanged} วัน</span></div>
+        <p class="hint">${r.codes_from_file ? 'ใช้รหัสเวรจากแผ่น "รหัสเวร" ในไฟล์ (ระบบจำไว้ใช้ครั้งต่อไป)' : 'ไฟล์ไม่มีแผ่น "รหัสเวร" ใช้รหัสเวรที่บันทึกไว้'}:
+          ${r.codes.map(c => `${esc(c[0])} = ${c[1] === 'OFF' ? 'หยุด' : c[2] === c[3] ? (c[1] === 'LEAVE' ? 'ลาทั้งวัน' : 'ทั้งวัน') : esc(c[2] + '-' + c[3])}`).join(' · ')}</p>
+        ${errors.length ? `<b>ช่องที่ต้องแก้</b><ul class="io-errors">${errors.slice(0, 100).join('')}${errors.length > 100 ? `<li>… อีก ${errors.length - 100} ช่อง</li>` : ''}</ul>` : ''}
+        ${r.warnings.length ? `<ul class="io-rows">${r.warnings.map(w => `<li>${esc(w)}</li>`).join('')}</ul>` : ''}
+        ${people ? `<details${r.committed ? '' : ' open'}><summary>สิ่งที่จะเปลี่ยน (เดิม → ใหม่)</summary><ul class="io-rows">${people}
+          ${r.changes.length > 80 ? `<li>… อีก ${r.changes.length - 80} คน</li>` : ''}</ul></details>` : ''}
+        ${verdict}</div>`;
+    $('#rx-commit')?.addEventListener('click', e => busy(e.target, async () => {
+      const done = await sendRoster(true);
+      renderRosterReport(done);
+      if (done.committed) {
+        showAffected(done.affected, `นำเข้าตารางเวรจาก ${done.filename} แล้ว`);
+        await loadGrid();
+      }
+    }));
   }
 
   async function loadGrid() {
