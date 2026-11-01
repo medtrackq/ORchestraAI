@@ -118,7 +118,7 @@
 <header class="top">
   <div class="brand">
     <span class="orb" aria-hidden="true"></span>
-    <div><h1>ข้อมูลโรงพยาบาล</h1><p>ห้องผ่าตัด · บุคลากร · เวรและวันลา · เครื่องมือ · วัสดุ/รากเทียม — ระบบใช้ข้อมูลนี้จัดตารางทันที</p></div>
+    <div><h1>ข้อมูลโรงพยาบาล</h1><p>เวรและวันลา · ห้องผ่าตัดและเตียง · บุคลากร · เครื่องมือ · หัตถการ · วัสดุ/รากเทียม — ระบบใช้ข้อมูลนี้จัดตารางทันที</p></div>
   </div>
   <nav>
     <a class="btn" href="/">← กลับไปตารางผ่าตัด</a>
@@ -132,7 +132,8 @@
     <button class="tab" role="tab" aria-selected="true" data-tab="roster" data-perm="hospital_view">เวรและวันลา</button>
     <button class="tab" role="tab" aria-selected="false" data-tab="rooms" data-perm="hospital_view">ห้องผ่าตัด</button>
     <button class="tab" role="tab" aria-selected="false" data-tab="staff" data-perm="hospital_view">บุคลากร</button>
-    <button class="tab" role="tab" aria-selected="false" data-tab="equipment" data-perm="hospital_view">เครื่องมือ</button>
+    <button class="tab" role="tab" aria-selected="false" data-tab="equipment" data-perm="hospital_view equipment">เครื่องมือ</button>
+    <button class="tab" role="tab" aria-selected="false" data-tab="procedures" data-perm="hospital_view">หัตถการ</button>
     <button class="tab" role="tab" aria-selected="false" data-tab="inventory" data-perm="inventory_view">วัสดุ/รากเทียม</button>
   </div>
 
@@ -205,6 +206,16 @@
       <h3>เพิ่มห้อง</h3>
       <form id="form-room" class="row-item"></form>
     </div>
+
+    <h3>เตียงพักฟื้น (PACU / ICU)</h3>
+    <p class="hint">OR Facility Agent จองเตียงต่อจากเวลาผ่าตัดจบทันที · ถ้ามีผู้ป่วยที่ไม่ได้มาจากตารางผ่าตัด (เช่น ผู้ป่วยอายุรกรรมใน ICU)
+      ให้ใส่ว่ามีผู้ป่วยถึงเมื่อไร · เตียงที่ปิดจะไม่ถูกใช้</p>
+    <div class="rows" id="beds"></div>
+    <div id="bed-add-box"><h3>เพิ่มเตียง</h3>
+      <form id="form-bed" class="row-item"><div class="mini">
+        <label>รหัสเตียง<input type="text" name="code" required maxlength="20" placeholder="เช่น ICU-3"></label>
+        <label>ประเภท<select name="type"><option value="PACU">PACU (ห้องพักฟื้น)</option><option value="ICU_SURGICAL">ICU ศัลยกรรม</option></select></label>
+        <button class="btn primary" type="submit">เพิ่มเตียง</button></div></form></div>
   </section>
 
   <!-- Staff -->
@@ -229,9 +240,30 @@
     <h3>ชนิดเครื่องมือ</h3>
     <div class="rows" id="types"></div>
     <div id="type-add-box"><h3>เพิ่มชนิดเครื่องมือ</h3><form id="form-type" class="row-item"></form></div>
+    <h3>นัดซ่อมบำรุง (Equipment &amp; CSSD Agent ไม่จองเครื่องในช่วงนี้)</h3>
+    <form id="form-maint" class="row-item" hidden><div class="grid">
+        <label>เครื่อง<select name="serial" required></select></label>
+        <label>ตั้งแต่วันที่<input type="date" name="start_date" required></label>
+        <label>เวลา<input type="time" name="start_time" value="08:00" required></label>
+        <label>ถึงวันที่<input type="date" name="end_date" required></label>
+        <label>เวลา<input type="time" name="end_time" value="12:00" required></label></div>
+      <label>เหตุผล<input type="text" name="reason" maxlength="200" placeholder="เช่น PM ประจำปี, ส่งซ่อม"></label>
+      <div><button class="btn primary" type="submit">บันทึกนัดซ่อม</button></div></form>
+    <p class="readonly" id="maint-missing" hidden>ยังนัดซ่อมไม่ได้: ให้รัน supabase/migrations/20261106000000_facility_and_cssd.sql ใน Supabase ก่อน</p>
+    <div class="rows" id="maintenance" style="margin-top:10px"></div>
     <h3>เครื่องรายชิ้น</h3>
     <div class="rows" id="units"></div>
     <div id="unit-add-box"><h3>เพิ่มเครื่อง</h3><form id="form-unit" class="row-item"></form></div>
+  </section>
+
+  <!-- Procedures -->
+  <section class="card" data-panel="procedures" hidden>
+    <h2>หัตถการ</h2>
+    <p class="hint">ค่ามาตรฐานที่ฟอร์มจองใช้: เวลาผ่าตัด ห้องที่ต้องใช้ ICU ความเสี่ยงติดเชื้อ เวลาพักฟื้น (จองเตียง PACU/ICU) และทักษะที่ทีมต้องมี
+      · วัสดุของหัตถการตั้งที่แท็บวัสดุ/รากเทียม</p>
+    <div class="toolbar"><label>ค้นหา<input type="search" id="proc-q" placeholder="ชื่อหรือรหัส"></label></div>
+    <div class="rows" id="procs"></div>
+    <div id="proc-add-box"><h3>เพิ่มหัตถการ</h3><form id="form-proc" class="row-item"></form></div>
   </section>
 
   <!-- Supplies and implants -->
@@ -323,7 +355,8 @@
     document.querySelectorAll('.tab').forEach(t => t.setAttribute('aria-selected', String(t.dataset.tab === name)));
     document.querySelectorAll('[data-panel]').forEach(p => { p.hidden = p.dataset.panel !== name; });
     $('#affected').hidden = true;
-    const load = { roster: loadRoster, rooms: loadRooms, staff: loadStaff, equipment: loadEquipment, inventory: loadInventory }[name];
+    const load = { roster: loadRoster, rooms: loadRooms, staff: loadStaff, equipment: loadEquipment, inventory: loadInventory,
+                   procedures: loadProcedures }[name];
     history.replaceState(null, '', '#' + name);
     load().catch(e => toast(e.message));
   }
@@ -444,7 +477,10 @@
         <label>สถานะ<select name="status">${options(STATUS_TH, r.status, data.statuses)}</select></label>
         <label>ทำความสะอาดปกติ (นาที)<input type="number" name="base" min="0" max="240" value="${r.base_turnover_mins}"></label>
         <label>หลังเคสติดเชื้อ (นาที)<input type="number" name="dirty" min="0" max="480" value="${r.infectious_turnover_mins}"></label>
+        <label>เคส elective เริ่มได้ตั้งแต่<input type="time" name="el_start" value="${esc(r.elective_start || '')}" ${data.hours_ready ? '' : 'disabled'}></label>
+        <label>เคส elective ต้องเสร็จภายใน<input type="time" name="el_end" value="${esc(r.elective_end || '')}" ${data.hours_ready ? '' : 'disabled'}></label>
       </div>
+      <p class="hint">เวลา elective เว้นว่าง = ไม่จำกัด · เคส urgent และฉุกเฉินใช้ห้องนอกเวลานี้ได้${data.hours_ready ? '' : ' (รัน migration 007 ก่อน)'}</p>
       <fieldset><legend>ความสามารถของห้อง</legend><div class="checks">${caps}
         <label>อื่น ๆ <input type="text" name="extra" placeholder="A-Z_ คั่นด้วยจุลภาค" style="width:180px"></label></div></fieldset>`;
   }
@@ -453,6 +489,7 @@
     return {
       code: form.elements['code']?.value.trim(), type: form.elements['type'].value, status: form.elements['status'].value,
       base_turnover_mins: Number(form.elements['base'].value), infectious_turnover_mins: Number(form.elements['dirty'].value),
+      elective_start: form.elements['el_start'].value || null, elective_end: form.elements['el_end'].value || null,
       capabilities: [...form.querySelectorAll('input[name="cap"]:checked')].map(x => x.value).concat(extra),
     };
   }
@@ -476,7 +513,8 @@
     $('#rooms').innerHTML = data.rooms.map(r => `<form class="row-item" data-room="${esc(r.code)}">
         <div class="title"><b>${esc(r.code)}</b><span>
           <span class="badge ${r.status === 'AVAILABLE' ? 'ok' : 'bad'}">${esc(STATUS_TH[r.status] || r.status)}</span>
-          <span class="badge">${esc(ROOM_TYPE_TH[r.type] || r.type)}</span></span></div>
+          <span class="badge">${esc(ROOM_TYPE_TH[r.type] || r.type)}</span>
+          ${r.elective_start || r.elective_end ? `<span class="badge">elective ${esc(r.elective_start || '00:00')}-${esc(r.elective_end || '24:00')}</span>` : ''}</span></div>
         ${edit ? roomFields(r, data) + '<div class="actions"><button class="btn primary" type="submit">บันทึก</button></div>'
           : `<small class="hint">${esc(r.capabilities.map(c => CAP_TH[c] || c).join(', ') || 'ไม่มีความสามารถพิเศษ')} · ทำความสะอาด ${r.base_turnover_mins}/${r.infectious_turnover_mins} นาที</small>`}
       </form>`).join('') || '<p class="hint">ยังไม่มีห้อง</p>';
@@ -491,7 +529,55 @@
     $('#room-add-box').hidden = !edit;
     if (edit) $('#form-room').innerHTML = roomFields({ type: 'STANDARD', status: 'AVAILABLE', capabilities: [], base_turnover_mins: 30, infectious_turnover_mins: 60 }, data)
       + '<div class="actions"><button class="btn primary" type="submit">เพิ่มห้อง</button></div>';
+    await loadBeds();
   }
+
+  const BED_TH = { PACU: 'PACU', ICU_SURGICAL: 'ICU ศัลยกรรม' };
+  async function loadBeds() {
+    const data = await api('/api/admin/beds');
+    const edit = can('roster');
+    $('#bed-add-box').hidden = !can('hospital_data');
+    const today = localToday();
+    $('#beds').innerHTML = data.beds.map(b => `<div class="row-item" data-bed="${esc(b.code)}">
+        <div class="title"><span><b>${esc(b.code)}</b> <small class="hint">${esc(BED_TH[b.type] || b.type)}${b.note ? ' · ' + esc(b.note) : ''}</small></span>
+          <span>${b.status === 'CLOSED' ? '<span class="badge bad">ปิด</span>' : b.occupied_until ? `<span class="badge warn">มีผู้ป่วยถึง ${esc(b.occupied_until)}</span>` : '<span class="badge ok">ว่าง</span>'}
+          ${b.reserved.length ? `<span class="badge">จองหลังผ่าตัด ${b.reserved.length} ครั้ง</span>` : ''}</span></div>
+        ${b.reserved.length ? `<small class="hint">${b.reserved.slice(0, 4).map(r => esc(r.from.slice(5)) + '–' + esc(r.until.slice(5))).join(' · ')}</small>` : ''}
+        ${edit ? `<div class="mini">
+          <label>มีผู้ป่วยอยู่ถึงวันที่<input type="date" name="until_date" value="${esc((b.occupied_until || '').slice(0, 10) || today)}"></label>
+          <label>เวลา<input type="time" name="until_time" value="${esc((b.occupied_until || '').slice(11) || '')}"></label>
+          <button class="btn small primary" type="button" data-act="occupy">บันทึก</button>
+          <button class="btn small" type="button" data-act="free">ว่างแล้ว</button>
+          <button class="btn small ${b.status === 'CLOSED' ? '' : 'danger'}" type="button" data-act="toggle" ${data.status_ready ? '' : 'disabled title="รัน migration 007 ก่อน"'}>${b.status === 'CLOSED' ? 'เปิดใช้เตียง' : 'ปิดเตียง'}</button>
+        </div>` : ''}
+      </div>`).join('') || '<p class="hint">ยังไม่มีเตียงพักฟื้น</p>';
+    $('#beds').querySelectorAll('[data-act]').forEach(btn => btn.addEventListener('click', () => {
+      const row = btn.closest('.row-item'), code = row.dataset.bed, bed = data.beds.find(x => x.code === code);
+      busy(btn, async () => {
+        let r;
+        if (btn.dataset.act === 'toggle') {
+          r = await api('/api/admin/beds/' + encodeURIComponent(code), { type: bed.type, status: bed.status === 'CLOSED' ? 'AVAILABLE' : 'CLOSED', note: bed.note }, 'PATCH');
+        } else if (btn.dataset.act === 'free') {
+          r = await api(`/api/admin/beds/${encodeURIComponent(code)}/occupy`, {});
+        } else {
+          const date = row.querySelector('[name="until_date"]').value, time = row.querySelector('[name="until_time"]').value;
+          if (!date || !time) { toast('ใส่วันและเวลาที่ผู้ป่วยจะออกจากเตียง'); return; }
+          r = await api(`/api/admin/beds/${encodeURIComponent(code)}/occupy`, { until_date: date, until_time: time });
+        }
+        showAffected(r.affected, `บันทึกเตียง ${code} แล้ว`);
+        await loadBeds();
+      });
+    }));
+  }
+  $('#form-bed').addEventListener('submit', e => {
+    e.preventDefault();
+    const f = e.target;
+    busy(f.querySelector('[type="submit"]'), async () => {
+      await api('/api/admin/beds', { code: f.elements['code'].value.trim(), type: f.elements['type'].value });
+      showAffected([], `เพิ่มเตียง ${f.elements['code'].value.trim()} แล้ว`);
+      f.reset(); await loadBeds();
+    });
+  });
   $('#form-room').addEventListener('submit', e => {
     e.preventDefault();
     busy(e.target.querySelector('[type="submit"]'), async () => {
@@ -626,6 +712,20 @@
       });
     }));
     ['#type-add-box', '#unit-add-box'].forEach(id => { $(id).hidden = !edit; });
+    const service = can('equipment') && data.maintenance_ready;
+    $('#form-maint').hidden = !service;
+    $('#maint-missing').hidden = data.maintenance_ready;
+    const mf = $('#form-maint');
+    mf.elements['serial'].innerHTML = data.units.map(u => `<option value="${esc(u.serial)}">${esc(u.serial)} · ${esc(u.type)}</option>`).join('');
+    if (!mf.elements['start_date'].value) mf.elements['start_date'].value = mf.elements['end_date'].value = localToday();
+    $('#maintenance').innerHTML = data.maintenance.map(m => `<div class="row-item"><div class="title">
+        <span><b>${esc(m.serial)}</b> ซ่อมบำรุง ${esc(m.start)} ถึง ${esc(m.end)}${m.reason ? ' · ' + esc(m.reason) : ''}<br><small class="hint">${esc(m.by || '')}</small></span>
+        ${can('equipment') ? `<button class="btn small danger" type="button" data-maint="${esc(m.id)}">ยกเลิกนัด</button>` : ''}</div></div>`).join('')
+      || (data.maintenance_ready ? '<p class="hint">ไม่มีนัดซ่อมบำรุงที่กำลังจะถึง</p>' : '');
+    $('#maintenance').querySelectorAll('[data-maint]').forEach(b => b.addEventListener('click', () => {
+      if (!confirm('ยกเลิกนัดซ่อมบำรุงนี้?')) return;
+      busy(b, async () => { await api('/api/admin/maintenance/' + b.dataset.maint, {}, 'DELETE'); showAffected([], 'ยกเลิกนัดซ่อมแล้ว'); await loadEquipment(); });
+    }));
     if (edit) {
       $('#form-type').innerHTML = typeFields({}) + '<div class="actions"><button class="btn primary" type="submit">เพิ่มชนิด</button></div>';
       $('#form-unit').innerHTML = data.types.length ? unitFields({}) + '<div class="actions"><button class="btn primary" type="submit">เพิ่มเครื่อง</button></div>'
@@ -634,6 +734,81 @@
       $('#form-unit').onsubmit = e => { e.preventDefault(); busy(e.target.querySelector('[type="submit"]'), async () => { const b = readUnit(e.target); await api('/api/admin/equipment-units', b); showAffected([], `เพิ่ม ${b.serial} แล้ว`); await loadEquipment(); }); };
     }
   }
+
+  $('#form-maint').addEventListener('submit', e => {
+    e.preventDefault();
+    const f = e.target;
+    const body = Object.fromEntries(['serial', 'start_date', 'start_time', 'end_date', 'end_time', 'reason'].map(k => [k, f.elements[k].value]));
+    busy(f.querySelector('[type="submit"]'), async () => {
+      const r = await api('/api/admin/maintenance', body);
+      showAffected(r.affected, `นัดซ่อม ${body.serial} แล้ว`);
+      f.elements['reason'].value = '';
+      await loadEquipment();
+    });
+  });
+
+  // ------------------------------------------------------------ procedures
+  const INFECTION_TH = { CLEAN: 'สะอาด (CLEAN)', CONTAMINATED: 'ปนเปื้อน (CONTAMINATED)', DIRTY: 'ติดเชื้อ (DIRTY)' };
+  let PROCS = null;
+  async function loadProcedures() { PROCS = await api('/api/admin/procedures'); renderProcedures(); }
+
+  function procFields(p, data) {
+    const caps = data.capabilities.map(c => `<label><input type="checkbox" name="cap" value="${esc(c)}" ${(p.caps || []).includes(c) ? 'checked' : ''}>${esc(CAP_TH[c] || c)}</label>`).join('');
+    const skills = data.roles.filter(r => r !== 'SURGEON').map(r => `<label>ทักษะ${esc(ROLE_TH[r] || r)}
+        <input type="text" name="skill_${esc(r)}" value="${esc(((p.skills || {})[r] || []).join(', '))}" placeholder="เช่น ROBOTIC_CERTIFIED" ${data.skills_ready ? '' : 'disabled'}></label>`).join('');
+    return `<div class="grid">
+        <label>ชื่อหัตถการ<input type="text" name="name" required maxlength="200" value="${esc(p.name || '')}"></label>
+        <label>รหัส ICD-9-CM<input type="text" name="code" maxlength="20" value="${esc(p.code || '')}"></label>
+        <label>เวลาผ่าตัดมาตรฐาน (นาที)<input type="number" name="duration" min="15" max="1440" step="5" value="${p.duration ?? 60}"></label>
+        <label>ความเสี่ยงติดเชื้อ<select name="infection">${options(INFECTION_TH, p.infection || 'CLEAN', data.infection)}</select></label>
+        <label>เวลาพักฟื้น (นาที, ว่าง = มาตรฐาน)<input type="number" name="recovery" min="0" max="10080" step="15" value="${p.recovery_mins ?? ''}" ${data.recovery_ready ? '' : 'disabled'}></label>
+        <label style="display:flex;flex-direction:row;align-items:center;gap:6px;color:var(--text)"><input type="checkbox" name="icu" ${p.icu ? 'checked' : ''}>ต้องเข้า ICU หลังผ่าตัด</label>
+      </div>
+      <fieldset><legend>ห้องต้องมี</legend><div class="checks">${caps}</div></fieldset>
+      <div class="grid">${skills}</div>`;
+  }
+  function readProc(f) {
+    const skills = {};
+    PROCS.roles.filter(r => r !== 'SURGEON').forEach(r => {
+      const v = (f.elements['skill_' + r]?.value || '').split(',').map(x => x.trim().toUpperCase()).filter(Boolean);
+      if (v.length) skills[r] = v;
+    });
+    const rec = f.elements['recovery'].value;
+    return { name: f.elements['name'].value.trim(), code: f.elements['code'].value.trim() || null,
+      duration: Number(f.elements['duration'].value), infection: f.elements['infection'].value, icu: f.elements['icu'].checked,
+      recovery_mins: rec === '' ? null : Number(rec), caps: [...f.querySelectorAll('input[name="cap"]:checked')].map(x => x.value), skills };
+  }
+  function renderProcedures() {
+    const data = PROCS, edit = can('hospital_data');
+    const q = $('#proc-q').value.trim().toLowerCase();
+    $('#procs').innerHTML = data.procedures.filter(p => !q || (p.name + ' ' + (p.code || '')).toLowerCase().includes(q)).map(p => `<details class="row-item">
+        <summary class="title" style="cursor:pointer"><span><b>${esc(p.name)}</b> <small class="hint">${esc(p.code || '')} · ${p.duration} นาที</small></span>
+          <span>${p.icu ? '<span class="badge warn">ICU</span>' : ''}${p.infection !== 'CLEAN' ? `<span class="badge bad">${esc(p.infection)}</span>` : ''}
+          ${p.recovery_mins !== null && p.recovery_mins !== undefined ? `<span class="badge">พักฟื้น ${p.recovery_mins} นาที</span>` : ''}
+          ${p.caps.map(c => `<span class="badge">${esc(CAP_TH[c] || c)}</span>`).join('')}</span></summary>
+        ${edit ? `<form data-proc="${esc(p.id)}">${procFields(p, data)}<div class="actions"><button class="btn primary" type="submit">บันทึก</button></div></form>` : ''}
+      </details>`).join('') || '<p class="hint">ไม่พบหัตถการ</p>';
+    $('#procs').querySelectorAll('form').forEach(f => f.addEventListener('submit', e => {
+      e.preventDefault();
+      busy(f.querySelector('[type="submit"]'), async () => {
+        await api('/api/admin/procedures/' + f.dataset.proc, readProc(f), 'PATCH');
+        showAffected([], 'บันทึกหัตถการแล้ว ใช้กับการจองครั้งถัดไป'); await loadProcedures();
+      });
+    }));
+    $('#proc-add-box').hidden = !edit;
+    if (edit && !$('#form-proc').innerHTML) $('#form-proc').innerHTML = procFields({}, data)
+      + '<div class="actions"><button class="btn primary" type="submit">เพิ่มหัตถการ</button></div>';
+  }
+  $('#proc-q').addEventListener('input', () => { if (PROCS) renderProcedures(); });
+  $('#form-proc').addEventListener('submit', e => {
+    e.preventDefault();
+    busy(e.target.querySelector('[type="submit"]'), async () => {
+      const body = readProc(e.target);
+      await api('/api/admin/procedures', body);
+      showAffected([], `เพิ่ม ${body.name} แล้ว`);
+      $('#form-proc').innerHTML = ''; await loadProcedures();
+    });
+  });
 
   // ------------------------------------------------------------- inventory
   const SUPPLY_CAT_TH = { IMPLANT: 'รากเทียม', CONSUMABLE: 'วัสดุสิ้นเปลือง' };
@@ -783,7 +958,7 @@
     if (ME.must_change_password) { location.href = '/'; return; }
     $('#who').innerHTML = `<span>${esc(ME.display_name)}</span><small>${esc(ME.role_label)}</small>`;
     const tabs = [...document.querySelectorAll('.tab')];
-    tabs.forEach(t => { t.hidden = !can(t.dataset.perm); });
+    tabs.forEach(t => { t.hidden = !t.dataset.perm.split(' ').some(can); });
     const allowed = tabs.filter(t => !t.hidden).map(t => t.dataset.tab);
     if (!allowed.length) {
       document.querySelector('main').innerHTML = '<div class="card"><h2>ไม่มีสิทธิ์</h2><p class="hint">หน้านี้สำหรับผู้ดูแลระบบ ผู้จัดตาราง และ CSSD/คลังวัสดุ</p></div>';

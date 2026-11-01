@@ -294,9 +294,14 @@ def _equipment(opt, case: SurgeryCase, start: int, busy: Busy) -> AgentVerdict:
                 continue
             occupy = dur + u.reprocess_mins
             spans = busy.unit.get(u.unit_id, []) + [(a, b, OTHER_DAY) for a, b in u.blocked]
-            nxt = earliest_free(spans, occupy, start, [(u.available_at, _FAR)], 0, latest)
+            service = [(a, b, "maintenance") for a, b, _ in u.closures]
+            nxt = earliest_free(spans + service, occupy, start, [(u.available_at, _FAR)], 0, latest)
             clash = _clash(spans, start, start + occupy)
-            if u.available_at > start:
+            shut = u.closed_at(start, start + occupy)
+            if shut:
+                why = f" ({shut[2]})" if shut[2] else ""
+                states.append(ResourceStatus(label, False, f"planned maintenance {fmt(shut[0])}-{fmt(shut[1])}{why}", nxt))
+            elif u.available_at > start:
                 word = _STATUS_WORDS.get(u.status, "not available")
                 states.append(ResourceStatus(label, False, f"{word} until {fmt(u.available_at)}", nxt))
             elif clash:
@@ -351,11 +356,14 @@ def _facility(opt, case: SurgeryCase, start: int, busy: Busy) -> AgentVerdict:
             continue
         spans = busy.room.get(r.or_id, []) + [(a, b, OTHER_DAY) for a, b in r.blocked]
         closures = [(a, b, "closure") for a, b, _ in r.closures]
-        nxt = earliest_free(spans + closures, dur + turnover, start, [(r.open_min, r.close(horizon))], dur, latest)
+        lo, hi = r.hours_for(case, horizon)
+        nxt = earliest_free(spans + closures, dur + turnover, start, [(lo, hi)], dur, latest)
         clash = _clash(spans, start, end + turnover)
         shut = r.closed_at(start, end + turnover)
         if start < r.open_min or end > r.close(horizon):
             room_states.append(ResourceStatus(r.or_id, False, "closed at that time", nxt))
+        elif start < lo or end > hi:
+            room_states.append(ResourceStatus(r.or_id, False, f"elective hours are {fmt(lo)}-{fmt(hi)}", nxt))
         elif shut:
             why = f" ({shut[2]})" if shut[2] else ""
             room_states.append(ResourceStatus(r.or_id, False, f"closed {fmt(shut[0])}-{fmt(shut[1])}{why}", nxt))
@@ -373,7 +381,7 @@ def _facility(opt, case: SurgeryCase, start: int, busy: Busy) -> AgentVerdict:
     bed_ok = True
     if opt.beds:
         bed_type, rec = case.recovery_bed_type, case.recovery_duration
-        pool = [b for b in opt.beds if b.bed_type == bed_type]
+        pool = [b for b in opt.beds if b.bed_type == bed_type and b.is_usable]
         free, nexts = [], []
         for b in pool:
             spans = busy.bed.get(b.bed_id, []) + [(s, e, OTHER_DAY) for s, e in b.blocked]

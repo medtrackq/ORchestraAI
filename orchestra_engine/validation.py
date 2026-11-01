@@ -67,8 +67,11 @@ def validate_schedule(
                 errors.append(f"{tag}: starts {fmt(a.start_min)} after deadline {fmt(case.deadline_min)}")
             if a.end_min > horizon_mins:
                 errors.append(f"{tag}: ends after the horizon")
+            lo, hi = room.hours_for(case, horizon_mins)
             if a.start_min < room.open_min or a.end_min > room.close(horizon_mins):
                 errors.append(f"{tag}: outside {room.or_id} opening hours")
+            elif a.start_min < lo or a.end_min > hi:
+                errors.append(f"{tag}: outside {room.or_id} elective hours {fmt(lo)}-{fmt(hi)}")
             shut = room.closed_at(a.start_min, a.cleanup_end_min)
             if shut:
                 why = f" ({shut[2]})" if shut[2] else ""
@@ -111,6 +114,10 @@ def validate_schedule(
                     errors.append(f"{tag}: {uid} is {unit.status}")
                 if a.start_min < unit.available_at:
                     errors.append(f"{tag}: {uid} not back from CSSD until {fmt(unit.available_at)}")
+                shut = unit.closed_at(a.start_min, a.end_min + unit.reprocess_mins)
+                if shut:
+                    why = f" ({shut[2]})" if shut[2] else ""
+                    errors.append(f"{tag}: {uid} has planned maintenance {fmt(shut[0])}-{fmt(shut[1])}{why}")
             unit_busy[uid].append((a.start_min, a.end_min + unit.reprocess_mins, cid))
         if types != case.equipment_counts:
             errors.append(f"{tag}: equipment {dict(types)} != required {dict(case.equipment_counts)}")
@@ -129,6 +136,8 @@ def validate_schedule(
                     errors.append(f"{tag}: recovery window does not follow the surgery")
                 if not a.frozen and a.end_min < bed.available_from:
                     errors.append(f"{tag}: {bed.bed_id} busy until {fmt(bed.available_from)}")
+                if not a.frozen and not bed.is_usable:
+                    errors.append(f"{tag}: {bed.bed_id} is {bed.status}")
                 bed_busy[bed.bed_id].append((a.recovery_start_min, a.recovery_end_min, cid))
 
         room_busy[room.or_id].append((a.start_min, a.cleanup_end_min, cid))

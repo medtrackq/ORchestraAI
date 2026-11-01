@@ -31,6 +31,9 @@ ROLES = (StaffRole.SURGEON, StaffRole.ANESTHESIOLOGIST, StaffRole.SCRUB_NURSE, S
 SHIFT_TYPES = ("REGULAR", "ON_CALL", "LEAVE")
 EQUIPMENT_CATEGORIES = ("HEAVY_MACHINE", "INSTRUMENT_TRAY", "OTHER")
 SUPPLY_CATEGORIES = ("IMPLANT", "CONSUMABLE")
+BED_TYPES = ("PACU", "ICU_SURGICAL")
+BED_STATUSES = ("AVAILABLE", "CLOSED")
+INFECTION_LEVELS = ("CLEAN", "CONTAMINATED", "DIRTY")
 SUPPLY_CODE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,49}$")
 MAX_DAYS = 120  # one shift / leave request
 CHECK_DAYS = 31  # days ahead checked for bookings that no longer fit
@@ -64,6 +67,10 @@ def _time(text: str) -> time:
         return time(int(hours), int(minutes))
     except (ValueError, AttributeError) as exc:
         raise StoreError(f"เวลาไม่ถูกต้อง: {text!r} (ใช้ HH:MM)") from exc
+
+
+def _hhmm(value) -> str | None:
+    return None if value is None else value.strftime("%H:%M")
 
 
 def _number(value, low: float, high: float, what: str) -> float:
@@ -137,7 +144,8 @@ class HospitalAdmin:
             rooms = [
                 {"code": r["room_code"], "type": r["room_type"], "capabilities": sorted(r["capabilities"] or []),
                  "base_turnover_mins": r["base_turnover_mins"], "infectious_turnover_mins": r["infectious_turnover_mins"],
-                 "status": r["status"] or "AVAILABLE"}
+                 "status": r["status"] or "AVAILABLE",
+                 "elective_start": _hhmm(r.get("elective_start")), "elective_end": _hhmm(r.get("elective_end"))}
                 for r in conn.execute("SELECT * FROM operating_rooms ORDER BY room_code")
             ]
             closures = []
@@ -152,7 +160,8 @@ class HospitalAdmin:
                 ]
         capabilities = sorted(set(CAPABILITIES) | {c for r in rooms for c in r["capabilities"]})
         return {"rooms": rooms, "closures": closures, "closures_ready": ("room_closures", "closure_id") in cols,
-                "types": list(ROOM_TYPES), "capabilities": capabilities, "statuses": list(ROOM_STATUSES)}
+                "types": list(ROOM_TYPES), "capabilities": capabilities, "statuses": list(ROOM_STATUSES),
+                "hours_ready": ("operating_rooms", "elective_start") in cols}
 
     def save_room(self, data: dict, *, code: str | None = None, actor: dict | None = None) -> dict:
         new = code is None
@@ -168,6 +177,10 @@ class HospitalAdmin:
             raise StoreError(f"สถานะห้องไม่ถูกต้อง: {status}")
         base = int(_number(data.get("base_turnover_mins", 30), 0, 240, "เวลาทำความสะอาดปกติ"))
         dirty = int(_number(data.get("infectious_turnover_mins", 60), 0, 480, "เวลาทำความสะอาดหลังเคสติดเชื้อ"))
+        opens = _time(data["elective_start"]) if data.get("elective_start") else None
+        closes = _time(data["elective_end"]) if data.get("elective_end") else None
+        if opens and closes and closes <= opens:
+            raise StoreError("เวลาปิดรับเคส elective ต้องหลังเวลาเปิด")
         with self.store._transaction(write=True) as conn:
             values = (room_type, Jsonb(caps), base, dirty, status)
             if new:
@@ -187,7 +200,12 @@ class HospitalAdmin:
                 )
                 if cur.rowcount != 1:
                     raise StoreError(f"ไม่พบห้อง {code}")
-            detail = f"{code}: {room_type} [{', '.join(caps)}] สถานะ {status}, ทำความสะอาด {base}/{dirty} นาที"
+            if ("operating_rooms", "elective_start") in self._columns(conn):
+                conn.execute("UPDATE operating_rooms SET elective_start = %s, elective_end = %s WHERE room_code = %s",
+                             (opens, closes, code))
+            hours = (f", elective {opens.strftime('%H:%M') if opens else '-'}-{closes.strftime('%H:%M') if closes else '-'}"
+                     if opens or closes else "")
+            detail = f"{code}: {room_type} [{', '.join(caps)}] สถานะ {status}, ทำความสะอาด {base}/{dirty} นาที{hours}"
             self._log(conn, ("เพิ่มห้อง " if new else "แก้ไขห้อง ") + code, [detail], actor)
             affected = [] if new else self._affected(conn, self.db.today(), self.db.today() + timedelta(days=CHECK_DAYS))
         return {"room": code, "affected": affected}
@@ -411,7 +429,197 @@ class HospitalAdmin:
                        ORDER BY t.name, u.serial_number"""
                 )
             ]
-        return {"types": types, "units": units, "categories": list(EQUIPMENT_CATEGORIES)}
+            maintenance = []
+            ready = ("equipment_maintenance", "maintenance_id") in self._columns(conn)
+            if ready:
+                maintenance = [
+                    {"id": str(r["maintenance_id"]), "serial": r["serial_number"], "start": self._local(r["start_time"]),
+                     "end": self._local(r["end_time"]), "reason": r["reason"], "by": r["created_by"]}
+                    for r in conn.execute(
+                        """SELECT m.*, u.serial_number FROM equipment_maintenance m JOIN equipment_units u USING (unit_id)
+                           WHERE m.end_time > NOW() - INTERVAL '1 day' ORDER BY m.start_time"""
+                    )
+                ]
+        return {"types": types, "units": units, "categories": list(EQUIPMENT_CATEGORIES),
+                "maintenance": maintenance, "maintenance_ready": ready}
+
+    def add_maintenance(self, data: dict, *, actor: dict | None = None) -> dict:
+        """Planned maintenance of a unit (service visit, repair): not used then."""
+        start = self._at(_date(data.get("start_date"), "วันที่เริ่ม"), _time(data.get("start_time") or "00:00"))
+        end = self._at(_date(data.get("end_date"), "วันที่เสร็จ"), _time(data.get("end_time") or "00:00"))
+        if end <= start:
+            raise StoreError("เวลาเสร็จต้องหลังเวลาเริ่ม")
+        if end - start > timedelta(days=366):
+            raise StoreError("นัดซ่อมได้ครั้งละไม่เกิน 1 ปี (ถ้าเลิกใช้ ให้ตั้งสถานะเครื่องเป็นซ่อมบำรุง)")
+        reason = (data.get("reason") or "").strip()[:200] or None
+        actor_text = None if actor is None else f"{actor.get('name')} ({actor.get('role')})"
+        with self.store._transaction(write=True) as conn:
+            if ("equipment_maintenance", "maintenance_id") not in self._columns(conn):
+                raise StoreError("ฐานข้อมูลยังไม่ได้รัน migration supabase/migrations/20261106000000_facility_and_cssd.sql")
+            unit = conn.execute("SELECT unit_id FROM equipment_units WHERE serial_number = %s",
+                                (data.get("serial"),)).fetchone()
+            if unit is None:
+                raise StoreError(f"ไม่พบเครื่อง {data.get('serial')}")
+            mid = conn.execute(
+                """INSERT INTO equipment_maintenance (unit_id, start_time, end_time, reason, created_by)
+                   VALUES (%s, %s, %s, %s, %s) RETURNING maintenance_id""",
+                (unit["unit_id"], start, end, reason, actor_text),
+            ).fetchone()["maintenance_id"]
+            self._log(conn, f"นัดซ่อมบำรุง {data.get('serial')} {self._local(start)} ถึง {self._local(end)}",
+                      [reason or ""], actor, start.date())
+            affected = self._affected(conn, start.date(), end.date())
+        return {"id": str(mid), "affected": affected}
+
+    def delete_maintenance(self, maintenance_id: str, *, actor: dict | None = None) -> dict:
+        with self.store._transaction(write=True) as conn:
+            row = conn.execute(
+                """DELETE FROM equipment_maintenance m USING equipment_units u
+                   WHERE m.maintenance_id = %s AND u.unit_id = m.unit_id RETURNING u.serial_number, m.start_time""",
+                (_uuid(maintenance_id, "การซ่อมบำรุง"),),
+            ).fetchone()
+            if row is None:
+                raise StoreError("ไม่พบรายการซ่อมบำรุงนี้")
+            self._log(conn, f"ยกเลิกนัดซ่อม {row['serial_number']} {self._local(row['start_time'])}", [], actor)
+        return {"deleted": maintenance_id}
+
+    # ------------------------------------------------------- recovery beds
+
+    def beds(self) -> dict:
+        now = datetime.now(self.db.tz)
+        with self.store._transaction(write=False) as conn:
+            cols = self._columns(conn)
+            reserved: dict = {}
+            if ("scheduled_surgeries", "recovery_end_time") in cols:
+                for r in conn.execute(
+                    """SELECT s.reserved_bed_id, s.end_time, s.recovery_end_time, r.patient_hn FROM scheduled_surgeries s
+                       JOIN surgery_requests r USING (request_id)
+                       WHERE s.reserved_bed_id IS NOT NULL AND s.status IS DISTINCT FROM 'CANCELLED'
+                         AND s.recovery_end_time > NOW() ORDER BY s.end_time"""
+                ):
+                    reserved.setdefault(r["reserved_bed_id"], []).append(
+                        {"from": self._local(r["end_time"]), "until": self._local(r["recovery_end_time"])})
+            beds = [
+                {"code": r["bed_code"], "type": r["bed_type"], "status": r.get("status") or "AVAILABLE",
+                 "note": r.get("note"),
+                 "occupied_until": self._local(r["available_from"]) if r["available_from"] and r["available_from"] > now
+                 else None,
+                 "reserved": reserved.get(r["bed_id"], [])}
+                for r in conn.execute("SELECT * FROM recovery_beds ORDER BY bed_type DESC, bed_code")
+            ]
+        return {"beds": beds, "types": list(BED_TYPES), "status_ready": ("recovery_beds", "status") in cols}
+
+    def save_bed(self, data: dict, *, code: str | None = None, actor: dict | None = None) -> dict:
+        new = code is None
+        code = (data.get("code") if new else code) or ""
+        if not CODE.match(code):
+            raise StoreError("รหัสเตียงใช้ได้ 1-20 ตัว (A-Z 0-9 - _ .) เช่น ICU-3")
+        bed_type = data.get("type") or "PACU"
+        if bed_type not in BED_TYPES:
+            raise StoreError(f"ประเภทเตียงไม่ถูกต้อง: {bed_type}")
+        status = data.get("status") or "AVAILABLE"
+        if status not in BED_STATUSES:
+            raise StoreError(f"สถานะเตียงไม่ถูกต้อง: {status}")
+        note = (data.get("note") or "").strip()[:200] or None
+        with self.store._transaction(write=True) as conn:
+            extra = ("recovery_beds", "status") in self._columns(conn)
+            if new:
+                try:
+                    conn.execute("INSERT INTO recovery_beds (bed_code, bed_type, available_from) VALUES (%s, %s, NOW())",
+                                 (code, bed_type))
+                except psycopg.errors.UniqueViolation as exc:
+                    raise StoreError(f"มีเตียง {code} อยู่แล้ว") from exc
+            elif conn.execute("UPDATE recovery_beds SET bed_type = %s WHERE bed_code = %s",
+                              (bed_type, code)).rowcount != 1:
+                raise StoreError(f"ไม่พบเตียง {code}")
+            if extra:
+                conn.execute("UPDATE recovery_beds SET status = %s, note = %s WHERE bed_code = %s", (status, note, code))
+            elif status != "AVAILABLE":
+                raise StoreError("ปิดเตียงได้หลังรัน migration supabase/migrations/20261106000000_facility_and_cssd.sql")
+            self._log(conn, ("เพิ่มเตียง " if new else "แก้ไขเตียง ") + code, [f"{bed_type} {status} {note or ''}"], actor)
+            affected = [] if new else self._affected(conn, self.db.today(), self.db.today() + timedelta(days=CHECK_DAYS))
+        return {"bed": code, "affected": affected}
+
+    def occupy_bed(self, code: str, data: dict, *, actor: dict | None = None) -> dict:
+        """A patient from outside the OR schedule (e.g. a ward patient in ICU) holds the bed until a time."""
+        until = None
+        if data.get("until_date"):
+            until = self._at(_date(data["until_date"], "วันที่"), _time(data.get("until_time") or "00:00"))
+            if until - datetime.now(self.db.tz) > timedelta(days=60):
+                raise StoreError("ระบุได้ไม่เกิน 60 วันข้างหน้า")
+        with self.store._transaction(write=True) as conn:
+            cur = conn.execute(
+                "UPDATE recovery_beds SET available_from = COALESCE(%s, NOW()), is_occupied = %s WHERE bed_code = %s",
+                (until, until is not None, code),
+            )
+            if cur.rowcount != 1:
+                raise StoreError(f"ไม่พบเตียง {code}")
+            title = f"เตียง {code} มีผู้ป่วยถึง {self._local(until)}" if until else f"เตียง {code} ว่างแล้ว"
+            self._log(conn, title, [(data.get("note") or "").strip()[:200]], actor)
+            affected = self._affected(conn, self.db.today(), until.date() if until else self.db.today())
+        return {"bed": code, "affected": affected}
+
+    # ---------------------------------------------------------- procedures
+
+    def procedures(self) -> dict:
+        with self.store._transaction(write=False) as conn:
+            cols = self._columns(conn)
+            rows = [
+                {"id": str(r["procedure_id"]), "code": r["icd9_cm_code"], "name": r["name"],
+                 "duration": r["default_duration_mins"], "caps": sorted(r["required_room_capabilities"] or []),
+                 "icu": bool(r["requires_icu_post_op"]), "infection": r["infection_risk_level"] or "CLEAN",
+                 "recovery_mins": r.get("recovery_mins"), "skills": r.get("required_staff_skills") or {}}
+                for r in conn.execute("SELECT * FROM procedures ORDER BY name")
+            ]
+        return {"procedures": rows, "infection": list(INFECTION_LEVELS), "roles": list(ROLES),
+                "capabilities": sorted(set(CAPABILITIES) | {c for p in rows for c in p["caps"]}),
+                "recovery_ready": ("procedures", "recovery_mins") in cols,
+                "skills_ready": ("procedures", "required_staff_skills") in cols}
+
+    def save_procedure(self, data: dict, *, procedure_id: str | None = None, actor: dict | None = None) -> dict:
+        name = (data.get("name") or "").strip()
+        if not name or len(name) > 200:
+            raise StoreError("กรุณาใส่ชื่อหัตถการ (ไม่เกิน 200 ตัวอักษร)")
+        code = (data.get("code") or "").strip()[:20] or None
+        duration = int(_number(data.get("duration", 60), 15, 1440, "เวลาผ่าตัดมาตรฐาน (นาที)"))
+        caps = _tags(data.get("caps"), "ความสามารถของห้อง")
+        infection = data.get("infection") or "CLEAN"
+        if infection not in INFECTION_LEVELS:
+            raise StoreError(f"ความเสี่ยงติดเชื้อไม่ถูกต้อง: {infection}")
+        recovery = data.get("recovery_mins")
+        recovery = None if recovery in (None, "") else int(_number(recovery, 0, 10080, "เวลาพักฟื้น (นาที)"))
+        skills = {}
+        for role, names in (data.get("skills") or {}).items():
+            if role not in ROLES:
+                raise StoreError(f"บทบาทไม่ถูกต้อง: {role}")
+            if names:
+                skills[role] = _tags(names, "ทักษะ")
+        with self.store._transaction(write=True) as conn:
+            cols = self._columns(conn)
+            fields = {"name": name, "icd9_cm_code": code, "default_duration_mins": duration,
+                      "required_room_capabilities": Jsonb(caps), "requires_icu_post_op": bool(data.get("icu")),
+                      "infection_risk_level": infection}
+            if ("procedures", "recovery_mins") in cols:
+                fields["recovery_mins"] = recovery
+            if ("procedures", "required_staff_skills") in cols:
+                fields["required_staff_skills"] = Jsonb(skills)
+            try:
+                if procedure_id is None:
+                    procedure_id = str(conn.execute(
+                        f"INSERT INTO procedures ({', '.join(fields)}) VALUES ({', '.join(['%s'] * len(fields))}) "
+                        "RETURNING procedure_id", list(fields.values())).fetchone()["procedure_id"])
+                    title = f"เพิ่มหัตถการ {name}"
+                else:
+                    cur = conn.execute(f"UPDATE procedures SET {', '.join(f'{k} = %s' for k in fields)} WHERE procedure_id = %s",
+                                       [*fields.values(), _uuid(procedure_id, "หัตถการ")])
+                    if cur.rowcount != 1:
+                        raise StoreError("ไม่พบหัตถการนี้")
+                    title = f"แก้ไขหัตถการ {name}"
+            except psycopg.errors.UniqueViolation as exc:
+                raise StoreError(f"รหัส ICD-9-CM {code} ใช้กับหัตถการอื่นแล้ว") from exc
+            self._log(conn, title, [f"{duration} นาที, ห้อง [{', '.join(caps)}], {infection}"
+                                    + (", ICU" if data.get("icu") else "")
+                                    + (f", พักฟื้น {recovery} นาที" if recovery is not None else "")], actor)
+        return {"id": procedure_id}
 
     def save_type(self, data: dict, *, type_id: str | None = None, actor: dict | None = None) -> dict:
         name = (data.get("name") or "").strip()

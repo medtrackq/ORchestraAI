@@ -48,7 +48,7 @@ TABLES = (
     "resource_allocations",
 )
 OPTIONAL_TABLES = ("room_closures", "supply_items", "supply_deliveries", "procedure_supplies",
-                   "supply_reservations")  # RLS is checked once the migration that creates them has run
+                   "supply_reservations", "equipment_maintenance")  # RLS is checked once the migration that creates them has run
 
 
 log = logging.getLogger("orchestra.db")
@@ -214,6 +214,11 @@ def _merge(windows: list[tuple[int, int]]) -> list[tuple[int, int]]:
     return [(a, b) for a, b in merged]
 
 
+def _clock(value) -> int | None:
+    """TIME column -> minutes from midnight."""
+    return None if value is None else value.hour * 60 + value.minute
+
+
 def supply_available(on_hand: int, deliveries: list[tuple[date, int]], held: list[tuple[date, int]],
                      day: date) -> int:
     """How many the cases of ``day`` may use: the lowest running balance from
@@ -316,6 +321,7 @@ class Database:
                 r["room_code"], r["room_type"], r["capabilities"] or [],
                 r["base_turnover_mins"] or 0, r["infectious_turnover_mins"] or 0,
                 status=r["status"] or "AVAILABLE",
+                elective_start=_clock(r.get("elective_start")), elective_end=_clock(r.get("elective_end")),
             ))
             room_ids[r["room_code"]] = r["or_id"]
             room_codes[r["or_id"]] = r["room_code"]
@@ -364,7 +370,7 @@ class Database:
             for t in type_rows
         }
         type_info = {t["eq_type_id"]: t for t in type_rows}
-        units, unit_ids, unit_serials = [], {}, {}
+        units, unit_ids, unit_serials, unit_rows = [], {}, {}, {}
         for r in conn.execute("SELECT * FROM equipment_units ORDER BY serial_number"):
             t = type_info.get(r["eq_type_id"])
             if t is None:
@@ -374,12 +380,23 @@ class Database:
                 bool(t["requires_sterilization"]), max(0, minute(r["available_at"])),
                 r["current_status"] or "AVAILABLE", name=t["name"],
             ))
+            unit_rows[r["unit_id"]] = units[-1]
             unit_ids[r["serial_number"]] = r["unit_id"]
             unit_serials[r["unit_id"]] = r["serial_number"]
 
         beds, bed_ids, bed_codes = [], {}, {}
+        if ("equipment_maintenance", "maintenance_id") in columns:
+            for r in conn.execute(
+                "SELECT unit_id, start_time, end_time, reason FROM equipment_maintenance "
+                "WHERE end_time > %(start)s AND start_time < %(end)s ORDER BY start_time", span,
+            ):
+                unit = unit_rows.get(r["unit_id"])
+                if unit is not None:
+                    unit.closures = (*unit.closures, (minute(r["start_time"]), minute(r["end_time"]), r["reason"]))
+                    unit.__post_init__()
         for r in conn.execute("SELECT * FROM recovery_beds ORDER BY bed_code"):
-            beds.append(RecoveryBed(r["bed_code"], r["bed_type"], max(0, minute(r["available_from"]))))
+            beds.append(RecoveryBed(r["bed_code"], r["bed_type"], max(0, minute(r["available_from"])),
+                                    status=r.get("status") or "AVAILABLE"))
             bed_ids[r["bed_code"]] = r["bed_id"]
             bed_codes[r["bed_id"]] = r["bed_code"]
 
@@ -392,7 +409,7 @@ class Database:
                 "id": str(r["procedure_id"]), "name": r["name"], "code": r["icd9_cm_code"],
                 "duration": r["default_duration_mins"], "caps": r["required_room_capabilities"] or [],
                 "icu": bool(r["requires_icu_post_op"]), "infection": r["infection_risk_level"] or "CLEAN",
-                "skills": _skills(r.get("required_staff_skills")),
+                "skills": _skills(r.get("required_staff_skills")), "recovery_mins": r.get("recovery_mins"),
             }
             for r in conn.execute("SELECT * FROM procedures ORDER BY name")
         ]

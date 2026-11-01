@@ -23,7 +23,7 @@ from . import seed
 from .db import ConflictError, Database, DatabaseUnavailable, World, case_code
 from .intake_service import IntakeContext
 from .store import (Activity, StoreError, actor_name, build_case, check_own_case, check_team, equipment_rows,
-                    fatigue_log, fatigue_view, parse_time, ready_minute, room_options, staff_skills,
+                    facility_view, fatigue_log, fatigue_view, parse_time, ready_minute, room_options, staff_skills,
                     supply_options)
 
 
@@ -168,6 +168,7 @@ class DatabaseStore:
             },
             "activity": activity,
             **fatigue_view(h, world.result),
+            **facility_view(h, world.result),
             "warnings": self._problems(world, world.result),
             "rls_off": world.rls_off,
             "activity_table": world.has_activity,

@@ -116,9 +116,10 @@ def _subtract(windows: list[tuple[int, int]], holes) -> list[tuple[int, int]]:
     return windows
 
 
-def _open_windows(room: OperatingRoom, horizon: int) -> list[tuple[int, int]]:
-    """When the room can be used: opening hours minus planned closures."""
-    return _subtract([(room.open_min, room.close(horizon))], room.closures)
+def _open_windows(room: OperatingRoom, horizon: int, case: SurgeryCase | None = None) -> list[tuple[int, int]]:
+    """When the room can be used (by ``case``): opening / elective hours minus planned closures."""
+    hours = room.hours_for(case, horizon) if case is not None else (room.open_min, room.close(horizon))
+    return _subtract([hours], room.closures)
 
 
 def _index(items: list, attr: str) -> dict:
@@ -387,8 +388,15 @@ class ORchestraOptimizer:
 
         # OR Facility agent: room capabilities, status, opening hours and planned closures.
         capable = [r for r in self.rooms if r.supports(case.required_capabilities)]
-        rooms = [r for r in capable if r.is_usable and any(fits(a, b) for a, b in _open_windows(r, horizon))]
-        if not rooms:
+        rooms = [r for r in capable if r.is_usable and any(fits(a, b) for a, b in _open_windows(r, horizon, case))]
+        elective_only = [r for r in capable if r.is_usable and r not in rooms
+                         and any(fits(a, b) for a, b in _open_windows(r, horizon))]
+        if not rooms and elective_only:
+            hours = "; ".join(f"{r.or_id} {fmt(r.hours_for(case, horizon)[0])}-{fmt(r.hours_for(case, horizon)[1])}"
+                              for r in elective_only)
+            reasons.append(f"Facility: an elective case of {dur} min does not fit the elective hours ({hours}); "
+                           "book another day or mark it URGENT if it cannot wait")
+        elif not rooms:
             need = ", ".join(sorted(case.required_capabilities)) or "any"
             shut = [
                 f"{r.or_id} {r.status}" if not r.is_usable else
@@ -475,10 +483,16 @@ class ORchestraOptimizer:
             candidates = [
                 u for u in self.equipments
                 if u.eq_type == eq_type and u.is_usable and u.available_at <= latest_start
+                and any(fits(a, b) for a, b in _subtract([(u.available_at, horizon)], u.closures))
             ]
             if len(candidates) < count:
+                serviced = [
+                    f"{u.unit_id} " + ", ".join(f"{fmt(a)}-{fmt(b)}" + (f" ({why})" if why else "") for a, b, why in u.closures)
+                    for u in self.equipments if u.eq_type == eq_type and u.closures
+                ]
                 reasons.append(
                     f"Equipment: need {count} x {eq_type} ready by {fmt(latest_start)}, found {len(candidates)}"
+                    + (f" (planned maintenance: {'; '.join(serviced)})" if serviced else "")
                 )
             units[eq_type] = (count, candidates)
 
@@ -498,12 +512,20 @@ class ORchestraOptimizer:
         # OR Facility agent: recovery bed (PACU / ICU) right after surgery.
         beds: list[RecoveryBed] = []
         if self.beds:
+            # The case cannot end after the surgeon's last shift that fits it.
+            surgeon_end = max((b for _, b in windows.get(case.surgeon_id, [])), default=latest_end)
+            bed_by = min(latest_end, surgeon_end)
             beds = [
                 b for b in self.beds
-                if b.bed_type == case.recovery_bed_type and b.available_from <= latest_end
+                if b.bed_type == case.recovery_bed_type and b.is_usable and b.available_from <= bed_by
             ]
             if not beds:
-                reasons.append(f"Facility: no {case.recovery_bed_type} bed free by {fmt(latest_end)}")
+                closed = [b.bed_id for b in self.beds if b.bed_type == case.recovery_bed_type and not b.is_usable]
+                taken = [f"{b.bed_id} until {fmt(b.available_from)}" for b in self.beds
+                         if b.bed_type == case.recovery_bed_type and b.is_usable and b.available_from > bed_by]
+                reasons.append(f"Facility: no {case.recovery_bed_type} bed free by {fmt(bed_by)}"
+                               + (f" (occupied: {', '.join(taken)})" if taken else "")
+                               + (f" (closed: {', '.join(closed)})" if closed else ""))
 
         if reasons:
             return None, reasons
@@ -733,8 +755,9 @@ class ORchestraOptimizer:
         for b in others:
             if b.or_id == a.or_id and b.cleanup_end_min == a.start_min:
                 found.append(f"{a.or_id} is cleaned after {b.case_id}")
-        if room.open_min == a.start_min:
-            found.append(f"{a.or_id} opens")
+        opens = room.hours_for(plan.case, self.horizon_mins)[0]
+        if opens == a.start_min and opens > 0:
+            found.append(f"{a.or_id} opens" + (" for elective cases" if opens != room.open_min else ""))
         for _, end, why in room.closures:
             if end == a.start_min:
                 found.append(f"{a.or_id} reopens after closure" + (f" ({why})" if why else ""))
@@ -830,6 +853,7 @@ class _ModelBuilder:
         self.bed_ivs: dict[str, list] = defaultdict(list)
         self.room_members: dict[str, list] = defaultdict(list)
         self.frozen_rooms: dict[str, list[tuple[int, int]]] = defaultdict(list)  # cases already running
+        self.frozen_units: dict[str, list[tuple[int, int]]] = defaultdict(list)
         self.supply_load: dict[str, list[tuple[int, cp_model.IntVar, bool]]] = defaultdict(list)  # (qty, lit, new)
         self.frozen_supply: dict[str, int] = defaultdict(int)
         # Fatigue: (minutes, assigned literal, emergency override literal or None) per person.
@@ -873,10 +897,11 @@ class _ModelBuilder:
             if p.frozen:
                 self.frozen_rooms[room.or_id].append((p.earliest, p.earliest + occupied))
             if not p.frozen:
-                if room.open_min > p.earliest:
-                    m.add(start >= room.open_min).only_enforce_if(x)
-                if room.close(horizon) < p.latest_start + dur:
-                    m.add(start + dur <= room.close(horizon)).only_enforce_if(x)
+                lo, hi = room.hours_for(case, horizon)  # elective cases: elective hours only
+                if lo > p.earliest:
+                    m.add(start >= lo).only_enforce_if(x)
+                if hi < p.latest_start + dur:
+                    m.add(start + dur <= hi).only_enforce_if(x)
         m.add(sum(rooms.values()) == scheduled)
 
         # People: surgeon is fixed; other roles are chosen from candidates.
@@ -927,6 +952,8 @@ class _ModelBuilder:
                         start, dur + unit.reprocess_mins, z, f"unit_iv[{cid},{unit.unit_id}]"
                     )
                 )
+                if p.frozen:
+                    self.frozen_units[unit.unit_id].append((p.earliest, p.earliest + dur + unit.reprocess_mins))
                 if not p.frozen and unit.available_at > p.earliest:
                     m.add(start >= unit.available_at).only_enforce_if(z)
             m.add(sum(lits) == count * scheduled)
@@ -1078,15 +1105,15 @@ class _ModelBuilder:
     def add_resource_constraints(self) -> None:
         m = self.model
         opt = self.opt
-        lookups = ((self.room_ivs, opt._room_by_id), (self.staff_ivs, {}),
-                   (self.unit_ivs, opt._unit_by_id), (self.bed_ivs, opt._bed_by_id))
-        for groups, lookup in lookups:
+        lookups = ((self.room_ivs, opt._room_by_id, self.frozen_rooms), (self.staff_ivs, {}, None),
+                   (self.unit_ivs, opt._unit_by_id, self.frozen_units), (self.bed_ivs, opt._bed_by_id, None))
+        for groups, lookup, running in lookups:
             for key, intervals in groups.items():
                 held = list(getattr(lookup.get(key), "blocked", ()))
-                if lookup is opt._room_by_id:
-                    # Planned closures; a case already running when the room was closed stays.
-                    closed = [(a, b) for a, b, _ in opt._room_by_id[key].closures]
-                    held += [span for a, b in closed for span in _subtract([(a, b)], self.frozen_rooms[key])]
+                if running is not None:
+                    # Planned closures / maintenance; a case already running when it was planned stays.
+                    closed = [(a, b) for a, b, _ in lookup[key].closures]
+                    held += [span for a, b in closed for span in _subtract([(a, b)], running[key])]
                 fixed = [m.new_fixed_size_interval_var(a, b - a, f"held[{key},{a}]") for a, b in held]
                 if len(intervals) + len(fixed) > 1:
                     m.add_no_overlap(intervals + fixed)
