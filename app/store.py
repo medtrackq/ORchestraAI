@@ -87,6 +87,15 @@ KNOWN_ROLES = {StaffRole.ANESTHESIOLOGIST, StaffRole.SCRUB_NURSE, StaffRole.CIRC
 SKILL = re.compile(r"^[A-Z][A-Z0-9_]{1,49}$")
 
 
+def room_options(hospital: Hospital) -> list[dict]:
+    """Rooms for the schedule view: type, capabilities, status and planned closures."""
+    return [
+        {"id": r.or_id, "type": r.room_type, "caps": sorted(r.capabilities), "status": r.status,
+         "usable": r.is_usable, "closures": [{"start_min": a, "end_min": b, "reason": why} for a, b, why in r.closures]}
+        for r in hospital.rooms
+    ]
+
+
 def staff_skills(hospital: Hospital) -> dict[str, list[str]]:
     """Skills held by active staff, per role (what a booking can ask for)."""
     out: dict[str, set[str]] = {}
@@ -152,6 +161,7 @@ def build_case(hospital: Hospital, data: dict, case_id: str, *, release: int = 0
         required_equipment_types=list(data.get("required_equipment_types") or []),
         infection_risk=data.get("infection_risk") or "CLEAN",
         requires_icu_post_op=bool(data.get("requires_icu_post_op")),
+        airborne=bool(data.get("airborne")),
         release_min=release,
         patient_name=(data.get("patient_name") or "").strip() or None,
     )
@@ -193,6 +203,7 @@ class ScheduleStore:
             self.history = [HistoryRecord(r["surgeon_id"], r["procedure_id"], r["actual"])
                             for r in synthetic_history(self.cards)]
             self.actuals: dict[str, list[int | None]] = {}  # case_id -> [start, end] minutes
+            self.pending: dict[str, SurgeryCase] = {}  # taken off the schedule, waiting for a new slot
             self._ids = Counter()
             self.activity: list[Activity] = [Activity(
                 "reset", "โหลดข้อมูลตัวอย่าง",
@@ -207,7 +218,7 @@ class ScheduleStore:
         usable = Counter(u.eq_type for u in h.equipments if u.is_usable)
         caps = sorted({c for r in h.rooms for c in r.all_capabilities})
         return {
-            "rooms": [{"id": r.or_id, "type": r.room_type, "caps": sorted(r.capabilities)} for r in h.rooms],
+            "rooms": room_options(h),
             "surgeons": [
                 {"id": s.staff_id, "name": s.name,
                  "shifts": [f"{fmt(a)}-{fmt(b)}" for a, b in s.shifts]}
@@ -243,6 +254,7 @@ class ScheduleStore:
             "axis": {"start": start, "end": end},
             "options": self.options(),
             "activity": [a.__dict__ for a in reversed(self.activity[-30:])],
+            "pending": self.pending_rows(),
             **fatigue_view(self.hospital, self.result),
         }
 
@@ -259,7 +271,42 @@ class ScheduleStore:
         errors = validate_schedule(result, result.cases.values(), h.rooms, h.equipments, h.staff, h.beds)
         if errors:  # never store a schedule with a conflict
             raise StoreError("ตารางที่คำนวณได้ไม่ผ่านการตรวจ: " + "; ".join(errors[:3]))
+        for cid in set(self.result.assignments) - set(result.assignments):
+            self.pending[cid] = self.result.cases[cid]  # keep it visible until it is rebooked or cancelled
+        for cid in result.assignments:
+            self.pending.pop(cid, None)
         self.result = result
+
+    def _case_id(self, data: dict, prefix: str, commit: bool) -> str:
+        """Rebooking a waiting case keeps its id."""
+        pending = data.get("pending_id")
+        if pending:
+            if pending not in self.pending:
+                raise StoreError("คำขอนี้ถูกจองหรือยกเลิกไปแล้ว กรุณาโหลดใหม่")
+            return pending
+        return self._next_id(prefix, commit=commit)
+
+    def pending_rows(self) -> list[dict]:
+        by_name = {p["name"]: p["id"] for p in self.procedures}
+        names = {s.staff_id: s.name for s in self.hospital.staff}
+        rank = {Urgency.EMERGENCY: 0, Urgency.URGENT: 1, Urgency.ELECTIVE: 2}
+        return [
+            {"id": cid, "code": cid, "patient_hn": c.patient_hn, "patient_name": c.patient_name,
+             "surgeon_id": c.surgeon_id, "surgeon": names.get(c.surgeon_id), "procedure_id": by_name.get(c.procedure),
+             "procedure": c.procedure, "urgency": c.urgency.value, "duration_mins": c.duration_mins,
+             "airborne": c.airborne, "was_on": None}
+            for cid, c in sorted(self.pending.items(), key=lambda kv: (rank[kv[1].urgency], kv[0]))
+        ]
+
+    def cancel_pending(self, pending_id: str, *, actor: dict | None = None) -> dict:
+        with self._lock:
+            case = self.pending.get(pending_id)
+            if case is None:
+                raise StoreError("คำขอนี้ถูกจองหรือยกเลิกไปแล้ว")
+            check_own_case(actor, case.surgeon_id)
+            del self.pending[pending_id]
+            self.activity.append(Activity("cancel", f"ยกเลิกคำขอที่รอจัด {pending_id}", [], actor=actor_name(actor)))
+        return {"cancelled": pending_id}
 
     # ------------------------------------------------------------- intake
 
@@ -331,13 +378,14 @@ class ScheduleStore:
         with self._lock:
             if start < self.result.now_min:
                 raise StoreError(f"เวลาที่ขอผ่านไปแล้ว (เวลาปัจจุบันของตาราง {fmt(self.result.now_min)})")
-            case = build_case(self.hospital, data, self._next_id("R", commit=False))
+            case = build_case(self.hospital, data, self._case_id(data, "R", commit=False))
             check = self.opt.check_slot(self.result, case, start, verbose=False)
             out = check.to_dict()
             out["booked"] = False
             if commit and check.assignment is not None:
                 self._commit(check.result)
-                self._next_id("R", commit=True)
+                if not data.get("pending_id"):
+                    self._next_id("R", commit=True)
                 out["booked"] = True
                 self.activity.append(Activity(
                     "booking", f"จอง {case.case_id} {case.procedure}", check.log,
@@ -349,7 +397,8 @@ class ScheduleStore:
     def emergency(self, data: dict, now_text: str, *, day: str | None = None, actor: dict | None = None) -> dict:
         now = parse_time(now_text)
         with self._lock:
-            case = build_case(self.hospital, {**data, "urgency": "EMERGENCY"}, self._next_id("E", commit=False), release=now)
+            case = build_case(self.hospital, {**data, "urgency": "EMERGENCY"}, self._case_id(data, "E", commit=False),
+                              release=now)
             after = self.opt.insert_emergency(
                 self.result, list(self.result.cases.values()), [case], now_min=now,
                 scenario_name=f"Emergency {case.case_id}", verbose=False,
@@ -358,7 +407,8 @@ class ScheduleStore:
                 raise StoreError(f"คำนวณไม่สำเร็จ ({after.status})")
             tired = self.opt.new_fatigue(self.result, after)
             self._commit(after)
-            self._next_id("E", commit=True)
+            if not data.get("pending_id"):
+                self._next_id("E", commit=True)
             return self._record_change("emergency", f"ฉุกเฉิน {case.case_id} {case.procedure}", after, case.case_id,
                                        actor, tired)
 
@@ -384,6 +434,17 @@ class ScheduleStore:
             self._commit(after)
             return self._record_change("overrun", f"{case_id} ผ่าตัดเกินเวลา -> {new_duration} นาที", after, case_id,
                                        actor, tired)
+
+    def replan(self, day: str | None = None, *, actor: dict | None = None) -> dict:
+        """Re-plan the cases that have not started, changing as little as possible."""
+        with self._lock:
+            after = self.opt.reschedule(self.result, list(self.result.cases.values()), now_min=self.result.now_min,
+                                        scenario_name="Replan", verbose=False)
+            if not after.is_feasible:
+                raise StoreError(f"คำนวณไม่สำเร็จ ({after.status})")
+            tired = self.opt.new_fatigue(self.result, after)
+            self._commit(after)
+            return self._record_change("replan", "จัดตารางวันนี้ใหม่", after, "", actor, tired)
 
     def _record_change(self, kind: str, title: str, after: ScheduleResult, case_id: str,
                        actor: dict | None = None, tired=()) -> dict:

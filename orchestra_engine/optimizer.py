@@ -98,6 +98,28 @@ class _Vars:
     beds: dict[str, cp_model.IntVar]
 
 
+def _subtract(windows: list[tuple[int, int]], holes) -> list[tuple[int, int]]:
+    """``windows`` minus ``holes`` (``(start, end, ...)`` spans)."""
+    for hole in holes:
+        h0, h1 = hole[0], hole[1]
+        out = []
+        for a, b in windows:
+            if h1 <= a or h0 >= b:
+                out.append((a, b))
+                continue
+            if a < h0:
+                out.append((a, h0))
+            if h1 < b:
+                out.append((h1, b))
+        windows = out
+    return windows
+
+
+def _open_windows(room: OperatingRoom, horizon: int) -> list[tuple[int, int]]:
+    """When the room can be used: opening hours minus planned closures."""
+    return _subtract([(room.open_min, room.close(horizon))], room.closures)
+
+
 def _index(items: list, attr: str) -> dict:
     out = {}
     for item in items:
@@ -357,14 +379,23 @@ class ORchestraOptimizer:
 
         reasons: list[str] = []
 
-        # OR Facility agent: room capabilities and opening hours.
-        rooms = [
-            r for r in self.rooms
-            if r.is_usable and r.supports(case.required_capabilities) and fits(r.open_min, r.close(horizon))
-        ]
+        # OR Facility agent: room capabilities, status, opening hours and planned closures.
+        capable = [r for r in self.rooms if r.supports(case.required_capabilities)]
+        rooms = [r for r in capable if r.is_usable and any(fits(a, b) for a, b in _open_windows(r, horizon))]
         if not rooms:
             need = ", ".join(sorted(case.required_capabilities)) or "any"
-            reasons.append(f"Facility: no usable room with [{need}] open long enough for {dur} min")
+            shut = [
+                f"{r.or_id} {r.status}" if not r.is_usable else
+                f"{r.or_id} closed " + ", ".join(f"{fmt(a)}-{fmt(b)}" + (f" ({why})" if why else "")
+                                                 for a, b, why in r.closures)
+                for r in capable if not r.is_usable or r.closures
+            ]
+            if not capable:
+                reasons.append(f"Facility: no room with [{need}]")
+            elif shut:
+                reasons.append(f"Facility: rooms with [{need}] are closed or under maintenance: {'; '.join(shut)}")
+            else:
+                reasons.append(f"Facility: no usable room with [{need}] open long enough for {dur} min")
 
         # Staffing agent: shifts, skills and fatigue limits. EMERGENCY cases
         # may break fatigue limits (at a cost in the solver), normal cases not.
@@ -665,6 +696,9 @@ class ORchestraOptimizer:
                 found.append(f"{a.or_id} is cleaned after {b.case_id}")
         if room.open_min == a.start_min:
             found.append(f"{a.or_id} opens")
+        for _, end, why in room.closures:
+            if end == a.start_min:
+                found.append(f"{a.or_id} reopens after closure" + (f" ({why})" if why else ""))
         shift_starts = []
         for sid in a.staff_ids:
             name = self._staff_by_id[sid].name
@@ -756,6 +790,7 @@ class _ModelBuilder:
         self.unit_ivs: dict[str, list] = defaultdict(list)
         self.bed_ivs: dict[str, list] = defaultdict(list)
         self.room_members: dict[str, list] = defaultdict(list)
+        self.frozen_rooms: dict[str, list[tuple[int, int]]] = defaultdict(list)  # cases already running
         # Fatigue: (minutes, assigned literal, emergency override literal or None) per person.
         self.week_load: dict[str, list[tuple[int, cp_model.IntVar, cp_model.IntVar | None]]] = defaultdict(list)
         self.day_load: dict[str, list[tuple[int, cp_model.IntVar, cp_model.IntVar | None]]] = defaultdict(list)
@@ -794,6 +829,8 @@ class _ModelBuilder:
                 m.new_optional_fixed_size_interval_var(start, occupied, x, f"room_iv[{cid},{room.or_id}]")
             )
             self.room_members[room.or_id].append((p, x, start, occupied))
+            if p.frozen:
+                self.frozen_rooms[room.or_id].append((p.earliest, p.earliest + occupied))
             if not p.frozen:
                 if room.open_min > p.earliest:
                     m.add(start >= room.open_min).only_enforce_if(x)
@@ -997,8 +1034,12 @@ class _ModelBuilder:
                    (self.unit_ivs, opt._unit_by_id), (self.bed_ivs, opt._bed_by_id))
         for groups, lookup in lookups:
             for key, intervals in groups.items():
-                blocked = getattr(lookup.get(key), "blocked", ())
-                fixed = [m.new_fixed_size_interval_var(a, b - a, f"blocked[{key},{a}]") for a, b in blocked]
+                held = list(getattr(lookup.get(key), "blocked", ()))
+                if lookup is opt._room_by_id:
+                    # Planned closures; a case already running when the room was closed stays.
+                    closed = [(a, b) for a, b, _ in opt._room_by_id[key].closures]
+                    held += [span for a, b in closed for span in _subtract([(a, b)], self.frozen_rooms[key])]
+                fixed = [m.new_fixed_size_interval_var(a, b - a, f"held[{key},{a}]") for a, b in held]
                 if len(intervals) + len(fixed) > 1:
                     m.add_no_overlap(intervals + fixed)
         for sid, items in self.week_load.items():

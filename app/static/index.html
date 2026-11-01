@@ -78,6 +78,10 @@
   .g-block.hl { box-shadow: 0 0 0 3px var(--ok), 0 0 16px var(--ok); }
   .g-block.sel { box-shadow: 0 0 0 3px var(--accent); }
   .g-clean { position: absolute; height: 36px; border-radius: 0 7px 7px 0; background: repeating-linear-gradient(135deg, var(--clean) 0 4px, transparent 4px 8px); z-index: 1; }
+  .g-closed { position: absolute; height: 36px; border-radius: 7px; z-index: 1; overflow: hidden; padding: 2px 7px;
+    font-size: .68rem; font-weight: 600; color: var(--bad); border: 1px dashed var(--bad); white-space: nowrap; text-overflow: ellipsis;
+    background: repeating-linear-gradient(45deg, var(--bad-soft) 0 6px, transparent 6px 12px); }
+  .g-label.off { color: var(--bad); }
   .g-now { position: absolute; top: -4px; bottom: -4px; width: 2px; background: var(--emergency); z-index: 3; }
   .g-axis .now { color: var(--emergency); font-weight: 600; }
   .legend { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 10px; font-size: .75rem; color: var(--muted); }
@@ -119,6 +123,8 @@
   .activity-item .kind { font-size: .7rem; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); }
   .unsched { margin-top: 14px; }
   .unsched li { font-size: .82rem; margin-bottom: 4px; }
+  .pending-hint { background: var(--warn-soft); color: var(--warn); border-radius: 8px; padding: 6px 10px; }
+  .pending-hint button { margin-left: 6px; }
   #toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); background: var(--bad); color: #fff; padding: 10px 16px; border-radius: 10px; font-size: .88rem; max-width: calc(100% - 32px); display: none; z-index: 50; }
   .busy-overlay { font-size: .82rem; color: var(--accent); }
   .banner { border-radius: 12px; padding: 12px 14px; font-size: .86rem; margin: 0 24px 0; }
@@ -187,6 +193,7 @@
   <nav>
     <input type="date" id="date" aria-label="วันที่วางแผน" hidden>
     <button class="btn" id="reload" type="button">โหลดใหม่</button>
+    <a class="btn" href="/admin" id="admin-link" hidden>ข้อมูลโรงพยาบาล</a>
     <a class="btn" href="/flow" target="_blank" rel="noopener">ดู Flow สาธิต</a>
     <button class="btn" id="reset" type="button" hidden>รีเซ็ตข้อมูลตัวอย่าง</button>
     <span class="who" id="who"></span>
@@ -210,9 +217,12 @@
       <span><i style="background: repeating-linear-gradient(135deg, var(--clean) 0 3px, transparent 3px 6px)"></i>ทำความสะอาดห้อง</span>
       <span>เส้นประ = เริ่มผ่าตัดแล้ว (ล็อก)</span>
       <span>กรอบเขียว = เพิ่งเปลี่ยน</span>
+      <span><i style="background: repeating-linear-gradient(45deg, var(--bad-soft) 0 3px, transparent 3px 6px); border: 1px dashed var(--bad)"></i>ปิดห้อง (ซ่อม/ทำความสะอาดใหญ่)</span>
     </div>
+    <div id="replan-result" class="result"></div>
     <div id="detail" class="detail" hidden></div>
     <div id="unscheduled" class="unsched"></div>
+    <div id="pending" class="unsched"></div>
   </section>
 
   <aside class="card">
@@ -420,6 +430,7 @@
         <option value="">— พิมพ์ชื่อหัตถการเอง —</option>
         ${procs.map(p => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('')}</select></label>` : '';
     return `
+      <p class="hint pending-hint" data-role="pending-hint" hidden></p>
       <label>ศัลยแพทย์<select name="surgeon_id" required>${surgeons}</select></label>
       ${procSelect}
       <label>หัตถการ<input type="text" name="procedure" value="${esc(defaults.proc)}" required minlength="2" maxlength="200"></label>
@@ -444,6 +455,7 @@
         </label>
         <fieldset><legend>อื่น ๆ</legend><div class="checks">
           <label><input type="checkbox" name="icu" ${kind === 'er' ? 'checked' : ''}>ต้องการ ICU</label>
+          <label title="เช่น วัณโรค หัด อีสุกอีใส โควิด: ต้องใช้ห้องความดันลบ"><input type="checkbox" name="airborne">ติดเชื้อทางอากาศ (ห้องความดันลบ)</label>
         </div></fieldset>
       </div>`;
   }
@@ -531,6 +543,8 @@
       requires_icu_post_op: f.get('icu') === 'on',
       infection_risk: f.get('infection_risk'),
       required_staff_skills: skills,
+      airborne: f.get('airborne') === 'on',
+      pending_id: REBOOK && form.dataset.pending === REBOOK.id ? REBOOK.id : null,
       patient_name: (f.get('patient_name') || '').trim() || null,
       procedure_id: f.get('procedure_id') || null,
       required_staff_roles: form.dataset.roles ? JSON.parse(form.dataset.roles) : null,
@@ -545,6 +559,7 @@
     $('#date').hidden = !db;
     if (db) $('#date').value = STATE.date;
     $('#reset').hidden = db || !can('reset');
+    $('#admin-link').hidden = !db || !can('hospital_view');
     $('#who').innerHTML = `<span>${esc(STATE.me.display_name)}</span><small>${esc(STATE.me.role_label)}</small>`;
     $('#change-pass').hidden = STATE.me.user_id === 'env-admin' || STATE.me.user_id === 'dev';
     applyTabs();
@@ -556,11 +571,15 @@
       <span class="chip">${s.status === 'LOADED' ? 'ข้อมูลจาก Supabase' : 'solver ' + esc(s.status)}</span>`;
     renderGantt();
     renderUnscheduled();
+    renderPending();
     renderOverrunOptions();
     renderActivity();
     renderStaff();
     if (selected) showDetail(selected);
   }
+
+  const ROOM_TYPE_TH = { STANDARD: 'มาตรฐาน', HYBRID: 'Hybrid', NEGATIVE_PRESSURE: 'ความดันลบ' };
+  const ROOM_STATUS_TH = { MAINTENANCE: 'ซ่อมบำรุง', CLOSED: 'ปิดใช้งาน', OUT_OF_SERVICE: 'ปิดใช้งาน' };
 
   function renderGantt() {
     const { start, end } = STATE.axis;
@@ -576,6 +595,12 @@
     }
     if (nowMin) axis += `<span class="now" style="left:${pct(nowMin)}">ตอนนี้ ${hhmm(nowMin)}</span>`;
     const rows = rooms.slice(1).map((_, i) => `<div class="g-row" style="top:${(i + 1) * ROW}px"></div>`).join('');
+    const closed = rooms.flatMap((r, i) => (r.closures || []).map(c => {
+      const a = Math.max(c.start_min, start), z = Math.min(c.end_min, end);
+      if (z <= a) return '';
+      const text = 'ปิด' + (c.reason ? ': ' + c.reason : '');
+      return `<div class="g-closed" style="left:${pct(a)};width:${(z - a) / span * 100}%;top:${i * ROW + 6}px" title="${esc(text + ' ' + hhmm(c.start_min) + '-' + hhmm(c.end_min))}">${esc(text)}</div>`;
+    })).join('');
     const blocks = STATE.schedule.bookings.map(b => {
       const top = rowOf[b.or_id] * ROW + 6;
       const mine = STATE.me.staff_id && b.team.some(t => t.staff_id === STATE.me.staff_id);
@@ -587,8 +612,8 @@
     }).join('');
     const now = nowMin ? `<div class="g-now" style="left:${pct(nowMin)}"></div>` : '';
     $('#gantt').innerHTML = `
-      <div class="g-labels">${rooms.map(r => `<div class="g-label" title="${esc(r.caps.join(', '))}">${esc(r.id)}<small>${esc(r.type)}</small></div>`).join('')}</div>
-      <div><div class="g-axis">${axis}</div><div class="g-canvas" style="height:${rooms.length * ROW}px">${ticks}${rows}${blocks}${now}</div></div>`;
+      <div class="g-labels">${rooms.map(r => `<div class="g-label${r.usable === false ? ' off' : ''}" title="${esc(r.caps.join(', '))}">${esc(r.id)}<small>${esc(r.usable === false ? ROOM_STATUS_TH[r.status] || r.status : ROOM_TYPE_TH[r.type] || r.type)}</small></div>`).join('')}</div>
+      <div><div class="g-axis">${axis}</div><div class="g-canvas" style="height:${rooms.length * ROW}px">${ticks}${rows}${closed}${blocks}${now}</div></div>`;
     document.querySelectorAll('.g-block').forEach(b => b.addEventListener('click', () => { selected = b.dataset.case; renderGantt(); showDetail(selected); }));
   }
 
@@ -600,7 +625,7 @@
     box.innerHTML = `
       <h3>${esc(b.case_id)} · ${esc(b.procedure)}</h3>
       <dl>
-        <dt>ผู้ป่วย</dt><dd>${esc(b.patient_hn)}${b.patient_name ? ' · ' + esc(b.patient_name) : ''} · ${esc(b.urgency)}${b.frozen ? ' · เริ่มแล้ว (ล็อก)' : ''}</dd>
+        <dt>ผู้ป่วย</dt><dd>${esc(b.patient_hn)}${b.patient_name ? ' · ' + esc(b.patient_name) : ''} · ${esc(b.urgency)}${b.frozen ? ' · เริ่มแล้ว (ล็อก)' : ''}${b.airborne ? ' · <b>ติดเชื้อทางอากาศ (ห้องความดันลบ)</b>' : ''}</dd>
         <dt>ห้อง / เวลา</dt><dd>${esc(b.or_id)} ${esc(b.start)}-${esc(b.end)} (ห้องพร้อมใหม่ ${esc(b.cleanup_end)})</dd>
         <dt>ทีม</dt><dd>${teamText(b.team)}</dd>
         <dt>เครื่องมือ</dt><dd>${b.equipment.map(e => esc(e.unit_id) + ' (กลับจาก CSSD ' + hhmm(e.back_from_cssd_min) + ')').join(', ') || '-'}</dd>
@@ -669,10 +694,12 @@
         ข้อมูลผู้ป่วยอาจถูกอ่านผ่าน Supabase API ด้วย anon key ได้ ให้รันไฟล์ supabase/migrations/20261101000000_security_and_integrity.sql ใน SQL Editor</div>`);
     }
     if (STATE.warnings && STATE.warnings.length) {
-      parts.push(`<div class="banner warn"><b>ข้อมูลในฐานข้อมูลมีจุดขัดกัน ${STATE.warnings.length} รายการ</b> (ระบบจะไม่เพิ่มจุดขัดกันใหม่)
-        <ul>${STATE.warnings.slice(0, 5).map(w => '<li>' + esc(w) + '</li>').join('')}</ul></div>`);
+      parts.push(`<div class="banner warn"><b>ตารางวันนี้มีจุดขัดกัน ${STATE.warnings.length} รายการ</b> (เช่น มีคนลา ปิดห้อง หรือเครื่องมือเสีย หลังจองแล้ว · ระบบจะไม่เพิ่มจุดขัดกันใหม่)
+        <ul>${STATE.warnings.slice(0, 5).map(w => '<li>' + esc(w) + '</li>').join('')}</ul>
+        ${can('roster') ? '<button class="btn primary" type="button" id="replan">จัดตารางวันนี้ใหม่เพื่อแก้</button>' : ''}</div>`);
     }
     $('#banners').innerHTML = parts.join('');
+    $('#replan')?.addEventListener('click', e => busy(e.target, replanDay));
     const seed = $('#seed');
     if (seed) seed.addEventListener('click', () => busy(seed, async () => {
       const data = await api('/api/seed-demo', {});
@@ -687,6 +714,61 @@
     const u = STATE.schedule.unscheduled;
     $('#unscheduled').innerHTML = u.length ? `<h3>ยังจัดไม่ได้</h3><ul>${u.map(x =>
       `<li><b>${esc(x.case_id)}</b> ${esc(x.urgency)} ${esc(x.procedure)}: ${esc(x.reasons.join('; '))}</li>`).join('')}</ul>` : '';
+  }
+
+  // Cases taken off the schedule (re-plan, emergency) wait here until rebooked or cancelled.
+  let REBOOK = null;
+
+  function renderPending() {
+    const list = STATE.pending || [];
+    $('#pending').innerHTML = list.length ? `<h3>รอจัดวันใหม่ (${list.length})</h3>
+      <p class="hint">เคสที่ถูกเอาออกจากตารางเพราะจัดตารางใหม่หรือมีเคสฉุกเฉินแทรก และยังไม่ได้ผ่าตัด: กดจองใหม่ (เลือกวันที่ด้านบนได้) หรือยกเลิกคำขอ</p>
+      <div class="rows" style="margin-top:8px">${list.map(p => `<div class="row-item">
+        <div class="title"><b>${esc(p.code)} · ${esc(p.procedure)}</b><span class="triage ${esc(p.urgency)}">${esc(p.urgency)}</span></div>
+        <small class="hint">${esc(p.patient_hn)}${p.patient_name ? ' · ' + esc(p.patient_name) : ''} · ${esc(p.surgeon || '-')} · ${p.duration_mins} นาที${p.was_on ? ' · เดิมวันที่ ' + esc(p.was_on) : ''}${p.airborne ? ' · ติดเชื้อทางอากาศ' : ''}</small>
+        ${can('book') && (STATE.me.role !== 'surgeon' || p.surgeon_id === STATE.me.staff_id) ? `<div class="line">
+          <button class="btn primary" type="button" data-rebook="${esc(p.id)}">จองใหม่</button>
+          <button class="btn" type="button" data-cancel="${esc(p.id)}">ยกเลิกคำขอ</button></div>` : ''}
+      </div>`).join('')}</div>` : '';
+    $('#pending').querySelectorAll('[data-rebook]').forEach(b => b.addEventListener('click', () => {
+      REBOOK = list.find(p => p.id === b.dataset.rebook);
+      applyRebook(true);
+    }));
+    $('#pending').querySelectorAll('[data-cancel]').forEach(b => b.addEventListener('click', () => {
+      if (!confirm('ยกเลิกคำขอนี้? (เช่น ผู้ป่วยไปรักษาที่อื่นหรือไม่ผ่าตัดแล้ว)')) return;
+      busy(b, async () => {
+        const data = await api('/api/pending/' + encodeURIComponent(b.dataset.cancel) + '/cancel', {});
+        if (REBOOK && REBOOK.id === b.dataset.cancel) endRebook();
+        STATE = data.state; render();
+        toast('ยกเลิกคำขอแล้ว', true);
+      });
+    }));
+  }
+
+  function applyRebook(focus) {
+    if (!REBOOK) return;
+    const p = REBOOK, emergency = p.urgency === 'EMERGENCY';
+    const form = emergency ? $('#form-er') : $('#form-book');
+    if (focus) selectTab(emergency ? 'er' : 'book');
+    fillForm(form, { surgeon_id: p.surgeon_id, procedure_id: p.procedure_id, procedure: p.procedure, patient_hn: p.patient_hn,
+      duration_mins: p.duration_mins, duration_source: 'ระบุในคำขอ', airborne: p.airborne });
+    form.elements['patient_name'].value = p.patient_name || '';
+    if (!emergency) form.elements['urgency'].value = p.urgency === 'URGENT' ? 'URGENT' : 'ELECTIVE';
+    form.dataset.pending = p.id;
+    const hint = form.querySelector('[data-role="pending-hint"]');
+    hint.hidden = false;
+    hint.innerHTML = `กำลังจองใหม่ให้คำขอเดิม <b>${esc(p.code)}</b> (${esc(p.patient_hn)}) · เลือกวันที่ด้านบนขวาและเวลา แล้วกดตรวจสอบ <button class="btn" type="button">ไม่ใช่</button>`;
+    hint.querySelector('button').addEventListener('click', endRebook);
+    if (focus) form.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function endRebook() {
+    REBOOK = null;
+    [$('#form-book'), $('#form-er')].forEach(form => {
+      delete form.dataset.pending;
+      const hint = form.querySelector('[data-role="pending-hint"]');
+      if (hint) hint.hidden = true;
+    });
   }
 
   function renderOverrunOptions() {
@@ -732,6 +814,7 @@
     const confirm = $('#confirm-book');
     if (confirm) confirm.addEventListener('click', () => busy(confirm, async () => {
       const data = await api('/api/bookings', body);
+      if (body.case.pending_id) endRebook();
       STATE = data.state;
       highlight = new Set([data.result.case_id]);
       selected = data.result.case_id;
@@ -750,6 +833,17 @@
       ${r.log.length ? '<details><summary>Agent log</summary><pre class="log">' + esc(r.log.join('\n')) + '</pre></details>' : ''}`;
   }
 
+  // Re-plan the cases of this day that have not started (after leave, a room closure, ...).
+  async function replanDay() {
+    if (!confirm('จัดเคสที่ยังไม่เริ่มของวันนี้ใหม่ โดยเปลี่ยนให้น้อยที่สุด และแจ้งทีมที่ได้รับผลกระทบ?')) return;
+    const data = await api('/api/replan', {});
+    STATE = data.state;
+    highlight = new Set(data.result.changes.map(c => c.case_id));
+    render();
+    renderChangeResult('#replan-result', data.result, 'ผลการจัดตารางใหม่');
+    $('#replan-result').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
   // ----------------------------------------------------------------- events
   document.querySelectorAll('.tab').forEach(tab => tab.addEventListener('click', () => selectTab(tab.dataset.tab)));
 
@@ -766,6 +860,7 @@
     const body = { case: readCase(form, 'EMERGENCY'), now: new FormData(form).get('now') };
     busy(form.querySelector('[type="submit"]'), async () => {
       const data = await api('/api/emergency', body);
+      if (body.case.pending_id) endRebook();
       STATE = data.state;
       highlight = new Set(data.result.changes.map(c => c.case_id));
       render();
@@ -828,6 +923,8 @@
     const now = STATE.schedule.now_min && STATE.schedule.now_min < 24 * 60 ? hhmm(STATE.schedule.now_min) : nowText();
     er.elements['now'].value = now;
     $('#form-over').elements['now'].value = now;
+    if (REBOOK && !(STATE.pending || []).some(p => p.id === REBOOK.id)) REBOOK = null;  // booked or cancelled elsewhere
+    applyRebook(false);
   }
 
   // ------------------------------------------------------------ staffing (fatigue)
@@ -1017,6 +1114,7 @@
     if (f.required_staff_roles) form.dataset.roles = JSON.stringify(f.required_staff_roles);
     if (f.required_staff_skills) renderSkills(form, f.required_staff_skills);
     form.elements['icu'].checked = !!f.requires_icu_post_op;
+    form.elements['airborne'].checked = !!f.airborne;
     pick('infection_risk', f.infection_risk);
     if (f.duration_mins) {
       form.elements['duration_mins'].value = f.duration_mins;
@@ -1075,7 +1173,7 @@
     const path = day ? '/api/state?date=' + day : '/api/state';
     STATE = await api(path);
     highlight = new Set(); selected = null;
-    ['#result-book', '#result-er', '#result-over'].forEach(id => { $(id).innerHTML = ''; });
+    ['#result-book', '#result-er', '#result-over', '#replan-result'].forEach(id => { $(id).innerHTML = ''; });
     buildForms();
     render();
     loadIntakeInfo().catch(() => {});
@@ -1092,7 +1190,8 @@
       $('#pass-dialog').showModal();
       return;
     }
-    await loadDay(null);
+    const asked = new URLSearchParams(location.search).get('date');  // link from the hospital data page
+    await loadDay(/^\d{4}-\d{2}-\d{2}$/.test(asked || '') ? asked : null);
   })().catch(e => {
     $('#banners').innerHTML = `<div class="banner bad"><b>โหลดข้อมูลไม่สำเร็จ</b><br>${esc(e.message)}</div>`;
   });

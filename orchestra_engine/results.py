@@ -81,6 +81,8 @@ class ScheduleResult:
                 "patient_hn": case.patient_hn,
                 "patient_name": case.patient_name,
                 "urgency": case.urgency.value,
+                "airborne": case.airborne,
+                "infection_risk": case.infection_risk.value,
                 "or_id": a.or_id,
                 "start_min": a.start_min,
                 "end_min": a.end_min,

@@ -68,6 +68,10 @@ def validate_schedule(
                 errors.append(f"{tag}: ends after the horizon")
             if a.start_min < room.open_min or a.end_min > room.close(horizon_mins):
                 errors.append(f"{tag}: outside {room.or_id} opening hours")
+            shut = room.closed_at(a.start_min, a.cleanup_end_min)
+            if shut:
+                why = f" ({shut[2]})" if shut[2] else ""
+                errors.append(f"{tag}: {room.or_id} is closed {fmt(shut[0])}-{fmt(shut[1])}{why}")
 
         # Team
         if not a.staff_ids or a.staff_ids[0] != case.surgeon_id:

@@ -177,6 +177,18 @@ NOT_URGENT = ["ไม่ด่วน", "not urgent", "non-urgent", "ไม่ฉ
 COMPLEX_WORDS = ["ซับซ้อน", "เคสยาก", "complex", "redo", "re-do", "ผ่าซ้ำ", "พังผืด", "adhesion", "อ้วนมาก"]
 SIMPLE_WORDS = ["ไม่ซับซ้อน", "ง่าย", "simple", "uncomplicated"]
 DIRTY_WORDS = ["หนอง", "ฝี", "ทะลุ", "perforat", "dirty", "infected", "ติดเชื้อ", "abscess"]
+# Airborne infection: the case needs a negative-pressure room (OR Facility Agent).
+AIRBORNE_PHRASES = ["ติดเชื้อทางอากาศ", "แพร่เชื้อทางอากาศ", "ห้องความดันลบ", "ห้องแรงดันลบ"]
+AIRBORNE_WORDS = AIRBORNE_PHRASES + [
+    "วัณโรค", "โรคหัด", "อีสุกอีใส", "โควิด", "tuberculosis", "measles", "varicella", "chickenpox",
+    "covid", "airborne", "negative pressure", "mers-cov", "sars-cov",
+]
+_AIRBORNE_ABBR = re.compile(r"(?<![a-z0-9])(tb|mdr-tb|xdr-tb)(?![a-z0-9])")
+
+
+def is_airborne(text: str) -> bool:
+    low = (text or "").lower()
+    return any(_has(low, w) for w in AIRBORNE_WORDS) or _AIRBORNE_ABBR.search(low) is not None
 
 THAI_HINTS = {
     "ถุงน้ำดี": ["cholecyst"], "นิ่วในถุงน้ำดี": ["cholecyst"], "ไส้ติ่ง": ["append"],
@@ -349,7 +361,11 @@ def parse_rules(text: str, procedures: list[dict], surgeons: list[dict], today: 
     elif any(_has(low, w) for w in COMPLEX_WORDS):
         complexity = "complex"
     infection = "CLEAN"
-    if any(_has(low, w) for w in DIRTY_WORDS):
+    airborne = is_airborne(text)
+    wound = low
+    for phrase in AIRBORNE_PHRASES:  # "ติดเชื้อทางอากาศ" is about the patient, not a dirty wound
+        wound = wound.replace(phrase, " ")
+    if any(_has(wound, w) for w in DIRTY_WORDS):
         infection = "DIRTY"
     elif _has(low, "contaminated"):
         infection = "CONTAMINATED"
@@ -368,6 +384,7 @@ def parse_rules(text: str, procedures: list[dict], surgeons: list[dict], today: 
         "complexity": complexity,
         "requires_icu_post_op": _has(low, "icu") or "ไอซียู" in low,
         "infection_risk": infection,
+        "airborne": airborne,
         "patient_hn": hn,
         "notes": None,
     }

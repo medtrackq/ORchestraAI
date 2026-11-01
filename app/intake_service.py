@@ -69,6 +69,9 @@ class IntakeService:
         # Safety net: never let a softer reading downgrade urgency the keyword rules found.
         if _SEVERITY[rules["urgency"]] > _SEVERITY.get(fields["urgency"], 0):
             fields["urgency"], fields["urgency_reason"] = rules["urgency"], rules["urgency_reason"] + " (กฎความปลอดภัย)"
+        fields["airborne"] = bool(rules["airborne"] or fields.get("airborne"))  # isolation is never dropped
+        if fields["airborne"]:
+            warnings.append("ผู้ป่วยติดเชื้อทางอากาศ: ต้องใช้ห้องความดันลบ (NEGATIVE_PRESSURE) และทำความสะอาดห้องนานขึ้น")
         fields["patient_hn"] = hn
         if only_surgeon:
             if fields.get("surgeon_id") and fields["surgeon_id"] != only_surgeon:

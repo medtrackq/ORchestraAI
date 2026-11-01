@@ -42,6 +42,9 @@ PERMISSIONS = {
     "all_notifications": {"admin", "scheduler"},
     "staff_view": {"admin", "scheduler", "surgeon", "staff"},  # Staffing tab (clinical staff: own row)
     "staff_all": {"admin", "scheduler"},  # everyone's hours and fatigue
+    "hospital_view": {"admin", "scheduler"},  # hospital data pages (read)
+    "hospital_data": {"admin"},  # rooms, staff records, equipment types and units
+    "roster": {"admin", "scheduler"},  # shifts, leave, room closures, re-plan a day
     "users": {"admin"},
     "seed": {"admin"},
     "reset": {"admin"},

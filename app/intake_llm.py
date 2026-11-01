@@ -25,8 +25,9 @@ SYSTEM = (
     "use an empty string when nothing fits. Urgency: EMERGENCY for life- or limb-threatening cases that "
     "need surgery now, URGENT for cases that must be done within about 24 hours, otherwise ELECTIVE. "
     "Write urgency_reason in Thai, one short sentence. Resolve relative dates against the planning "
-    "date given. duration_mins is 0 unless the text states a duration. Patient identifiers are masked; "
-    "never guess them."
+    "date given. duration_mins is 0 unless the text states a duration. airborne is true only when the "
+    "patient has or is suspected of an airborne infection (e.g. TB, measles, varicella, COVID-19) and needs "
+    "a negative-pressure room. Patient identifiers are masked; never guess them."
 )
 
 
@@ -49,10 +50,12 @@ def _schema(procedure_codes: list[str], surgeon_codes: list[str]) -> dict:
             "complexity": {"type": "string", "enum": ["simple", "standard", "complex"]},
             "requires_icu": {"type": "boolean"},
             "infection_risk": {"type": "string", "enum": ["CLEAN", "CONTAMINATED", "DIRTY"]},
+            "airborne": {"type": "boolean"},
             "notes": {"type": "string"},
         },
         "required": ["procedure_code", "procedure_text", "surgeon_code", "urgency", "urgency_reason", "date",
-                     "start_time", "duration_mins", "complexity", "requires_icu", "infection_risk", "notes"],
+                     "start_time", "duration_mins", "complexity", "requires_icu", "infection_risk", "airborne",
+                     "notes"],
         "additionalProperties": False,
     }
 
@@ -137,5 +140,6 @@ class ClaudeIntake:
             "complexity": data.get("complexity") or "standard",
             "requires_icu_post_op": bool(data.get("requires_icu")),
             "infection_risk": data.get("infection_risk") or "CLEAN",
+            "airborne": bool(data.get("airborne")),
             "notes": data.get("notes") or None,
         }
