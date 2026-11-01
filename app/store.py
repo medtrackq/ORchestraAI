@@ -487,6 +487,46 @@ class ScheduleStore:
             self._commit(after)
             return self._record_change("replan", "จัดตารางวันนี้ใหม่", after, "", actor, tired)
 
+    # ------------------------------------------------------------- reports
+
+    def report_cases(self, date_from: str | None = None, date_to: str | None = None) -> list:
+        """Demo mode has one day (today): its bookings as report records."""
+        from datetime import datetime, time, timedelta
+        from zoneinfo import ZoneInfo
+
+        from .reports import CaseRecord
+
+        tz = ZoneInfo("Asia/Bangkok")
+        midnight = datetime.combine(date.today(), time(), tzinfo=tz)
+        at = lambda m: midnight + timedelta(minutes=m)  # noqa: E731
+        names = {s.staff_id: s.name for s in self.hospital.staff}
+        out = []
+        for cid, a in self.result.assignments.items():
+            case = self.result.cases[cid]
+            start, end = self.actuals.get(cid, [None, None])
+            out.append(CaseRecord(
+                cid, a.or_id, names.get(case.surgeon_id, case.surgeon_id), case.procedure, case.urgency.value,
+                at(a.start_min), at(a.end_min), at(a.cleanup_end_min),
+                at(start) if start is not None else None, at(end) if end is not None else None,
+                [names.get(s, s) for s in a.staff_ids],
+            ))
+        return out
+
+    def report(self, date_from: str | None = None, date_to: str | None = None) -> dict:
+        from zoneinfo import ZoneInfo
+
+        from .reports import RoomInfo, build_report
+
+        rooms = [RoomInfo(r.or_id, active=r.is_usable) for r in self.hospital.rooms]
+        kinds = Counter(a.kind for a in self.activity)
+        extra = {"waiting": len(self.pending), "cancelled": 0, "replans": kinds["replan"], "overruns": kinds["overrun"],
+                 "emergencies_inserted": kinds["emergency"], "supplies_used": [], "mode": self.mode,
+                 "fatigue_overrides": sum("FATIGUE OVERRIDE" in line for a in self.activity for line in a.log)}
+        today = date.today()
+        report = build_report(self.report_cases(), rooms, today, today, ZoneInfo("Asia/Bangkok"), extra=extra)
+        report["previous"], report["previous_range"] = None, None
+        return report
+
     def _record_change(self, kind: str, title: str, after: ScheduleResult, case_id: str,
                        actor: dict | None = None, tired=()) -> dict:
         data = after.to_dict()

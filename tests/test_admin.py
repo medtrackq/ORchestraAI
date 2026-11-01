@@ -394,3 +394,32 @@ def test_app_works_before_migration_007(db_url):
     assert admin.equipment()["maintenance_ready"] is False and admin.beds()["status_ready"] is False
     room = admin.rooms()["rooms"][0]
     admin.save_room({**room, "elective_start": "08:00", "elective_end": "16:00"}, code=room["code"])  # ignored
+
+
+# ------------------------------------------------------------------ management reports
+
+def test_management_report_from_the_database(store, db_url):
+    report = store.report()
+    assert report["cases"] >= 10 and report["cases_timed"] > 0 and report["demo_cases"] > 0  # demo history counts
+    assert report["kpi"]["utilization"] is not None and report["kpi"]["duration_mae"] is not None
+    assert report["by_surgeon"] and report["per_day"] and report["rooms"]
+    assert report["previous_range"] and "utilization" in report["previous"]
+    assert report["mix"]["ELECTIVE"] >= 9
+
+    case = store.state()["schedule"]["bookings"][0]
+    store.record_actual(case["case_id"], case["start"], None)
+    with __import__("psycopg").connect(db_url, autocommit=True) as conn:
+        conn.execute("UPDATE scheduled_surgeries SET actual_end_time = actual_start_time + INTERVAL '45 minutes' "
+                     "WHERE actual_start_time IS NOT NULL AND actual_end_time IS NULL")
+    today = store.db.today().isoformat()
+    one_day = store.report(today, today)
+    assert one_day["cases"] == 10 and one_day["cases_timed"] == 1 and one_day["kpi"]["first_cases_measured"] == 1
+    records = store.report_cases(today, today)
+    assert len(records) == 10 and all(r.team for r in records)
+
+    from app.store import StoreError
+
+    with pytest.raises(StoreError):
+        store.report("2026-12-31", "2026-01-01")
+    with pytest.raises(StoreError):
+        store.report("2024-01-01", "2026-01-01")  # more than a year

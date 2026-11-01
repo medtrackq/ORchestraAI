@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>รายงานผู้บริหาร · ORchestraAI</title>
+<link href="https://fonts.googleapis.com/css2?family=Prompt:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    color-scheme: light;
+    --page: #f4f6fb; --surface: #fcfcfb; --text: #0b0b0b; --text-2: #52514e; --muted: #898781;
+    --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10); --accent: #0e7490; --accent-soft: #e0f2fe;
+    --series-1: #2a78d6; --series-2: #eb6834; --neutral-mark: #898781; --over: #e34948;
+    --good: #006300; --bad: #d03b3b; --warn-soft: #fef3c7; --warn: #b45309;
+    --shadow: 0 1px 3px rgba(15,23,42,.08), 0 8px 24px rgba(15,23,42,.06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --page: #0d0d0d; --surface: #1a1a19; --text: #f0efec; --text-2: #c3c2b7; --muted: #898781;
+      --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10); --accent: #22d3ee; --accent-soft: rgba(34,211,238,.12);
+      --series-1: #3987e5; --series-2: #d95926; --over: #e66767; --good: #0ca30c; --bad: #e66767;
+      --warn-soft: rgba(245,158,11,.15); --warn: #fbbf24; --shadow: none;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --text: #f0efec; --text-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10); --accent: #22d3ee; --accent-soft: rgba(34,211,238,.12);
+    --series-1: #3987e5; --series-2: #d95926; --over: #e66767; --good: #0ca30c; --bad: #e66767;
+    --warn-soft: rgba(245,158,11,.15); --warn: #fbbf24; --shadow: none;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--text); font: 15px/1.5 'Prompt', 'Noto Sans Thai', system-ui, sans-serif; }
+  button, input, select { font: inherit; color: inherit; }
+  .top { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; padding: 14px 24px; background: var(--surface); border-bottom: 1px solid var(--border); }
+  .top h1 { margin: 0; font-size: 1.15rem; }
+  .top p { margin: 0; font-size: .8rem; color: var(--text-2); }
+  .top nav { display: flex; gap: 8px; flex-wrap: wrap; }
+  .btn { border: 1px solid var(--border); background: var(--surface); padding: 8px 14px; border-radius: 8px; cursor: pointer; text-decoration: none; color: var(--text); font-size: .88rem; }
+  .btn:hover { border-color: var(--accent); }
+  .btn[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); font-weight: 600; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  :root[data-theme="dark"] .btn.primary { color: #04121a; }
+  @media (prefers-color-scheme: dark) { :root:where(:not([data-theme="light"])) .btn.primary { color: #04121a; } }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  main { padding: 20px 24px 40px; max-width: 1280px; margin: 0 auto; display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; }
+  .filters label { display: grid; gap: 4px; font-size: .8rem; color: var(--text-2); }
+  .filters input { padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+  .note { font-size: .8rem; color: var(--text-2); margin: 0; }
+  .note.warn { background: var(--warn-soft); color: var(--warn); border-radius: 10px; padding: 8px 12px; }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+  .tile, .card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow); padding: 16px; min-width: 0; }
+  .tile .label { font-size: .82rem; color: var(--text-2); }
+  .tile .value { font-size: 1.9rem; font-weight: 600; line-height: 1.2; margin-top: 4px; }
+  .tile .value small { font-size: .9rem; font-weight: 400; color: var(--text-2); }
+  .tile .sub { font-size: .78rem; color: var(--muted); margin-top: 4px; }
+  .delta { font-size: .8rem; font-weight: 600; }
+  .delta.good { color: var(--good); } .delta.bad { color: var(--bad); } .delta.flat { color: var(--text-2); }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 16px; }
+  .card h2 { margin: 0; font-size: 1rem; }
+  .card .sub { margin: 2px 0 10px; font-size: .78rem; color: var(--text-2); }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: .78rem; color: var(--text-2); margin-bottom: 6px; }
+  .legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 6px; vertical-align: -2px; }
+  svg.chart { width: 100%; height: auto; display: block; overflow: visible; }
+  svg text { fill: var(--muted); font: 11px 'Prompt', system-ui, sans-serif; }
+  svg text.value { fill: var(--text-2); }
+  svg .mark { cursor: default; }
+  svg .mark:hover, svg .mark:focus { opacity: .8; outline: none; }
+  .tip { position: fixed; pointer-events: none; background: var(--surface); color: var(--text); border: 1px solid var(--border); box-shadow: var(--shadow);
+    border-radius: 8px; padding: 6px 10px; font-size: .8rem; z-index: 20; display: none; max-width: 260px; }
+  .tip b { display: block; font-size: .95rem; }
+  .tip .k { display: inline-block; width: 12px; height: 2px; vertical-align: middle; margin-right: 6px; }
+  table { width: 100%; border-collapse: collapse; font-size: .82rem; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--grid); }
+  th { color: var(--text-2); font-weight: 500; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .table-scroll { overflow-x: auto; }
+  details summary { cursor: pointer; font-size: .8rem; color: var(--text-2); margin-top: 8px; }
+  .empty { color: var(--muted); font-size: .85rem; padding: 18px 0; text-align: center; }
+  .loading { opacity: .5; transition: opacity .2s; }
+  [hidden] { display: none !important; }
+  @media (max-width: 600px) {
+    .top, main { padding-left: 16px; padding-right: 16px; }
+    .grid2 { grid-template-columns: minmax(0, 1fr); }
+  }
+</style>
+</head>
+<body>
+<header class="top">
+  <div><h1>รายงานผู้บริหาร</h1><p id="range-text">กำลังโหลด…</p></div>
+  <nav>
+    <a class="btn" href="/">← กลับไปตารางผ่าตัด</a>
+    <a class="btn" id="csv" href="/api/reports/cases.csv">ดาวน์โหลดข้อมูลเคส (CSV)</a>
+  </nav>
+</header>
+<main>
+  <div class="filters" role="group" aria-label="ช่วงเวลา">
+    <button class="btn" type="button" data-days="7">7 วัน</button>
+    <button class="btn" type="button" data-days="30" aria-pressed="true">30 วัน</button>
+    <button class="btn" type="button" data-days="90">90 วัน</button>
+    <button class="btn" type="button" data-month="1">เดือนนี้</button>
+    <label>ตั้งแต่<input type="date" id="from"></label>
+    <label>ถึง<input type="date" id="to"></label>
+    <button class="btn primary" type="button" id="apply">แสดง</button>
+  </div>
+  <p class="note" id="coverage"></p>
+  <div id="content">
+    <div class="kpis" id="kpis"></div>
+    <div class="grid2" style="margin-top:16px">
+      <section class="card"><h2>อัตราการใช้ห้องผ่าตัดรายวัน</h2>
+        <p class="sub">เวลาที่ห้องมีเคส (รวมทำความสะอาด) ภายในเวลา elective ÷ เวลา elective ของทุกห้อง</p>
+        <div id="chart-util"></div></section>
+      <section class="card"><h2>จำนวนเคสต่อวัน</h2>
+        <p class="sub">แยกเคสนัดล่วงหน้ากับเคสด่วน/ฉุกเฉิน</p>
+        <div class="legend"><span><i style="background:var(--series-1)"></i>นัดล่วงหน้า (elective)</span><span><i style="background:var(--series-2)"></i>ด่วน / ฉุกเฉิน</span></div>
+        <div id="chart-mix"></div></section>
+      <section class="card"><h2>อัตราการใช้ห้องแยกห้อง</h2>
+        <p class="sub">ห้องที่ยังไม่ได้ตั้งเวลา elective คิดที่ 08:00-16:00</p>
+        <div id="chart-rooms"></div></section>
+      <section class="card"><h2>เวลาผ่าตัดจริงเทียบกับเวลาที่จอง</h2>
+        <p class="sub">จำนวนเคสที่บันทึกเวลาจริง แยกตามส่วนต่าง (จริง − จอง)</p>
+        <div class="legend"><span><i style="background:var(--series-1)"></i>เร็วกว่าที่จอง</span><span><i style="background:var(--neutral-mark)"></i>ตรง ±15 นาที</span><span><i style="background:var(--over)"></i>นานกว่าที่จอง</span></div>
+        <div id="chart-error"></div></section>
+      <section class="card"><h2>ชั่วโมงผ่าตัดของบุคลากร (สูงสุด 12 คน)</h2>
+        <p class="sub">รวมทุกบทบาทในทีม · ดูความเหนื่อยล้ารายวันได้ที่แท็บบุคลากรในหน้าตาราง</p>
+        <div id="chart-staff"></div></section>
+      <section class="card"><h2>วัสดุ / รากเทียมที่ใช้</h2>
+        <p class="sub">ตัดสต็อกเมื่อเคสผ่าตัดเสร็จ</p>
+        <div id="chart-supplies"></div></section>
+    </div>
+    <div class="grid2" style="margin-top:16px">
+      <section class="card"><h2>ความแม่นของเวลาที่จอง แยกศัลยแพทย์</h2>
+        <p class="sub">คลาดเคลื่อนเฉลี่ย (นาที) · ค่าบวก = ผ่าตัดนานกว่าที่จอง</p><div class="table-scroll" id="table-surgeon"></div></section>
+      <section class="card"><h2>ความแม่นของเวลาที่จอง แยกหัตถการ</h2>
+        <p class="sub">หัตถการที่คลาดเคลื่อนมากควรปรับเวลามาตรฐานหรือ preference card</p><div class="table-scroll" id="table-procedure"></div></section>
+    </div>
+    <section class="card" style="margin-top:16px"><h2>สรุปรายห้อง</h2><div class="table-scroll" id="table-rooms"></div></section>
+  </div>
+</main>
+<div class="tip" id="tip" role="tooltip"></div>
+
+<script>
+  const $ = s => document.querySelector(s);
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const fmt = (v, d = 0) => v === null || v === undefined ? '–' : Number(v).toLocaleString('th-TH', { maximumFractionDigits: d, minimumFractionDigits: d });
+  const iso = d => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+  const shortDate = s => s.slice(8) + '/' + s.slice(5, 7);
+  const SVGNS = 'http://www.w3.org/2000/svg';
+
+  async function api(path) {
+    const res = await fetch(path);
+    if (res.status === 401) { location.href = '/login'; throw new Error('กรุณาเข้าสู่ระบบ'); }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.detail || 'HTTP ' + res.status);
+    return data;
+  }
+
+  // ------------------------------------------------------------ tooltip (values lead, labels follow)
+  const tip = $('#tip');
+  function showTip(evt, title, rows) {
+    tip.replaceChildren();
+    rows.forEach(([value, label, color]) => {
+      const line = document.createElement('div');
+      if (color) { const k = document.createElement('span'); k.className = 'k'; k.style.background = color; line.append(k); }
+      const b = document.createElement('b'); b.textContent = value; b.style.display = 'inline';
+      line.append(b, document.createTextNode(' ' + label));
+      tip.append(line);
+    });
+    const t = document.createElement('div'); t.textContent = title; t.style.color = 'var(--text-2)';
+    tip.append(t);
+    tip.style.display = 'block';
+    const r = evt.target.getBoundingClientRect ? evt.target.getBoundingClientRect() : { left: evt.clientX, top: evt.clientY, width: 0 };
+    const x = evt.clientX ?? (r.left + r.width / 2), y = evt.clientY ?? r.top;
+    tip.style.left = Math.min(window.innerWidth - tip.offsetWidth - 8, x + 12) + 'px';
+    tip.style.top = Math.max(8, y - tip.offsetHeight - 12) + 'px';
+  }
+  const hideTip = () => { tip.style.display = 'none'; };
+
+  function el(name, attrs, parent) {
+    const n = document.createElementNS(SVGNS, name);
+    Object.entries(attrs).forEach(([k, v]) => n.setAttribute(k, v));
+    if (parent) parent.append(n);
+    return n;
+  }
+  function hover(mark, title, rows) {
+    mark.setAttribute('tabindex', '0');
+    mark.setAttribute('class', 'mark');
+    mark.setAttribute('aria-label', title + ': ' + rows.map(r => r[0] + ' ' + r[1]).join(', '));
+    mark.addEventListener('pointermove', e => showTip(e, title, rows));
+    mark.addEventListener('focus', e => showTip(e, title, rows));
+    mark.addEventListener('pointerleave', hideTip);
+    mark.addEventListener('blur', hideTip);
+  }
+  // Column path: 4px rounded data end, square at the baseline.
+  function column(x, y, w, h, top = true) {
+    const r = Math.min(4, w / 2, h);
+    if (h <= 0) return '';
+    return top ? `M${x},${y + h} V${y + r} Q${x},${y} ${x + r},${y} H${x + w - r} Q${x + w},${y} ${x + w},${y + r} V${y + h} Z`
+      : `M${x},${y + h} V${y} H${x + w} V${y + h} Z`;
+  }
+  function niceStep(v) {
+    if (v <= 0) return 1;
+    const p = Math.pow(10, Math.floor(Math.log10(v))), n = v / p;
+    return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * p;
+  }
+  // Axis ticks: 0, step, 2*step ... up to the first tick at or above max (whole numbers for counts).
+  function axisTicks(max, whole) {
+    const step = Math.max(whole ? 1 : 0, niceStep(max / 4));
+    const out = [];
+    for (let v = 0; v < max + step - 1e-9; v += step) out.push(v);
+    return out.length > 1 ? out : [0, step];
+  }
+
+  // Columns over days: one series (value) or a stack (parts). Hover = per column.
+  function columns(target, rows, { parts, max, unit = '', percent = false }) {
+    const box = $(target);
+    if (!rows.length) { box.innerHTML = '<p class="empty">ไม่มีข้อมูลในช่วงนี้</p>'; return; }
+    const W = 640, H = 220, L = 40, B = 24, T = 10, R = 6;
+    const ticks = max ? [0, 25, 50, 75, 100].map(v => v * max / 100)
+      : axisTicks(Math.max(...rows.map(r => parts.reduce((s, p) => s + (r[p.key] || 0), 0))), !percent);
+    const top = ticks[ticks.length - 1];
+    const svg = el('svg', { viewBox: `0 0 ${W} ${H}`, class: 'chart', role: 'img' });
+    const y = v => T + (H - T - B) * (1 - v / top);
+    ticks.forEach((v, i) => {
+      el('line', { x1: L, x2: W - R, y1: y(v), y2: y(v), stroke: i ? 'var(--grid)' : 'var(--axis)', 'stroke-width': 1 }, svg);
+      el('text', { x: L - 6, y: y(v) + 4, 'text-anchor': 'end' }, svg).textContent = fmt(v) + (percent ? '%' : '');
+    });
+    const band = (W - L - R) / rows.length, w = Math.min(24, band * 0.7);
+    const every = Math.ceil(rows.length / 10);
+    rows.forEach((r, i) => {
+      const x = L + i * band + (band - w) / 2;
+      let base = 0;
+      parts.forEach((p, j) => {
+        const v = r[p.key] || 0;
+        if (v <= 0) return;
+        const y0 = y(base + v), h = y(base) - y0 - (base > 0 ? 2 : 0);  // 2px surface gap between stacked parts
+        el('path', { d: column(x, y0, w, Math.max(0, h), j === parts.length - 1 || !parts.slice(j + 1).some(q => r[q.key] > 0)), fill: p.color }, svg);
+        base += v;
+      });
+      const hit = el('rect', { x: L + i * band, y: T, width: band, height: H - T - B, fill: 'transparent' }, svg);
+      hover(hit, r.label, parts.map(p => [fmt(r[p.key], percent ? 1 : 0) + (percent ? '%' : unit), p.name, p.color]));
+      if (i % every === 0) el('text', { x: L + i * band + band / 2, y: H - 6, 'text-anchor': 'middle' }, svg).textContent = r.tick;
+    });
+    box.replaceChildren(svg);
+    const table = document.createElement('details');
+    table.innerHTML = '<summary>ดูเป็นตาราง</summary>';
+    const t = document.createElement('table');
+    t.innerHTML = '<thead><tr><th>วันที่</th>' + parts.map(p => `<th class="num">${esc(p.name)}</th>`).join('') + '</tr></thead>';
+    const body = document.createElement('tbody');
+    rows.forEach(r => { const tr = document.createElement('tr'); tr.innerHTML = `<td>${esc(r.label)}</td>` + parts.map(p => `<td class="num">${fmt(r[p.key], percent ? 1 : 0)}${percent ? '%' : ''}</td>`).join(''); body.append(tr); });
+    t.append(body); table.append(t); box.append(table);
+  }
+
+  // Ranked horizontal bars (one hue), value at the tip.
+  function hbars(target, rows, { color = 'var(--series-1)', suffix = '', max, digits = 0 }) {
+    const box = $(target);
+    if (!rows.length) { box.innerHTML = '<p class="empty">ไม่มีข้อมูลในช่วงนี้</p>'; return; }
+    const W = 640, row = 28, L = 170, R = 70, H = rows.length * row + 4;
+    const top = max ?? Math.max(...rows.map(r => r.value), 1);
+    const svg = el('svg', { viewBox: `0 0 ${W} ${H}`, class: 'chart', role: 'img' });
+    el('line', { x1: L, x2: L, y1: 0, y2: H, stroke: 'var(--axis)', 'stroke-width': 1 }, svg);
+    rows.forEach((r, i) => {
+      const yy = i * row + 4, w = Math.max(0, (W - L - R) * (r.value || 0) / top), h = Math.min(18, row - 8);
+      const label = el('text', { x: L - 8, y: yy + h / 2 + 4, 'text-anchor': 'end' }, svg);
+      label.textContent = r.label.length > 26 ? r.label.slice(0, 25) + '…' : r.label;
+      if (w > 0) el('path', { d: `M${L},${yy} H${L + w - Math.min(4, w)} Q${L + w},${yy} ${L + w},${yy + Math.min(4, w)} V${yy + h - Math.min(4, w)} Q${L + w},${yy + h} ${L + w - Math.min(4, w)},${yy + h} H${L} Z`, fill: r.color || color }, svg);
+      el('text', { x: L + w + 6, y: yy + h / 2 + 4, class: 'value' }, svg).textContent = fmt(r.value, digits) + suffix;
+      const hit = el('rect', { x: 0, y: yy - 4, width: W, height: row, fill: 'transparent' }, svg);
+      hover(hit, r.label, [[fmt(r.value, digits) + suffix, r.note || '']]);
+    });
+    box.replaceChildren(svg);
+  }
+
+  function table(target, headers, rows) {
+    const box = $(target);
+    if (!rows.length) { box.innerHTML = '<p class="empty">ไม่มีข้อมูล (ต้องบันทึกเวลาผ่าตัดจริงก่อน)</p>'; return; }
+    box.innerHTML = `<table><thead><tr>${headers.map(([h, num]) => `<th class="${num ? 'num' : ''}">${esc(h)}</th>`).join('')}</tr></thead><tbody>${
+      rows.map(r => `<tr>${r.map((c, i) => `<td class="${headers[i][1] ? 'num' : ''}">${esc(c)}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+  }
+
+  // ------------------------------------------------------------------ KPI tiles
+  function delta(now, before, { higherIsGood = true, unit = '', digits = 1 } = {}) {
+    if (now === null || now === undefined || before === null || before === undefined) return '';
+    const d = now - before;
+    if (Math.abs(d) < 0.5 * Math.pow(10, -digits)) return `<span class="delta flat">● เท่าเดิม</span>`;
+    const good = (d > 0) === higherIsGood;
+    return `<span class="delta ${good ? 'good' : 'bad'}">${d > 0 ? '▲' : '▼'} ${fmt(Math.abs(d), digits)}${unit} ${good ? 'ดีขึ้น' : 'แย่ลง'}</span>`;
+  }
+  function tile(label, value, sub, extra = '') {
+    return `<div class="tile"><div class="label">${esc(label)}</div><div class="value">${value}</div>${extra ? `<div>${extra}</div>` : ''}<div class="sub">${sub}</div></div>`;
+  }
+
+  function render(r) {
+    const k = r.kpi, p = r.previous || {};
+    const vs = r.previous_range ? ` เทียบกับ ${esc(r.previous_range[0])} ถึง ${esc(r.previous_range[1])}` : '';
+    $('#range-text').textContent = `${r.from} ถึง ${r.to} · ${r.operating_days} วันที่มีผ่าตัด · ${r.cases} เคส`;
+    const notes = [`มีเวลาผ่าตัดจริง ${fmt(r.cases_timed)} จาก ${fmt(r.cases)} เคส (ตัวเลขที่ใช้เวลาจริงคิดจากเคสเหล่านี้)`];
+    if (r.demo_cases) notes.push(`รวมข้อมูลตัวอย่าง ${fmt(r.demo_cases)} เคส (HN HIST-…)`);
+    if (r.mode === 'demo') notes.push('โหมดข้อมูลจำลองมีวันเดียว (วันนี้)');
+    $('#coverage').textContent = notes.join(' · ');
+    $('#coverage').className = 'note' + (r.demo_cases || r.mode === 'demo' ? ' warn' : '');
+    $('#kpis').innerHTML = [
+      tile('อัตราการใช้ห้องผ่าตัด', `${fmt(k.utilization, 1)}<small>%</small>`, `นอกเวลา elective ${fmt(k.after_hours, 1)} ชม.` + vs,
+        delta(k.utilization, p.utilization, { unit: ' จุด' })),
+      tile('เคสแรกของวันเริ่มตรงเวลา', `${fmt(k.on_time_pct, 0)}<small>%</small>`,
+        `ช้าไม่เกิน 15 นาที · วัดได้ ${fmt(k.first_cases_measured)} ห้อง-วัน · ช้าเฉลี่ย ${fmt(k.avg_first_case_delay, 0)} นาที`,
+        delta(k.on_time_pct, p.on_time_pct, { unit: ' จุด', digits: 0 })),
+      tile('เวลาที่จองคลาดจากจริง', `${fmt(k.duration_mae, 0)}<small> นาที</small>`,
+        `ตรง ±15 นาที ${fmt(k.duration_within_pct, 0)}% · นานเกินจอง ${fmt(k.duration_overrun_pct, 0)}% · ${fmt(k.duration_n)} เคส`,
+        delta(k.duration_mae, p.duration_mae, { higherIsGood: false, unit: ' นาที', digits: 0 })),
+      tile('จำนวนเคส', fmt(r.cases), `elective ${fmt(r.mix.ELECTIVE)} · urgent ${fmt(r.mix.URGENT)} · ฉุกเฉิน ${fmt(r.mix.EMERGENCY)}`,
+        r.previous ? `<span class="delta flat">ช่วงก่อนหน้า ${fmt(p.cases)} เคส</span>` : ''),
+      tile('เวลาทำความสะอาดห้องจริง', `${fmt(k.turnover_avg, 0)}<small> นาที</small>`,
+        `ตามแผน ${fmt(k.turnover_planned, 0)} นาที · วัดได้ ${fmt(k.turnovers_measured)} ครั้ง`),
+      tile('รอจัดวันใหม่ตอนนี้', fmt(r.waiting), `ยกเลิกในช่วงนี้ ${fmt(r.cancelled)} · แทรกฉุกเฉิน ${fmt(r.emergencies_inserted)} · จัดตารางใหม่ ${fmt(r.replans)} · เกินเกณฑ์ความเหนื่อยล้า ${fmt(r.fatigue_overrides)} ครั้ง`),
+    ].join('');
+
+    const days = r.per_day.map(d => ({ ...d, label: d.date, tick: shortDate(d.date) }));
+    columns('#chart-util', days.filter(d => d.utilization !== null), { parts: [{ key: 'utilization', name: 'อัตราการใช้ห้อง', color: 'var(--series-1)' }], max: 100, percent: true });
+    columns('#chart-mix', days, { parts: [{ key: 'elective', name: 'นัดล่วงหน้า', color: 'var(--series-1)' }, { key: 'unplanned', name: 'ด่วน / ฉุกเฉิน', color: 'var(--series-2)' }], unit: ' เคส' });
+    hbars('#chart-rooms', r.rooms.filter(x => x.utilization !== null).sort((a, b) => b.utilization - a.utilization)
+      .map(x => ({ label: x.room + (x.hours_set ? '' : ' *'), value: x.utilization, note: `ใช้ ${x.used_hours} จาก ${x.available_hours} ชม. (elective ${x.hours})` })), { suffix: '%', max: 100, digits: 1 });
+    const errColors = ['var(--series-1)', 'var(--series-1)', 'var(--neutral-mark)', 'var(--over)', 'var(--over)'];
+    const bins = r.error_bins.map((b, i) => ({ label: b.label, tick: ['≤−30', '−15…−30', '±15', '+15…30', '≥+30'][i], count: b.count, color: errColors[i] }));
+    if (bins.some(b => b.count)) histogram('#chart-error', bins);
+    else $('#chart-error').innerHTML = '<p class="empty">ยังไม่มีเคสที่บันทึกเวลาจริงในช่วงนี้</p>';
+    hbars('#chart-staff', r.staff_hours.map(s => ({ label: s.name, value: s.hours })), { suffix: ' ชม.', digits: 1 });
+    hbars('#chart-supplies', r.supplies_used.map(s => ({ label: s.name, value: s.used, note: s.code })), { digits: 0 });
+    const acc = rows => rows.map(x => [x.name, x.n, fmt(x.mae, 0), (x.bias > 0 ? '+' : '') + fmt(x.bias, 0), fmt(x.within_pct, 0) + '%']);
+    const accHead = [['ชื่อ'], ['เคส', 1], ['คลาดเฉลี่ย (นาที)', 1], ['เฉลี่ยจริง − จอง', 1], ['ตรง ±15 นาที', 1]];
+    table('#table-surgeon', accHead, acc(r.by_surgeon));
+    table('#table-procedure', accHead, acc(r.by_procedure));
+    table('#table-rooms', [['ห้อง'], ['เวลา elective'], ['เคส', 1], ['ชม.ที่มี', 1], ['ชม.ที่ใช้', 1], ['อัตราใช้ห้อง', 1], ['เฉพาะเวลาผ่าตัด', 1], ['นอกเวลา (ชม.)', 1]],
+      r.rooms.map(x => [x.room, x.hours + (x.hours_set ? '' : ' (ค่าตั้งต้น)'), x.cases, fmt(x.available_hours, 1), fmt(x.used_hours, 1),
+        fmt(x.utilization, 1) + '%', fmt(x.case_utilization, 1) + '%', fmt(x.after_hours, 1)]));
+  }
+
+  // Histogram: one column per bin, each in its arm's colour (diverging around "on time"); count on the cap.
+  function histogram(target, bins) {
+    const W = 640, H = 220, L = 40, B = 24, T = 18, R = 6;
+    const ticks = axisTicks(Math.max(...bins.map(b => b.count)), true), top = ticks[ticks.length - 1];
+    const svg = el('svg', { viewBox: `0 0 ${W} ${H}`, class: 'chart', role: 'img' });
+    const y = v => T + (H - T - B) * (1 - v / top);
+    ticks.forEach((v, i) => {
+      el('line', { x1: L, x2: W - R, y1: y(v), y2: y(v), stroke: i ? 'var(--grid)' : 'var(--axis)', 'stroke-width': 1 }, svg);
+      el('text', { x: L - 6, y: y(v) + 4, 'text-anchor': 'end' }, svg).textContent = fmt(v);
+    });
+    const band = (W - L - R) / bins.length, w = 24;
+    bins.forEach((b, i) => {
+      const x = L + i * band + (band - w) / 2;
+      if (b.count) el('path', { d: column(x, y(b.count), w, y(0) - y(b.count)), fill: b.color }, svg);
+      el('text', { x: x + w / 2, y: y(b.count) - 5, 'text-anchor': 'middle', class: 'value' }, svg).textContent = fmt(b.count);
+      el('text', { x: L + i * band + band / 2, y: H - 6, 'text-anchor': 'middle' }, svg).textContent = b.tick;
+      const hit = el('rect', { x: L + i * band, y: T, width: band, height: H - T - B, fill: 'transparent' }, svg);
+      hover(hit, b.label, [[fmt(b.count) + ' เคส', '']]);
+    });
+    $(target).replaceChildren(svg);
+  }
+
+  // ------------------------------------------------------------------ filters
+  let range = { from: null, to: null };
+  async function load() {
+    $('#content').classList.add('loading');
+    const q = new URLSearchParams();
+    if (range.from) q.set('date_from', range.from);
+    if (range.to) q.set('date_to', range.to);
+    $('#csv').href = '/api/reports/cases.csv' + (q.toString() ? '?' + q : '');
+    try {
+      const r = await api('/api/reports' + (q.toString() ? '?' + q : ''));
+      render(r);
+      $('#from').value = r.from; $('#to').value = r.to;
+    } catch (e) {
+      $('#coverage').textContent = 'โหลดรายงานไม่ได้: ' + e.message;
+      $('#coverage').className = 'note warn';
+    } finally { $('#content').classList.remove('loading'); }
+  }
+  document.querySelectorAll('[data-days], [data-month]').forEach(b => b.addEventListener('click', () => {
+    document.querySelectorAll('[data-days], [data-month]').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+    const today = new Date();
+    range.to = iso(today);
+    range.from = b.dataset.month ? iso(new Date(today.getFullYear(), today.getMonth(), 1))
+      : iso(new Date(today.getTime() - (Number(b.dataset.days) - 1) * 86400000));
+    load();
+  }));
+  $('#apply').addEventListener('click', () => {
+    document.querySelectorAll('[data-days], [data-month]').forEach(x => x.setAttribute('aria-pressed', 'false'));
+    range = { from: $('#from').value || null, to: $('#to').value || null };
+    load();
+  });
+  load();
+</script>
+</body>
+</html>
