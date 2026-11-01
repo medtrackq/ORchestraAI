@@ -37,7 +37,7 @@ from pydantic import BaseModel, Field
 
 from .auth import (COOKIE, ROLES, SESSION_HOURS, Accounts, AuthError, DbUserStore, MemoryUserStore,
                    ServiceUnavailable, TooManyAttempts, User, can)
-from . import hospital_io, roster_io
+from . import hospital_io, roster_io, system_status
 from .admin_store import require_supabase
 from .intake_service import IntakeService
 from .notify import DbNotifyStore, MemoryNotifyStore, Notifier, NotifyUnavailable
@@ -252,6 +252,12 @@ def board_page() -> FileResponse:
 def print_page() -> FileResponse:
     """Printable daily OR list (per room) and WHO Surgical Safety Checklist (per case)."""
     return FileResponse(ROOT / "static" / "print.html")
+
+
+@app.get("/status", include_in_schema=False)
+def status_page() -> FileResponse:
+    """Admin: which SQL files the database has, the server settings and a go-live checklist."""
+    return FileResponse(ROOT / "static" / "status.html")
 
 
 @app.get("/flow", include_in_schema=False)
@@ -1271,3 +1277,29 @@ def admin_release_block(block_id: str, body: BlockReleaseIn, request: Request) -
     """The owner gives one date of the block back to everyone early (``undo``: takes it back)."""
     user, admin = _admin(request, "roster")
     return _run(admin.release_block, block_id, body.day, undo=body.undo, actor=_actor(user))
+
+
+# ------------------------------------------------------------- system status (admin)
+
+class MigrateIn(BaseModel):
+    confirm: bool = False
+
+
+@app.get("/api/system/status")
+def system_status_view(request: Request) -> dict:
+    """SQL files applied or missing, settings (set or not, never values) and the go-live checklist."""
+    _user(request, "users")
+    return _run(system_status.summary, store, notifier, intake, accounts)
+
+
+@app.post("/api/system/migrate")
+def system_migrate(body: MigrateIn, request: Request) -> dict:
+    """Run the SQL files the database still lacks, in order (each in its own transaction)."""
+    user = _user(request, "users")
+    if store.mode != "supabase":
+        raise HTTPException(status_code=400, detail="ใช้ได้เมื่อเชื่อมฐานข้อมูล Supabase แล้วเท่านั้น")
+    if not body.confirm:
+        raise HTTPException(status_code=400, detail="กรุณายืนยันก่อนรัน SQL")
+    results = _run(system_status.run_missing, store.db)
+    system_status.log_run(store, results, _actor(user))
+    return {"results": results, "status": _run(system_status.summary, store, notifier, intake, accounts)}

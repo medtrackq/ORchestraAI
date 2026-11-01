@@ -447,3 +447,17 @@ def test_or_block_endpoints_need_supabase_and_the_roster_permission(owner):
     assert scheduler.post("/api/admin/blocks", json={**body, "owner_kind": "TEAM"}).status_code == 422
     state = owner.get("/api/state").json()
     assert state["blocks"] == [] and state["blocks_ready"] is False
+
+
+def test_system_status_is_for_admins_only(owner, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-never-shown")
+    assert owner.get("/status").status_code == 200
+    status = owner.get("/api/system/status").json()
+    assert status["mode"] == "demo" and status["migrations"] == [] and status["settings"]
+    assert "sk-never-shown" not in str(status) and OWNER[1] not in str(status)
+    r = owner.post("/api/system/migrate", json={"confirm": True})
+    assert r.status_code == 400 and "Supabase" in r.json()["detail"]  # nothing to run in demo mode
+    for role, staff in [("scheduler", None), ("staff", "SCR-2"), ("surgeon", "SUR-GEN")]:
+        other = make_user(owner, f"st-{role}", role, staff)
+        assert other.get("/api/system/status").status_code == 403
+        assert other.post("/api/system/migrate", json={"confirm": True}).status_code == 403
