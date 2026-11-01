@@ -138,6 +138,7 @@
   </div>
   <nav>
     <a class="btn" href="/">← กลับไปตารางผ่าตัด</a>
+    <a class="btn" href="/status" id="status-link" hidden>⚙ สถานะระบบ</a>
     <span class="who" id="who"></span>
     <button class="btn" id="logout" type="button">ออกจากระบบ</button>
   </nav>
@@ -1519,6 +1520,7 @@
     ME = (await api('/api/me')).user;
     if (ME.must_change_password) { location.href = '/'; return; }
     $('#who').innerHTML = `<span>${esc(ME.display_name)}</span><small>${esc(ME.role_label)}</small>`;
+    $('#status-link').hidden = !can('users');
     const tabs = [...document.querySelectorAll('.tab')];
     tabs.forEach(t => { t.hidden = !t.dataset.perm.split(' ').some(can); });
     const allowed = tabs.filter(t => !t.hidden).map(t => t.dataset.tab);

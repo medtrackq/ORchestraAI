@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>สถานะระบบ · ORchestraAI</title>
+<link href="https://fonts.googleapis.com/css2?family=Prompt:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #f4f6fb; --surface: #ffffff; --surface-2: #f8fafc; --text: #0f172a; --muted: #64748b;
+    --border: #e2e8f0; --accent: #0e7490; --accent-soft: #e0f2fe; --ok: #047857; --ok-soft: #d1fae5;
+    --bad: #b91c1c; --bad-soft: #fee2e2; --warn: #b45309; --warn-soft: #fef3c7; --info: #1d4ed8; --info-soft: #dbeafe;
+    --shadow: 0 1px 3px rgba(15,23,42,.08), 0 8px 24px rgba(15,23,42,.06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --bg: #0b1220; --surface: #111a2e; --surface-2: #0f172a; --text: #e2e8f0; --muted: #94a3b8;
+      --border: #1f2a44; --accent: #22d3ee; --accent-soft: rgba(34,211,238,.12); --ok: #34d399; --ok-soft: rgba(16,185,129,.15);
+      --bad: #f87171; --bad-soft: rgba(239,68,68,.15); --warn: #fbbf24; --warn-soft: rgba(245,158,11,.15);
+      --info: #93c5fd; --info-soft: rgba(59,130,246,.16); --shadow: none;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #0b1220; --surface: #111a2e; --surface-2: #0f172a; --text: #e2e8f0; --muted: #94a3b8;
+    --border: #1f2a44; --accent: #22d3ee; --accent-soft: rgba(34,211,238,.12); --ok: #34d399; --ok-soft: rgba(16,185,129,.15);
+    --bad: #f87171; --bad-soft: rgba(239,68,68,.15); --warn: #fbbf24; --warn-soft: rgba(245,158,11,.15);
+    --info: #93c5fd; --info-soft: rgba(59,130,246,.16); --shadow: none;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 'Prompt', 'Noto Sans Thai', system-ui, sans-serif; }
+  button { font: inherit; color: inherit; }
+  .top { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; padding: 14px 24px; background: var(--surface); border-bottom: 1px solid var(--border); }
+  .brand { display: flex; align-items: center; gap: 12px; }
+  .orb { width: 14px; height: 14px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 12px var(--accent); flex: none; }
+  .brand h1 { margin: 0; font-size: 1.15rem; }
+  .brand p { margin: 0; font-size: .8rem; color: var(--muted); }
+  .top nav { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .btn { border: 1px solid var(--border); background: var(--surface); padding: 8px 14px; border-radius: 8px; cursor: pointer; text-decoration: none; color: var(--text); font-size: .88rem; display: inline-block; }
+  .btn:hover { border-color: var(--accent); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  :root[data-theme="dark"] .btn.primary { color: #04121a; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .btn.primary { color: #04121a; } }
+  .btn:disabled { opacity: .55; cursor: progress; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  main { padding: 20px 24px 40px; max-width: 1100px; margin: 0 auto; display: grid; gap: 16px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow); padding: 18px; min-width: 0; scroll-margin-top: 12px; }
+  .card > header { display: flex; justify-content: space-between; align-items: start; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+  h2 { margin: 0 0 2px; font-size: 1.05rem; }
+  .hint { font-size: .8rem; color: var(--muted); margin: 0; }
+  .banner { border-radius: 12px; padding: 12px 16px; font-size: .9rem; display: flex; gap: 12px; align-items: center; }
+  .banner.ok { background: var(--ok-soft); color: var(--ok); }
+  .banner.warn { background: var(--warn-soft); color: var(--warn); }
+  .banner.bad { background: var(--bad-soft); color: var(--bad); }
+  .banner b { color: inherit; }
+  .banner .text { color: var(--text); }
+
+  /* status mark: a glyph and a word, never colour alone */
+  .mark { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; font-size: .78rem; font-weight: 600; flex: none; }
+  .mark.ok { background: var(--ok-soft); color: var(--ok); }
+  .mark.warn { background: var(--warn-soft); color: var(--warn); }
+  .mark.bad { background: var(--bad-soft); color: var(--bad); }
+  .mark.info, .mark.unknown { background: var(--info-soft); color: var(--info); }
+  .badge { font-size: .72rem; padding: 2px 9px; border-radius: 99px; white-space: nowrap; display: inline-block; }
+  .badge.ok { background: var(--ok-soft); color: var(--ok); }
+  .badge.warn { background: var(--warn-soft); color: var(--warn); }
+  .badge.bad { background: var(--bad-soft); color: var(--bad); }
+  .badge.info, .badge.unknown { background: var(--info-soft); color: var(--info); }
+  .badge.off { background: var(--surface-2); color: var(--muted); border: 1px solid var(--border); }
+
+  .checklist { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+  .checklist li { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; gap: 12px; align-items: start; padding: 10px 4px; border-bottom: 1px solid var(--border); }
+  .checklist li:last-child { border-bottom: 0; }
+  .checklist .what b { display: block; font-weight: 500; font-size: .92rem; }
+  .checklist .what span { font-size: .8rem; color: var(--muted); }
+  .checklist a { font-size: .82rem; color: var(--accent); white-space: nowrap; text-decoration: none; padding-top: 2px; }
+  .checklist a:hover { text-decoration: underline; }
+
+  table { width: 100%; border-collapse: collapse; font-size: .84rem; }
+  th, td { text-align: left; padding: 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; font-size: .78rem; }
+  td.num { color: var(--muted); font-variant-numeric: tabular-nums; width: 2.5em; }
+  td code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .78rem; overflow-wrap: anywhere; }
+  td small { display: block; color: var(--muted); font-size: .76rem; margin-top: 2px; }
+  .table-scroll { overflow-x: auto; }
+  .actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .results { margin: 12px 0 0; padding: 12px 14px; border-radius: 10px; background: var(--surface-2); border: 1px solid var(--border); font-size: .84rem; display: grid; gap: 4px; }
+  .results div { display: flex; gap: 8px; align-items: start; }
+  .note { margin-top: 12px; padding: 10px 14px; border-radius: 10px; font-size: .84rem; }
+  .note.warn { background: var(--warn-soft); }
+  .note.bad { background: var(--bad-soft); }
+  .note b { color: inherit; }
+  dialog { border: 1px solid var(--border); border-radius: 14px; background: var(--surface); color: var(--text); padding: 20px; max-width: 520px; width: calc(100% - 32px); box-shadow: var(--shadow); }
+  dialog::backdrop { background: rgba(15,23,42,.45); }
+  dialog h3 { margin: 0 0 8px; font-size: 1rem; }
+  dialog ol { margin: 8px 0 12px; padding-left: 22px; font-size: .84rem; }
+  dialog .actions { justify-content: flex-end; margin-top: 14px; }
+  .error { color: var(--bad); font-size: .84rem; margin: 8px 0 0; }
+  .hide-wide { display: none; }
+  [hidden] { display: none !important; }
+  @media (max-width: 640px) {
+    .top, main { padding-left: 16px; padding-right: 16px; }
+    .checklist li { grid-template-columns: 22px minmax(0, 1fr); }
+    .checklist a { grid-column: 2; }
+    .hide-sm { display: none; }
+    .hide-wide { display: block; }
+  }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <span class="orb" aria-hidden="true"></span>
+    <div><h1>สถานะระบบ</h1><p id="sub">กำลังตรวจ…</p></div>
+  </div>
+  <nav>
+    <a class="btn" href="/">← กลับไปตารางผ่าตัด</a>
+    <a class="btn" href="/admin" id="admin-link" hidden>ข้อมูลโรงพยาบาล</a>
+    <button class="btn" type="button" id="reload">↻ ตรวจอีกครั้ง</button>
+  </nav>
+</header>
+
+<main>
+  <div id="summary" class="banner" role="status" hidden></div>
+
+  <section class="card" id="golive" hidden>
+    <header><div><h2>พร้อมใช้งานจริงหรือยัง</h2>
+      <p class="hint">สิ่งที่ควรมีก่อนเริ่มนัดผู้ป่วยจริง · กดลิงก์ทางขวาเพื่อไปหน้าที่แก้ได้</p></div></header>
+    <ul class="checklist" id="checks"></ul>
+  </section>
+
+  <section class="card" id="migrations" hidden>
+    <header>
+      <div><h2>ไฟล์ SQL ในฐานข้อมูล</h2>
+        <p class="hint">ระบบดูจากตารางและคอลัมน์ที่แต่ละไฟล์สร้าง ว่าฐานข้อมูลมีครบหรือยัง (ไฟล์อยู่ในโฟลเดอร์ supabase/migrations)</p></div>
+      <div class="actions"><button class="btn primary" type="button" id="run" hidden></button></div>
+    </header>
+    <div id="run-results"></div>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>#</th><th>เรื่อง</th><th>สถานะ</th></tr></thead>
+        <tbody id="migration-rows"></tbody>
+      </table>
+    </div>
+    <div id="migration-notes"></div>
+  </section>
+
+  <section class="card" id="settings">
+    <header><div><h2>การตั้งค่าเซิร์ฟเวอร์</h2>
+      <p class="hint">ตั้งที่ Render → บริการนี้ → Environment แล้วกด Save (เซิร์ฟเวอร์จะเริ่มใหม่เอง) · หน้านี้บอกแค่ว่าตั้งแล้วหรือยัง ไม่แสดงรหัสผ่านหรือคีย์ลับ</p></div></header>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>เรื่อง</th><th class="hide-sm">ชื่อตัวแปร</th><th>สถานะ</th></tr></thead>
+        <tbody id="setting-rows"><tr><td colspan="3" class="hint">กำลังโหลด…</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<dialog id="confirm" aria-labelledby="confirm-title">
+  <h3 id="confirm-title">รัน SQL ที่ยังขาด</h3>
+  <p class="hint">ระบบจะรันไฟล์ต่อไปนี้ตามลำดับ ทีละไฟล์ ถ้าไฟล์ไหนผิดพลาดจะยกเลิกเฉพาะไฟล์นั้นและหยุด ข้อมูลเดิมไม่หาย (ทุกไฟล์รันซ้ำได้)</p>
+  <ol id="confirm-list"></ol>
+  <p class="hint">ใช้เวลาไม่กี่วินาที ระหว่างนี้ผู้ใช้คนอื่นยังใช้งานได้ตามปกติ</p>
+  <p class="error" id="confirm-error" hidden></p>
+  <div class="actions">
+    <button class="btn" type="button" id="confirm-cancel">ยกเลิก</button>
+    <button class="btn primary" type="button" id="confirm-ok">รันเลย</button>
+  </div>
+</dialog>
+
+<script>
+  const $ = s => document.querySelector(s);
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const GLYPH = { ok: '✓', warn: '!', bad: '✕', info: 'i', unknown: '?' };
+  const CHECK_WORD = { ok: 'เรียบร้อย', warn: 'ควรแก้', bad: 'ต้องแก้', info: 'แนะนำ' };
+  const MIGRATION = {
+    applied: ['ok', 'รันแล้ว'], partial: ['warn', 'รันไม่ครบ'], missing: ['bad', 'ยังไม่ได้รัน'], unknown: ['unknown', 'ตรวจไม่ได้'],
+  };
+  let data = null;
+
+  async function api(path, body) {
+    const res = await fetch(path, body === undefined ? {} : {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    if (res.status === 401) { location.href = '/login'; throw new Error('กรุณาเข้าสู่ระบบ'); }
+    const out = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(out.detail || 'HTTP ' + res.status);
+    return out;
+  }
+
+  const mark = s => `<span class="mark ${s}" aria-hidden="true">${GLYPH[s] || '?'}</span>`;
+
+  // Files the run will do: in order, up to the first one the page may not run.
+  function plan(rows) {
+    const out = [];
+    for (const m of rows) {
+      if (!['missing', 'partial'].includes(m.status)) continue;
+      if (!m.runnable) break;
+      out.push(m);
+    }
+    return out;
+  }
+
+  function renderSummary() {
+    const box = $('#summary');
+    box.hidden = false;
+    if (data.mode !== 'supabase') {
+      box.className = 'banner warn';
+      box.innerHTML = `${mark('warn')}<div class="text"><b>โหมดสาธิต</b> · ยังไม่ได้เชื่อมฐานข้อมูล Supabase ข้อมูลทั้งหมดอยู่ในหน่วยความจำและหายเมื่อเซิร์ฟเวอร์เริ่มใหม่ ตั้ง DATABASE_URL ใน Render ก่อนใช้งานจริง</div>`;
+      return;
+    }
+    if (data.db_error) {
+      box.className = 'banner bad';
+      box.innerHTML = `${mark('bad')}<div class="text"><b>อ่านฐานข้อมูลไม่ได้</b> · ${esc(data.db_error)}</div>`;
+      return;
+    }
+    const bad = data.checks.filter(c => c.status === 'bad').length;
+    const warn = data.checks.filter(c => c.status === 'warn').length;
+    const tone = bad ? 'bad' : warn ? 'warn' : 'ok';
+    box.className = 'banner ' + tone;
+    box.innerHTML = `${mark(tone)}<div class="text">${bad ? `<b>ต้องแก้ ${bad} เรื่อง</b> ก่อนใช้งานจริง` : warn ? '<b>ใช้งานได้</b>' : '<b>พร้อมใช้งานจริง</b> ทุกเรื่องเรียบร้อย'}${warn ? ` · ควรแก้อีก ${warn} เรื่อง` : ''}</div>`;
+  }
+
+  function renderChecks() {
+    $('#golive').hidden = !data.checks.length;
+    $('#checks').innerHTML = data.checks.map(c => `
+      <li>${mark(c.status)}
+        <div class="what"><b>${esc(c.label)} <span class="badge ${c.status}">${CHECK_WORD[c.status] || ''}</span></b><span>${esc(c.detail)}</span></div>
+        ${c.link && c.status !== 'ok' ? `<a href="${esc(c.link)}">${c.link.startsWith('#') ? 'ดูด้านล่าง ↓' : 'ไปแก้ไข →'}</a>` : '<span></span>'}
+      </li>`).join('');
+  }
+
+  function renderMigrations() {
+    const rows = data.migrations;
+    $('#migrations').hidden = data.mode !== 'supabase' || !rows.length;
+    $('#migration-rows').innerHTML = rows.map((m, i) => {
+      const [tone, word] = MIGRATION[m.status] || ['unknown', m.status];
+      const lacking = m.status === 'partial' || (m.status === 'missing' && m.missing.length)
+        ? `<small>ยังไม่มี: ${esc(m.missing.join(', '))}${m.need - m.have > m.missing.length ? ' …' : ''}</small>` : '';
+      const manual = ['missing', 'partial'].includes(m.status) && !m.runnable
+        ? '<small>ต้องรันเองใน Supabase → SQL Editor</small>' : '';
+      return `<tr><td class="num">${String(i + 1).padStart(3, '0')}</td>
+        <td>${esc(m.title)}<small class="mono">${esc(m.name)}</small></td>
+        <td><span class="badge ${tone}">${GLYPH[tone]} ${word}</span>${lacking}${manual}</td></tr>`;
+    }).join('');
+
+    const todo = plan(rows);
+    const run = $('#run');
+    run.hidden = !todo.length;
+    run.disabled = false;
+    run.textContent = `รัน SQL ที่ยังขาด (${todo.length} ไฟล์)`;
+
+    const notes = [];
+    const blocked = rows.find(m => ['missing', 'partial'].includes(m.status) && !m.runnable);
+    if (blocked) {
+      notes.push(`<div class="note bad"><b>${esc(blocked.name)}</b> รันจากหน้านี้ไม่ได้ เพราะฐานข้อมูลมีตารางอื่นอยู่แล้ว (ไฟล์โครงสร้างเริ่มต้นรันซ้ำไม่ได้)
+        · เปิด Supabase → SQL Editor วางเนื้อหาไฟล์แล้วกด Run หรือใช้โปรเจกต์ Supabase ใหม่ที่ว่างเปล่า</div>`);
+    }
+    if (data.rls_off.length) {
+      notes.push(`<div class="note warn"><b>ตารางที่ยังไม่เปิด Row Level Security:</b> ${esc(data.rls_off.join(', '))}
+        · ใครที่มี anon key ของโปรเจกต์อาจอ่านตารางเหล่านี้ผ่าน API ของ Supabase ได้
+        · เปิดได้ที่ Supabase → Table Editor → เลือกตาราง → “Enable RLS” (แอปนี้ยังทำงานได้ตามปกติ)</div>`);
+    }
+    $('#migration-notes').innerHTML = notes.join('');
+  }
+
+  function renderSettings() {
+    $('#setting-rows').innerHTML = data.settings.map(s => {
+      const tone = s.ok ? 'ok' : s.required ? 'bad' : 'off';
+      const word = s.ok ? 'ตั้งแล้ว' : s.required ? 'ต้องตั้ง' : 'ยังไม่ได้ตั้ง';
+      return `<tr><td>${esc(s.label)}<small class="mono hide-wide">${esc(s.key)}</small></td>
+        <td class="hide-sm"><code>${esc(s.key)}</code></td>
+        <td><span class="badge ${tone}">${s.ok ? '✓ ' : s.required ? '✕ ' : ''}${word}</span><small>${esc(s.value)}</small></td></tr>`;
+    }).join('');
+  }
+
+  function render() {
+    $('#sub').textContent = (data.mode === 'supabase' ? 'เชื่อมฐานข้อมูล Supabase' : 'โหมดสาธิต (ไม่มีฐานข้อมูล)')
+      + (data.version ? ` · เวอร์ชัน ${data.version}` : '') + ' · ตรวจเมื่อ ' + new Date().toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
+    renderSummary();
+    renderChecks();
+    renderMigrations();
+    renderSettings();
+  }
+
+  async function load() {
+    $('#reload').disabled = true;
+    try {
+      data = await api('/api/system/status');
+      render();
+    } catch (e) {
+      $('#summary').hidden = false;
+      $('#summary').className = 'banner bad';
+      $('#summary').innerHTML = `${mark('bad')}<div class="text"><b>เปิดหน้านี้ไม่ได้</b> · ${esc(e.message)}</div>`;
+      $('#sub').textContent = '';
+    } finally {
+      $('#reload').disabled = false;
+    }
+  }
+
+  function showResults(results) {
+    if (!results.length) {
+      $('#run-results').innerHTML = '<div class="results"><div>ไม่มีไฟล์ที่ต้องรัน</div></div>';
+      return;
+    }
+    $('#run-results').innerHTML = `<div class="results" role="status">${results.map(r => `
+      <div>${mark(r.ok ? 'ok' : 'bad')}<span><span class="mono">${esc(r.name)}</span>${r.ok ? ' · สำเร็จ' : ` · <b>${r.skipped ? 'ข้าม' : 'ไม่สำเร็จ'}</b>: ${esc(r.error)}`}</span></div>`).join('')}</div>`;
+  }
+
+  $('#reload').addEventListener('click', () => { $('#run-results').innerHTML = ''; load(); });
+  $('#run').addEventListener('click', () => {
+    $('#confirm-list').innerHTML = plan(data.migrations).map(m => `<li>${esc(m.title)}<br><span class="mono hint">${esc(m.name)}</span></li>`).join('');
+    $('#confirm-error').hidden = true;
+    $('#confirm-ok').disabled = false;
+    $('#confirm').showModal();
+  });
+  $('#confirm-cancel').addEventListener('click', () => $('#confirm').close());
+  $('#confirm-ok').addEventListener('click', async () => {
+    const ok = $('#confirm-ok');
+    ok.disabled = true;
+    ok.textContent = 'กำลังรัน…';
+    try {
+      const out = await api('/api/system/migrate', { confirm: true });
+      $('#confirm').close();
+      data = out.status;
+      render();
+      showResults(out.results);
+      $('#migrations').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } catch (e) {
+      $('#confirm-error').textContent = e.message;
+      $('#confirm-error').hidden = false;
+    } finally {
+      ok.disabled = false;
+      ok.textContent = 'รันเลย';
+    }
+  });
+
+  (async () => {
+    const me = await api('/api/me');
+    const perms = me.user?.permissions || [];
+    $('#admin-link').hidden = !perms.includes('hospital_view') || me.mode !== 'supabase';
+    if (!perms.includes('users')) {
+      $('#summary').hidden = false;
+      $('#summary').className = 'banner bad';
+      $('#summary').innerHTML = `${mark('bad')}<div class="text"><b>หน้านี้สำหรับผู้ดูแลระบบ (admin) เท่านั้น</b></div>`;
+      $('#settings').hidden = true;
+      $('#sub').textContent = '';
+      return;
+    }
+    await load();
+  })().catch(e => {
+    $('#summary').hidden = false;
+    $('#summary').className = 'banner bad';
+    $('#summary').innerHTML = `${mark('bad')}<div class="text"><b>เปิดหน้านี้ไม่ได้</b> · ${esc(e.message)}</div>`;
+  });
+</script>
+</body>
+</html>
