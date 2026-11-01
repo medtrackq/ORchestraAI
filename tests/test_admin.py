@@ -423,3 +423,35 @@ def test_management_report_from_the_database(store, db_url):
         store.report("2026-12-31", "2026-01-01")
     with pytest.raises(StoreError):
         store.report("2024-01-01", "2026-01-01")  # more than a year
+
+
+# ------------------------------------------------------------------ phone notifications
+
+def test_notification_store_in_the_database(store, db_url):
+    from app.auth import User
+    from app.notify import DbNotifyStore, LineSender, Notifier, WebPushSender
+
+    class Accounts:
+        class store:  # noqa: N801
+            @staticmethod
+            def list():
+                return [User("u1", "u1", "User One", "staff", "S1")]
+
+    notify_store = DbNotifyStore(store.db)
+    n = Notifier(Accounts, notify_store, line=LineSender("", "", ""), background=False)
+    user = Accounts.store.list()[0]
+    key = n.status(user)["webpush"]["public_key"]
+    assert WebPushSender(DbNotifyStore(store.db)).public_key() == key  # one key pair for every server process
+    n.subscribe(user, {"endpoint": "https://push.example.org/1", "keys": {"p256dh": "p", "auth": "a"}}, "Phone")
+    n.set_prefs(user, {"case": False})
+    status = n.status(user)
+    assert status["webpush"]["devices"] == ["Phone"] and status["prefs"]["case"] is False
+    code = notify_store.new_code("u1")
+    assert notify_store.take_code(code) == "u1" and notify_store.take_code(code) is None
+    notify_store.log("u1", "webpush", "test", "t", "b", "sent", None)
+    assert n.status(user)["recent"][0]["status"] == "sent"
+    assert n.unsubscribe(user, "https://push.example.org/1") and n.status(user)["webpush"]["devices"] == []
+
+    with __import__("psycopg").connect(db_url, autocommit=True) as conn:
+        conn.execute("DROP TABLE notify_targets")
+    assert not notify_store.ready() and n.status(user) == {"ready": False, "kinds": status["kinds"]}

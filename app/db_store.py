@@ -7,6 +7,7 @@ are the final guard.
 """
 from __future__ import annotations
 
+import threading
 import uuid
 from contextlib import contextmanager
 from dataclasses import replace
@@ -21,15 +22,17 @@ from orchestra_engine.demo import elective_day
 from . import seed
 from .db import ConflictError, Database, DatabaseUnavailable, World, case_code
 from .intake_service import IntakeContext
-from .store import (Activity, StoreError, actor_name, build_case, check_own_case, check_team, equipment_rows,
+from .store import (Activity, StoreError, actor_name, build_case, check_own_case, check_team, cssd_event, equipment_rows,
                     facility_view, fatigue_log, fatigue_view, parse_time, ready_minute, room_options, staff_skills,
-                    supply_options)
+                    schedule_event, supply_options)
 
 
 class DatabaseStore:
     mode = "supabase"
 
     def __init__(self, url: str, *, tz: str = "Asia/Bangkok", workers: int = 2, time_limit_s: float = 10.0) -> None:
+        self.listener = None  # notify.Notifier.handle: told about every committed change
+        self._outbox = threading.local()  # events of the open transaction, sent after it commits
         self.db = Database(url, tz)
         self.workers = workers
         self.time_limit_s = time_limit_s
@@ -37,14 +40,27 @@ class DatabaseStore:
 
     # ------------------------------------------------------------- helpers
 
+    def _emit(self, event: dict) -> None:
+        """Queue a notification event; it goes out only if the transaction commits."""
+        if getattr(self._outbox, "depth", 0):
+            self._outbox.events.append(event)
+        elif self.listener is not None:
+            self.listener(event)
+
     @contextmanager
     def _transaction(self, *, write: bool):
+        outer = not getattr(self._outbox, "depth", 0)
+        if outer:
+            self._outbox.events = []
+        self._outbox.depth = getattr(self._outbox, "depth", 0) + 1
+        committed = False
         try:
             with self.db.connect() as conn:
                 if write:
                     self.db.lock(conn)
                     self.db.settle_supplies(conn)  # cases that ended used what they held
                 yield conn
+            committed = True
         except DatabaseUnavailable as exc:
             raise StoreError(f"เชื่อมต่อฐานข้อมูลไม่ได้: {exc}") from exc
         except ConflictError as exc:
@@ -53,6 +69,13 @@ class DatabaseStore:
             raise StoreError(f"เชื่อมต่อฐานข้อมูลไม่ได้: {str(exc).splitlines()[0]}") from exc
         except psycopg.errors.UndefinedTable as exc:
             raise StoreError(f"ไม่พบตารางในฐานข้อมูล (รัน migration แล้วหรือยัง?): {exc}") from exc
+        finally:
+            self._outbox.depth -= 1
+            if outer:
+                events, self._outbox.events = self._outbox.events, []
+                if committed and self.listener is not None:
+                    for event in events:
+                        self.listener(event)
 
     def _day(self, text: str | None) -> date:
         if not text:
@@ -200,6 +223,8 @@ class DatabaseStore:
             record = self._record(conn, after, Activity("equipment", f"{serial}: {status}{when}", problems,
                                                         actor=actor_name(actor)))
             self.db.log_activity(conn, after, record)
+            if problems:
+                self._emit(cssd_event(after.day, serial, status, ready, problems, actor))
             unit = next(u for u in after.hospital.equipments if u.unit_id == serial)
             return {"unit": equipment_rows([unit])[0], "warnings": problems}
 
@@ -281,6 +306,7 @@ class DatabaseStore:
                 self.db.save(conn, world, check.result, {case.case_id: request},
                              activity=self._record(conn, world, activity))
                 out["booked"] = True
+                self._emit(schedule_event("booking", world.day, check.result, case.case_id, actor))
             return out
 
     def emergency(self, data: dict, now_text: str, *, day: str | None = None, actor: dict | None = None) -> dict:
@@ -333,6 +359,7 @@ class DatabaseStore:
         activity = Activity(kind, title, log, data["changes"], data["notifications"],
                             [c["case_id"] for c in data["changes"]] or [case_id], actor_name(actor))
         self.db.save(conn, world, after, new_requests, activity=self._record(conn, world, activity))
+        self._emit(schedule_event(kind, world.day, after, case_id, actor, fatigue=len({i.staff_id for i in tired})))
         return {"changes": data["changes"], "notifications": data["notifications"],
                 "unscheduled": data["unscheduled"], "log": log, "fatigue": [i.to_dict() for i in tired]}
 

@@ -20,6 +20,12 @@ services:
         sync: false  # Supabase "Session pooler" connection string; empty = demo mode
       - key: ANTHROPIC_API_KEY
         sync: false  # optional: Intake Agent reads free text with Claude; empty = keyword rules
+      - key: LINE_CHANNEL_ACCESS_TOKEN
+        sync: false  # optional: LINE Official Account (Messaging API) for notifications
+      - key: LINE_CHANNEL_SECRET
+        sync: false  # optional: same channel; verifies the LINE webhook
+      - key: LINE_ADD_FRIEND_URL
+        sync: false  # optional: e.g. https://lin.ee/xxxx shown to staff when they link LINE
       - key: APP_TIMEZONE
         value: Asia/Bangkok
       - key: SOLVER_WORKERS

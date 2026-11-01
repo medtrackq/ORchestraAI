@@ -12,6 +12,9 @@ Environment:
                        without DATABASE_URL) the app is open for local development.
     SESSION_SECRET     optional explicit key for signing session cookies
     ANTHROPIC_API_KEY  optional: Intake Agent reads free text with Claude (else keyword rules)
+    LINE_CHANNEL_ACCESS_TOKEN, LINE_CHANNEL_SECRET, LINE_ADD_FRIEND_URL
+                       optional: phone notifications through the hospital's LINE Official Account
+                       (webhook URL: https://<site>/api/line/webhook). Browser push needs no setup.
     INTAKE_MODEL       Claude model for intake (default claude-opus-5-5)
     SOLVER_WORKERS     CP-SAT worker threads (default 2)
     SOLVER_TIME_LIMIT  seconds per solve (default 10)
@@ -33,6 +36,7 @@ from .auth import (COOKIE, ROLES, SESSION_HOURS, Accounts, AuthError, DbUserStor
                    ServiceUnavailable, TooManyAttempts, User, can)
 from .admin_store import require_supabase
 from .intake_service import IntakeService
+from .notify import DbNotifyStore, MemoryNotifyStore, Notifier, NotifyUnavailable
 from .store import Forbidden, ScheduleStore, StoreError
 
 ROOT = Path(__file__).resolve().parent
@@ -48,15 +52,19 @@ if os.environ.get("DATABASE_URL"):
 
     store = DatabaseStore(os.environ["DATABASE_URL"], tz=os.environ.get("APP_TIMEZONE", "Asia/Bangkok"), **_solver)
     accounts = Accounts(DbUserStore(store.db))
+    notifier = Notifier(accounts, DbNotifyStore(store.db))
 else:
     store = ScheduleStore(**_solver)
     accounts = Accounts(MemoryUserStore())
+    notifier = Notifier(accounts, MemoryNotifyStore())
+store.listener = notifier.handle  # phone notifications after every saved change
 
 _TZ = ZoneInfo(os.environ.get("APP_TIMEZONE", "Asia/Bangkok"))
 intake = IntakeService()  # Claude pass when ANTHROPIC_API_KEY is set, keyword rules otherwise
 app = FastAPI(title="ORchestraAI", docs_url="/api/docs", redoc_url=None, openapi_url="/api/openapi.json")
 
-PUBLIC = {"/login", "/api/login", "/api/health"}
+PUBLIC = {"/login", "/api/login", "/api/health", "/api/line/webhook", "/sw.js", "/manifest.webmanifest",
+          "/icons/icon-192.png", "/icons/icon-512.png", "/icons/apple-touch-icon.png", "/icons/badge-96.png"}
 ALLOWED_WHILE_TEMPORARY = {"/api/me", "/api/password", "/api/logout"}
 
 
@@ -115,7 +123,8 @@ def _user(request: Request, permission: str = "view") -> User:
 
 
 def _actor(user: User) -> dict:
-    return {"name": user.display_name, "username": user.username, "role": user.role, "staff_id": user.staff_id}
+    return {"name": user.display_name, "username": user.username, "role": user.role, "staff_id": user.staff_id,
+            "user_id": user.user_id}
 
 
 def _run(fn, *args, **kwargs):
@@ -180,6 +189,24 @@ def login_page() -> FileResponse:
 @app.get("/admin", include_in_schema=False)
 def admin_page() -> FileResponse:
     return FileResponse(ROOT / "static" / "admin.html")
+
+
+@app.get("/sw.js", include_in_schema=False)
+def service_worker() -> FileResponse:
+    return FileResponse(ROOT / "static" / "sw.js", media_type="text/javascript",
+                        headers={"Service-Worker-Allowed": "/"})
+
+
+@app.get("/manifest.webmanifest", include_in_schema=False)
+def manifest() -> FileResponse:
+    return FileResponse(ROOT / "static" / "manifest.webmanifest", media_type="application/manifest+json")
+
+
+@app.get("/icons/{name}", include_in_schema=False)
+def icon(name: str) -> FileResponse:
+    if name not in {"icon-192.png", "icon-512.png", "apple-touch-icon.png", "badge-96.png"}:
+        raise HTTPException(status_code=404)
+    return FileResponse(ROOT / "static" / "icons" / name, media_type="image/png")
 
 
 @app.get("/reports", include_in_schema=False)
@@ -860,3 +887,90 @@ def report_csv(request: Request, date_from: str | None = None, date_to: str | No
     name = f"orchestra-cases-{date_from or 'last30'}-{date_to or 'today'}.csv"
     return PlainTextResponse("\ufeff" + out.getvalue(), media_type="text/csv; charset=utf-8",
                              headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+# ------------------------------------------------------------- phone notifications
+
+class PushSubscriptionIn(BaseModel):
+    subscription: dict
+    label: str | None = Field(default=None, max_length=200)
+
+
+class EndpointIn(BaseModel):
+    endpoint: str = Field(max_length=2000)
+
+
+class PrefsIn(BaseModel):
+    prefs: dict[str, bool]
+
+
+def _notify(fn, *args):
+    try:
+        return fn(*args)
+    except NotifyUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/notify")
+def notify_status(request: Request) -> dict:
+    """The signed-in user's notification settings: devices, LINE link, which events, recent deliveries."""
+    return _notify(notifier.status, _user(request))
+
+
+@app.post("/api/notify/subscribe")
+def notify_subscribe(body: PushSubscriptionIn, request: Request) -> dict:
+    user = _user(request)
+    _notify(notifier.subscribe, user, body.subscription, body.label)
+    return _notify(notifier.status, user)
+
+
+@app.post("/api/notify/unsubscribe")
+def notify_unsubscribe(body: EndpointIn, request: Request) -> dict:
+    user = _user(request)
+    _notify(notifier.unsubscribe, user, body.endpoint)
+    return _notify(notifier.status, user)
+
+
+@app.post("/api/notify/prefs")
+def notify_prefs(body: PrefsIn, request: Request) -> dict:
+    user = _user(request)
+    _notify(notifier.set_prefs, user, body.prefs)
+    return _notify(notifier.status, user)
+
+
+@app.post("/api/notify/line-code")
+def notify_line_code(request: Request) -> dict:
+    """One-time code (15 min) to send to the hospital's LINE Official Account."""
+    user = _user(request)
+    return {"code": _notify(notifier.link_code, user), "minutes": 15,
+            "add_friend_url": notifier.line.add_friend_url or None}
+
+
+@app.post("/api/notify/line-unlink")
+def notify_line_unlink(request: Request) -> dict:
+    user = _user(request)
+    _notify(notifier.unlink_line, user)
+    return _notify(notifier.status, user)
+
+
+@app.post("/api/notify/test")
+def notify_test(request: Request) -> dict:
+    user = _user(request)
+    statuses = _notify(notifier.test, user)
+    return {"sent": statuses.count("sent"), "failed": len(statuses) - statuses.count("sent"),
+            "status": _notify(notifier.status, user)}
+
+
+@app.post("/api/line/webhook", include_in_schema=False)
+async def line_webhook(request: Request) -> dict:
+    """LINE Official Account webhook: links accounts from one-time codes (signature checked)."""
+    body = await request.body()
+    try:
+        linked = await run_in_threadpool(notifier.line_webhook, body, request.headers.get("x-line-signature"))
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail="bad signature") from exc
+    except NotifyUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return {"linked": linked}
