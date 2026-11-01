@@ -95,7 +95,9 @@ def test_preferences_and_delivery_log():
     n.handle(event)
     assert push.sent == []
     assert n.store.recent("u-sch")[0]["title"] == "CSSD: DV-01 ไม่ทันเคสที่จองไว้"
-    assert n.status(USERS[3])["prefs"] == {"case": True, "emergency": True, "cssd": False, "readiness": True}
+    assert n.status(USERS[3])["prefs"] == {"case": True, "emergency": True, "cssd": False, "readiness": True,
+                                           "feedback": False}
+    assert "feedback" not in n.status(USERS[3])["kinds"] and "emergency" not in n.status(USERS[1])["kinds"]
 
 
 def test_expired_push_subscription_is_removed():

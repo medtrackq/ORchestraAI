@@ -37,7 +37,7 @@ from urllib.parse import urlsplit
 
 from orchestra_engine import fmt
 
-from .auth import LoginLimiter, env_admin
+from .auth import ROLES, LoginLimiter, env_admin
 
 log = logging.getLogger("orchestra.notify")
 
@@ -46,9 +46,11 @@ KINDS = {
     "emergency": "มีเคสฉุกเฉินแทรก (สรุปสำหรับผู้จัดตาราง)",
     "cssd": "CSSD อบเครื่องมือไม่ทันเคสที่จองไว้",
     "readiness": "เคสยังไม่พร้อมผ่าตัด (มีปัญหา และสรุปเคสวันถัดไปวันละครั้ง)",
+    "feedback": "ผู้ใช้แจ้งปัญหาหรือข้อเสนอแนะ และข้อผิดพลาดใหม่ของระบบ (ผู้ดูแลระบบ)",
 }
 KIND_ROLES = {"case": None, "emergency": {"admin", "scheduler"}, "cssd": {"admin", "scheduler", "cssd"},
-              "readiness": {"admin", "scheduler", "surgeon"}}
+              "readiness": {"admin", "scheduler", "surgeon"}, "feedback": {"admin"}}
+FEEDBACK_KINDS = {"PROBLEM": "แจ้งปัญหา", "IDEA": "ข้อเสนอแนะ", "QUESTION": "สอบถาม"}
 MAX_LINES = 6
 CODE_MINUTES = 15
 
@@ -59,6 +61,11 @@ class NotifyUnavailable(Exception):
 
 def default_prefs(role: str) -> dict[str, bool]:
     return {kind: roles is None or role in roles for kind, roles in KIND_ROLES.items()}
+
+
+def kinds_for(role: str) -> dict[str, str]:
+    """The kinds of notification this role can receive (the others are never sent to it)."""
+    return {kind: label for kind, label in KINDS.items() if KIND_ROLES[kind] is None or role in KIND_ROLES[kind]}
 
 
 @dataclass
@@ -431,6 +438,17 @@ def build_messages(event: dict, users: list) -> list[Message]:
             if own:
                 out.append(Message(u.user_id, "readiness", f"เคสของคุณวันที่ {day} ยังไม่พร้อม {len(own)} เคส", own,
                                    url + "#ready"))
+    elif event["type"] == "feedback":  # what was written stays in the app (people may type patient details)
+        kind = FEEDBACK_KINDS.get(event.get("kind"), "แจ้งปัญหา")
+        body = [f"จาก{ROLES.get(event.get('role'), 'ผู้ใช้')}" + (f" · หน้า {event['page']}" if event.get("page") else ""),
+                "อ่านได้ที่หน้า ⚙ สถานะระบบ"]
+        out += [Message(u.user_id, "feedback", f"มีผู้ใช้{kind}ใหม่", body, "/status#feedback")
+                for u in users if u.role in KIND_ROLES["feedback"] and u.user_id != actor]
+    elif event["type"] == "system_error":
+        where = {"server": "เซิร์ฟเวอร์", "browser": "หน้าเว็บ", "job": "งานเบื้องหลัง"}.get(event.get("source"), "ระบบ")
+        out += [Message(u.user_id, "feedback", "ระบบมีข้อผิดพลาดใหม่", [f"{where}: {event.get('where', '-')}",
+                                                                      "ดูรายละเอียดที่หน้า ⚙ สถานะระบบ"], "/status#errors")
+                for u in users if u.role in KIND_ROLES["feedback"]]
     return out
 
 
@@ -497,10 +515,10 @@ class Notifier:
     # -- settings for the signed-in user
     def status(self, user) -> dict:
         if not self.store.ready():
-            return {"ready": False, "kinds": KINDS}
+            return {"ready": False, "kinds": kinds_for(user.role)}
         targets = self.store.targets(user.user_id)
         return {
-            "ready": True, "kinds": KINDS, "prefs": self.prefs(user),
+            "ready": True, "kinds": kinds_for(user.role), "prefs": self.prefs(user),
             "webpush": {"public_key": self.webpush.public_key(),
                         "devices": [t.label or "อุปกรณ์" for t in targets if t.channel == "webpush"],
                         "endpoints": [t.address for t in targets if t.channel == "webpush"]},

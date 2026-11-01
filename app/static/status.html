@@ -97,6 +97,17 @@
   dialog::backdrop { background: rgba(15,23,42,.45); }
   dialog h3 { margin: 0 0 8px; font-size: 1rem; }
   dialog ol { margin: 8px 0 12px; padding-left: 22px; font-size: .84rem; }
+  .fb-list { display: grid; gap: 10px; }
+  .fb-item { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; display: grid; gap: 8px; font-size: .86rem; }
+  .fb-item.NEW { border-left: 4px solid var(--warn); }
+  .fb-item .top { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; justify-content: space-between; }
+  .fb-item .top > span { font-size: .78rem; color: var(--muted); }
+  .fb-item .top > div { display: flex; flex-wrap: wrap; gap: 6px; }
+  .fb-item .msg { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
+  .fb-item .acts { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .fb-item .acts input { flex: 1 1 200px; min-width: 0; font: inherit; font-size: .84rem; padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); }
+  .fb-item .btn { padding: 6px 12px; font-size: .82rem; }
+  .fb-filter { display: flex; align-items: center; gap: 6px; font-size: .84rem; }
   dialog .actions { justify-content: flex-end; margin-top: 14px; }
   .error { color: var(--bad); font-size: .84rem; margin: 8px 0 0; }
   .hide-wide { display: none; }
@@ -132,6 +143,22 @@
     <header><div><h2>พร้อมใช้งานจริงหรือยัง</h2>
       <p class="hint">สิ่งที่ควรมีก่อนเริ่มนัดผู้ป่วยจริง · กดลิงก์ทางขวาเพื่อไปหน้าที่แก้ได้</p></div></header>
     <ul class="checklist" id="checks"></ul>
+  </section>
+
+  <section class="card" id="feedback" hidden>
+    <header>
+      <div><h2>เรื่องที่ผู้ใช้แจ้ง</h2>
+        <p class="hint">ปัญหา ข้อเสนอแนะ และคำถาม จากปุ่ม "💬 แจ้งปัญหา" ทุกหน้า · ระบบปิด HN เลขบัตร เบอร์โทร และชื่อหลังคำนำหน้าให้ก่อนเก็บ · บันทึกถึงผู้แจ้งจะแสดงให้ผู้แจ้งเห็น</p></div>
+      <label class="fb-filter"><input type="checkbox" id="fb-done"> แสดงเรื่องที่ปิดแล้ว</label>
+    </header>
+    <div id="fb-note"></div>
+    <div class="fb-list" id="fb-reports"></div>
+  </section>
+
+  <section class="card" id="errors" hidden>
+    <header><div><h2>ข้อผิดพลาดของระบบ</h2>
+      <p class="hint">ระบบบันทึกเองเมื่อเซิร์ฟเวอร์ งานเบื้องหลัง หรือหน้าเว็บของผู้ใช้เกิดข้อผิดพลาด ข้อผิดพลาดเดียวกันนับรวมเป็นแถวเดียว · กด "แก้แล้ว" เมื่อแก้แล้ว ถ้าเกิดอีกจะกลับมาเป็นเรื่องใหม่</p></div></header>
+    <div class="fb-list" id="fb-errors"></div>
   </section>
 
   <section class="card" id="server" hidden>
@@ -205,9 +232,9 @@
   };
   let data = null;
 
-  async function api(path, body) {
+  async function api(path, body, method) {
     const res = await fetch(path, body === undefined ? {} : {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      method: method || 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     if (res.status === 401) { location.href = '/login'; throw new Error('กรุณาเข้าสู่ระบบ'); }
     const out = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(out.detail || 'HTTP ' + res.status);
@@ -331,6 +358,62 @@
     renderServer();
   }
 
+  // ---------------------------------------------- reports from users and errors of the system
+  const fbWhen = iso => iso ? new Date(iso).toLocaleString('th-TH', { dateStyle: 'medium', timeStyle: 'short' }) : '–';
+  const ROLE_TH = { admin: 'ผู้ดูแลระบบ', scheduler: 'ผู้จัดตาราง', surgeon: 'ศัลยแพทย์', cssd: 'CSSD', staff: 'วิสัญญี/พยาบาล' };
+  const KIND_TONE = { PROBLEM: 'bad', IDEA: 'info', QUESTION: 'warn' };
+  const STATUS_TONE = { NEW: 'warn', SEEN: 'info', DONE: 'ok' };
+
+  async function loadFeedback() {
+    renderFeedback(await api('/api/feedback' + ($('#fb-done').checked ? '?done=true' : '')));
+  }
+
+  function renderFeedback(d) {
+    $('#feedback').hidden = $('#errors').hidden = false;
+    $('#fb-note').innerHTML = d.ready && !d.kept_in_memory ? '' : `<div class="note warn" style="margin:0 0 10px">${d.ready
+      ? 'โหมดสาธิต: เรื่องที่แจ้งและข้อผิดพลาดเก็บไว้ในหน่วยความจำ หายเมื่อเซิร์ฟเวอร์เริ่มใหม่'
+      : 'ยังไม่ได้รัน SQL ไฟล์ 016: เรื่องที่แจ้งและข้อผิดพลาดเก็บไว้ชั่วคราว หายเมื่อเซิร์ฟเวอร์เริ่มใหม่ (รันได้ที่หัวข้อไฟล์ SQL ด้านล่าง)'}</div>`;
+    $('#fb-reports').innerHTML = d.reports.length ? d.reports.map(r => `<div class="fb-item ${esc(r.status)}">
+        <div class="top"><div><span class="badge ${KIND_TONE[r.kind] || 'info'}">${esc(r.kind_label)}</span>
+          <span class="badge ${STATUS_TONE[r.status] || 'off'}">${esc(r.status_label)}</span></div>
+          <span>${esc(fbWhen(r.created_at))} · ${esc(r.display_name || r.username || '-')} (${esc(ROLE_TH[r.role] || r.role || '-')})${
+            r.page ? ` · หน้า <a href="${esc(r.page)}">${esc(r.page)}</a>` : ''}</span></div>
+        <p class="msg">${esc(r.message)}</p>
+        ${r.agent ? `<small class="hint">${esc(r.agent)}</small>` : ''}
+        ${r.admin_note ? `<small class="hint">บันทึกถึงผู้แจ้ง: ${esc(r.admin_note)}${r.handled_by ? ' · โดย ' + esc(r.handled_by) : ''}</small>` : ''}
+        <div class="acts" data-report="${r.id}">
+          <input type="text" maxlength="500" placeholder="บันทึกถึงผู้แจ้ง (ไม่บังคับ) เช่น แก้แล้วในเวอร์ชันใหม่" aria-label="บันทึกถึงผู้แจ้ง">
+          ${r.status !== 'SEEN' ? '<button class="btn" type="button" data-status="SEEN">รับทราบ</button>' : ''}
+          ${r.status !== 'DONE' ? '<button class="btn primary" type="button" data-status="DONE">แก้แล้ว / ปิดเรื่อง</button>'
+            : '<button class="btn" type="button" data-status="NEW">เปิดเรื่องใหม่</button>'}
+        </div></div>`).join('') : '<p class="hint">ยังไม่มีเรื่องที่ค้างอยู่</p>';
+    $('#fb-errors').innerHTML = d.errors.length ? d.errors.map(e => `<div class="fb-item ${esc(e.status)}">
+        <div class="top"><div><span class="badge ${e.status === 'NEW' ? 'bad' : 'ok'}">${esc(e.status === 'NEW' ? 'ใหม่' : 'แก้แล้ว')}</span>
+          ${e.reopened ? '<span class="badge warn">เกิดอีกหลังแก้แล้ว</span>' : ''}
+          <span class="badge off">${esc(e.source_label)} · ${e.occurrences} ครั้ง</span></div>
+          <span>ล่าสุด ${esc(fbWhen(e.last_seen))} · ครั้งแรก ${esc(fbWhen(e.first_seen))}${e.last_user ? ' · ผู้ใช้ ' + esc(e.last_user) : ''}</span></div>
+        <p class="msg mono">${esc(e.where_at)}\n${esc(e.message)}</p>
+        ${e.page ? `<small class="hint">หน้า ${esc(e.page)}</small>` : ''}
+        <div class="acts" data-error="${e.id}">
+          ${e.status !== 'DONE' ? '<button class="btn primary" type="button" data-status="DONE">แก้แล้ว</button>'
+            : '<button class="btn" type="button" data-status="NEW">ยังไม่แก้</button>'}
+        </div></div>`).join('') : '<p class="hint">ไม่มีข้อผิดพลาดที่ค้างอยู่</p>';
+    document.querySelectorAll('#fb-reports [data-report] [data-status], #fb-errors [data-error] [data-status]').forEach(b =>
+      b.addEventListener('click', async () => {
+        const box = b.closest('.acts');
+        const what = box.dataset.report !== undefined ? 'report' : 'error';
+        const id = box.dataset.report ?? box.dataset.error;
+        const note = box.querySelector('input')?.value.trim() || null;
+        b.disabled = true;
+        try {
+          await api(`/api/feedback/${what}/${encodeURIComponent(id)}`, { status: b.dataset.status, note }, 'PATCH');
+          await loadFeedback();
+          load();  // the checklist count
+        } catch (err) { alert(err.message); b.disabled = false; }
+      }));
+  }
+  $('#fb-done').addEventListener('change', () => loadFeedback().catch(e => alert(e.message)));
+
   async function load() {
     $('#reload').disabled = true;
     try {
@@ -355,7 +438,7 @@
       <div>${mark(r.ok ? 'ok' : 'bad')}<span><span class="mono">${esc(r.name)}</span>${r.ok ? ' · สำเร็จ' : ` · <b>${r.skipped ? 'ข้าม' : 'ไม่สำเร็จ'}</b>: ${esc(r.error)}`}</span></div>`).join('')}</div>`;
   }
 
-  $('#reload').addEventListener('click', () => { $('#run-results').innerHTML = ''; load(); });
+  $('#reload').addEventListener('click', () => { $('#run-results').innerHTML = ''; load(); loadFeedback().catch(() => {}); });
   $('#backup').addEventListener('click', () => { $('#backup-error').hidden = true; $('#backup-confirm').showModal(); });
   $('#backup-cancel').addEventListener('click', () => $('#backup-confirm').close());
   $('#backup-ok').addEventListener('click', async () => {
@@ -426,12 +509,14 @@
       $('#sub').textContent = '';
       return;
     }
-    await load();
+    await Promise.all([load(), loadFeedback()]);
+    if (location.hash) document.getElementById(location.hash.slice(1))?.scrollIntoView();  // link from a notification
   })().catch(e => {
     $('#summary').hidden = false;
     $('#summary').className = 'banner bad';
     $('#summary').innerHTML = `${mark('bad')}<div class="text"><b>เปิดหน้านี้ไม่ได้</b> · ${esc(e.message)}</div>`;
   });
 </script>
+<script src="/feedback.js" defer></script>
 </body>
 </html>
