@@ -31,7 +31,7 @@ from .store import StoreError
 log = logging.getLogger("orchestra.privacy")
 
 ACTIONS = {"schedule": "เปิดตารางผ่าตัด", "print": "พิมพ์ใบรายการ / เช็กลิสต์", "lookup": "ค้นหาด้วย HN",
-           "backup": "ดาวน์โหลดสำรองข้อมูลทั้งหมด"}
+           "backup": "ดาวน์โหลดสำรองข้อมูลทั้งหมด", "his": "ระบบ HIS อ่านตารางหรือสถานะคำขอ"}
 WINDOW = timedelta(minutes=30)
 MIN_DAYS = 30  # shorter would remove identities of cases still being followed up
 MAX_DAYS = 3650

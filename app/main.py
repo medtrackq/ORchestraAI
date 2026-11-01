@@ -39,7 +39,7 @@ from pydantic import BaseModel, Field
 
 from .auth import (COOKIE, ROLES, SESSION_HOURS, Accounts, AuthError, DbUserStore, MemoryUserStore,
                    ServiceUnavailable, TooManyAttempts, User, can)
-from . import backup, feedback as fb, history_io, hospital_io, privacy, roster_io, system_status
+from . import backup, feedback as fb, his as his_mod, history_io, hospital_io, privacy, roster_io, system_status
 from .admin_store import require_supabase
 from .intake_service import IntakeService
 from .notify import DbNotifyStore, MemoryNotifyStore, Notifier, NotifyUnavailable
@@ -71,6 +71,7 @@ _TZ = ZoneInfo(os.environ.get("APP_TIMEZONE", "Asia/Bangkok"))
 intake = IntakeService()  # Claude pass when ANTHROPIC_API_KEY is set, keyword rules otherwise
 access = privacy.AccessLog(store)  # PDPA: who was shown patients' HN / names
 feedback = fb.Feedback(store, notifier.handle)  # problem reports from users and errors, for the admin
+his = his_mod.His(store, notifier.handle, access)  # the hospital information system calls in with an API key
 logging.getLogger("orchestra").addHandler(fb.ErrorLogHandler(feedback))  # errors the app logs are listed too
 
 
@@ -95,6 +96,7 @@ app = FastAPI(title="ORchestraAI", docs_url="/api/docs", redoc_url=None, openapi
 PUBLIC = {"/login", "/help", "/api/login", "/api/health", "/api/line/webhook", "/sw.js", "/feedback.js", "/manifest.webmanifest",
           "/icons/icon-192.png", "/icons/icon-512.png", "/icons/apple-touch-icon.png", "/icons/badge-96.png"}
 ALLOWED_WHILE_TEMPORARY = {"/api/me", "/api/password", "/api/logout"}
+HIS_PREFIX = "/api/his/v1/"
 
 
 def _open_mode() -> bool:
@@ -141,7 +143,8 @@ async def sessions(request: Request, call_next):
         user = await run_in_threadpool(accounts.user_from_token, request.cookies.get(COOKIE))
     request.state.user = user
 
-    if path not in PUBLIC:
+    machine = path.startswith(HIS_PREFIX)  # the HIS signs in with its API key in each call, not a session
+    if path not in PUBLIC and not machine:
         if user is None:
             if path.startswith("/api/"):
                 return JSONResponse({"detail": "กรุณาเข้าสู่ระบบ"}, status_code=401)
@@ -1396,7 +1399,7 @@ def system_status_view(request: Request) -> dict:
     """SQL files applied or missing, settings (set or not, never values) and the go-live checklist."""
     _user(request, "users")
     out = _run(system_status.summary, store, notifier, intake, accounts)
-    out["checks"] = out["checks"] + [_feedback_check()]
+    out["checks"] = out["checks"] + [c for c in (_feedback_check(), his.check()) if c]
     return out
 
 
@@ -1425,6 +1428,151 @@ def system_migrate(body: MigrateIn, request: Request) -> dict:
     results = _run(system_status.run_missing, store.db)
     system_status.log_run(store, results, _actor(user))
     return {"results": results, "status": _run(system_status.summary, store, notifier, intake, accounts)}
+
+
+# ------------------------------------------------------------- hospital information system (HIS)
+
+class HisRequestIn(BaseModel):
+    """A surgery request (order) from the HIS. Sending the same ``his_ref`` again updates it (safe to resend)."""
+    his_ref: str = Field(min_length=1, max_length=100, description="เลขที่ใบขอผ่าตัดของ HIS (ไม่ซ้ำ)")
+    action: Literal["upsert", "cancel"] = Field(default="upsert", description="upsert = สร้างหรือแก้ไข, cancel = ยกเลิก")
+    hn: str | None = Field(default=None, max_length=50)
+    patient_name: str | None = Field(default=None, max_length=150)
+    surgeon_code: str | None = Field(default=None, max_length=100, description="รหัสแพทย์ของ HIS หรือรหัสพนักงานในระบบนี้")
+    surgeon_name: str | None = Field(default=None, max_length=200, description="ชื่อแพทย์ (ช่วยจับคู่รหัส)")
+    procedure_code: str | None = Field(default=None, max_length=100, description="รหัส ICD-9-CM หรือรหัสหัตถการของ HIS")
+    procedure_name: str | None = Field(default=None, max_length=200)
+    urgency: Literal["ELECTIVE", "URGENT", "EMERGENCY"] = "ELECTIVE"
+    duration_mins: int | None = Field(default=None, ge=15, le=720, description="ไม่ส่ง = ใช้ preference card / เวลามาตรฐาน")
+    requested_date: str | None = Field(default=None, pattern=DATE, description="วันที่แพทย์ขอ")
+    due_date: str | None = Field(default=None, pattern=DATE, description="ควรผ่าตัดภายในวันที่")
+    requires_icu: bool | None = None
+    airborne: bool = False
+
+
+class HisBatchIn(BaseModel):
+    requests: list[HisRequestIn] = Field(min_length=1, max_length=his_mod.BATCH_MAX)
+
+
+def _his_client(request: Request, scope: str) -> his_mod.Client:
+    raw = request.headers.get("authorization") or request.headers.get("x-api-key")
+    try:
+        return his.authenticate(raw, scope)
+    except his_mod.HisAuthError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+    except his_mod.HisUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+def _his_run(fn, *args, **kwargs):
+    try:
+        return fn(*args, **kwargs)
+    except his_mod.HisUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except StoreError as exc:
+        raise HTTPException(status_code=404 if "ไม่พบ" in str(exc) else 400, detail=str(exc)) from exc
+
+
+@app.get("/api/his/v1/ping", tags=["HIS"])
+def his_ping(request: Request) -> dict:
+    """Check the key and the connection (any scope)."""
+    raw = request.headers.get("authorization") or request.headers.get("x-api-key")
+    for scope in his_mod.SCOPES:
+        try:
+            client = his.authenticate(raw, scope)
+            return {"ok": True, "key": client.name, "scopes": list(client.scopes)}
+        except his_mod.HisAuthError as exc:
+            if exc.status != 403:
+                raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+        except his_mod.HisUnavailable as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+    raise HTTPException(status_code=403, detail="key นี้ไม่มีสิทธิ์ใดเลย")
+
+
+@app.post("/api/his/v1/surgery-requests", tags=["HIS"])
+def his_request(body: HisRequestIn, request: Request) -> dict:
+    """Create, change or cancel one surgery request. Unknown doctor / procedure codes wait for the admin to match."""
+    client = _his_client(request, "requests:write")
+    return _his_run(his.receive, body.model_dump(), client=client)
+
+
+@app.post("/api/his/v1/surgery-requests/batch", tags=["HIS"])
+def his_batch(body: HisBatchIn, request: Request) -> dict:
+    """Up to 200 requests at once (each is applied on its own)."""
+    client = _his_client(request, "requests:write")
+    return {"results": [_his_run(his.receive, r.model_dump(), client=client) for r in body.requests]}
+
+
+@app.get("/api/his/v1/surgery-requests/{his_ref:path}", tags=["HIS"])
+def his_request_status(his_ref: str, request: Request) -> dict:
+    """What became of a request: waiting, booked (day, time, room), in progress, done or cancelled."""
+    client = _his_client(request, "schedule:read")
+    return _his_run(his.request_status, his_ref, client, _address(request))
+
+
+@app.get("/api/his/v1/schedule", tags=["HIS"])
+def his_schedule(request: Request, date: str | None = Query(default=None, pattern=DATE)) -> dict:
+    """Every booked case of a day (default today), with the HIS order number when it came from the HIS."""
+    client = _his_client(request, "schedule:read")
+    return _his_run(his.schedule, date, client, _address(request))
+
+
+class HisKeyIn(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    scopes: list[Literal["requests:write", "schedule:read"]] = Field(min_length=1)
+
+
+class HisMappingIn(BaseModel):
+    kind: Literal["surgeon", "procedure"]
+    his_code: str = Field(min_length=1, max_length=100)
+    target_id: str = Field(max_length=64)
+    label: str | None = Field(default=None, max_length=200)
+
+
+@app.get("/api/admin/his")
+def his_overview(request: Request) -> dict:
+    _admin(request, "hospital_data")
+    return _run(his.overview)
+
+
+@app.post("/api/admin/his/keys")
+def his_key_create(body: HisKeyIn, request: Request) -> dict:
+    user, _ = _admin(request, "hospital_data")
+    return {"key": _run(his.create_key, body.name, body.scopes, _actor(user)), "overview": _run(his.overview)}
+
+
+@app.delete("/api/admin/his/keys/{key_id}")
+def his_key_revoke(key_id: str, request: Request) -> dict:
+    user, _ = _admin(request, "hospital_data")
+    _run(his.revoke_key, key_id, _actor(user))
+    return {"overview": _run(his.overview)}
+
+
+@app.put("/api/admin/his/mappings")
+def his_mapping_set(body: HisMappingIn, request: Request) -> dict:
+    user, _ = _admin(request, "hospital_data")
+    result = _run(his.set_mapping, body.kind, body.his_code, body.target_id, body.label, _actor(user))
+    return {"result": result, "overview": _run(his.overview)}
+
+
+@app.delete("/api/admin/his/mappings/{kind}/{his_code}")
+def his_mapping_delete(kind: Literal["surgeon", "procedure"], his_code: str, request: Request) -> dict:
+    user, _ = _admin(request, "hospital_data")
+    _run(his.delete_mapping, kind, his_code, _actor(user))
+    return {"overview": _run(his.overview)}
+
+
+@app.post("/api/admin/his/inbox/{message_id}/retry")
+def his_retry(message_id: int, request: Request) -> dict:
+    user, _ = _admin(request, "hospital_data")
+    return {"result": _run(his.retry, message_id, _actor(user)), "overview": _run(his.overview)}
+
+
+@app.post("/api/admin/his/test")
+def his_test(body: HisRequestIn, request: Request) -> dict:
+    """The admin sends a request as if from the HIS (same pipeline, no key), to try the connection."""
+    user, _ = _admin(request, "hospital_data")
+    return {"result": _run(his.receive, body.model_dump(), source="test", actor=_actor(user)), "overview": _run(his.overview)}
 
 
 # ------------------------------------------------------------- problem reports and errors

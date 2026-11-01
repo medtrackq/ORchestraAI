@@ -32,6 +32,7 @@ REASONS = (
     ("EMERGENCY", "ถูกเลื่อนเพราะเคสฉุกเฉินแทรก", "hospital", False),
     ("OVERRUN", "ถูกเลื่อนเพราะเคสก่อนหน้าเกินเวลา", "hospital", False),
     ("REPLAN", "ถูกเลื่อนเมื่อจัดตารางใหม่ (คนลา ปิดห้อง เครื่องมือ)", "hospital", False),
+    ("HIS", "ยกเลิกจากระบบ HIS ของโรงพยาบาล", "other", False),
     ("UNSPECIFIED", "ไม่ระบุเหตุผล", "other", False),
 )
 LABELS = {key: label for key, label, _, _ in REASONS}

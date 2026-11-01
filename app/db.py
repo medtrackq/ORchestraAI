@@ -906,11 +906,12 @@ class Database:
             "SELECT column_name FROM information_schema.columns WHERE table_name = 'surgery_requests'")}
         airborne = "r.airborne_isolation" if "airborne_isolation" in cols else "false"
         due = "r.due_date" if "due_date" in cols else "NULL::date"
+        his = "r.his_ref, r.requested_date" if "his_ref" in cols else "NULL::varchar AS his_ref, NULL::date AS requested_date"
         since = "COALESCE(r.waitlisted_at, r.created_at)" if "waitlisted_at" in cols else "r.created_at"
         rows = conn.execute(
             f"""SELECT r.request_id, r.patient_hn, r.patient_name, r.primary_surgeon_id, r.procedure_id,
                        r.urgency_level, r.raw_nlp_input, r.ai_predicted_duration_mins, r.preferred_date_start,
-                       r.created_at, {airborne} AS airborne, {due} AS due_date, {since} AS waiting_since,
+                       r.created_at, {airborne} AS airborne, {due} AS due_date, {since} AS waiting_since, {his},
                        p.name AS procedure_name, s.full_name AS surgeon_name
                 FROM surgery_requests r
                 LEFT JOIN procedures p ON p.procedure_id = r.procedure_id
@@ -944,7 +945,8 @@ class Database:
              "surgeon": r["surgeon_name"], "procedure_id": str(r["procedure_id"]) if r["procedure_id"] else None,
              "procedure": r["procedure_name"] or r["raw_nlp_input"] or "Surgery", "urgency": r["urgency_level"],
              "duration_mins": r["ai_predicted_duration_mins"], "airborne": bool(r["airborne"]),
-             "was_on": r["preferred_date_start"].isoformat() if r["preferred_date_start"] else None}
+             "was_on": r["preferred_date_start"].isoformat() if r["preferred_date_start"] else None,
+             "his_ref": r["his_ref"], "requested_date": r["requested_date"].isoformat() if r["requested_date"] else None}
             for r in rows
         ]
         return sorted(out, key=order_key)
@@ -956,11 +958,12 @@ class Database:
             """SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public'
                               AND table_name = 'surgery_requests' AND column_name = 'due_date') AS ok""").fetchone()["ok"]
 
-    def add_waiting(self, conn: psycopg.Connection, world: World, case, request: dict, due: date | None) -> None:
-        """A request that goes straight onto the waiting list (no day yet)."""
+    def add_waiting(self, conn: psycopg.Connection, world: World, case, request: dict, due: date | None,
+                    extra: dict | None = None) -> None:
+        """A request that goes straight onto the waiting list (no day yet). ``extra``: more columns (from the HIS)."""
         from .store import StoreError
 
-        same = conn.execute(
+        same = None if extra and extra.get("his_ref") else conn.execute(
             """SELECT request_id, urgency_level FROM surgery_requests
                WHERE status = 'PENDING' AND patient_hn = %s AND primary_surgeon_id = %s
                  AND (procedure_id = %s OR (procedure_id IS NULL AND raw_nlp_input = %s))""",
@@ -972,7 +975,8 @@ class Database:
                 "raw_nlp_input", "ai_predicted_duration_mins", "status"]
         values = [request["request_id"], case.patient_hn, request["patient_name"], uuid.UUID(case.surgeon_id),
                   request.get("procedure_id"), case.urgency.value, request.get("raw_text"), case.duration_mins, "PENDING"]
-        for col, value in (("airborne_isolation", case.airborne), ("due_date", due), ("waitlisted_at", datetime.now(self.tz))):
+        for col, value in (("airborne_isolation", case.airborne), ("due_date", due), ("waitlisted_at", datetime.now(self.tz)),
+                           *(extra or {}).items()):
             if world.has("surgery_requests", col):
                 cols.append(col)
                 values.append(value)

@@ -113,6 +113,11 @@
   .io th, .io td { border-bottom: 1px solid var(--border); padding: 6px 8px; text-align: right; }
   .io th:first-child, .io td:first-child, .io .text { text-align: left; }
   .io td.bad { color: var(--bad); font-weight: 600; }
+  .his-key { font: .9rem ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--warn-soft); color: var(--warn); padding: 8px 10px; border-radius: 8px; overflow-wrap: anywhere; }
+  .his-endpoints { font-size: .84rem; margin: 6px 0 0; padding-left: 18px; display: grid; gap: 4px; }
+  .his-endpoints code { font-size: .8rem; overflow-wrap: anywhere; }
+  .his-map { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .his-map select { flex: 1 1 220px; min-width: 0; }
   .io-errors { margin: 6px 0 0; padding-left: 18px; color: var(--bad); font-size: .84rem; }
   .io-errors li { margin-bottom: 3px; }
   .io-rows { margin: 4px 0 0; padding-left: 18px; font-size: .82rem; }
@@ -156,6 +161,7 @@
     <button class="tab" role="tab" aria-selected="false" data-tab="blocks" data-perm="hospital_view">บล็อกห้อง</button>
     <button class="tab" role="tab" aria-selected="false" data-tab="inventory" data-perm="inventory_view">วัสดุ/รากเทียม</button>
     <button class="tab" role="tab" aria-selected="false" data-tab="io" data-perm="hospital_data">นำเข้า/ส่งออก Excel</button>
+    <button class="tab" role="tab" aria-selected="false" data-tab="his" data-perm="hospital_data">เชื่อมต่อ HIS</button>
   </div>
 
   <div id="affected" hidden></div>
@@ -404,6 +410,14 @@
     </div>
   </section>
 
+  <!-- Connection to the hospital information system (HIS) -->
+  <section class="card" data-panel="his" hidden>
+    <h2>เชื่อมต่อระบบ HIS ของโรงพยาบาล</h2>
+    <p class="hint">ระบบ HIS ส่งใบขอผ่าตัดเข้ารายการรอผ่าตัดเอง และอ่านตารางผ่าตัดกลับไปได้ โดย HIS เป็นฝ่ายเรียกเข้ามาที่ API ของ ORchestraAI ด้วย API key
+      (เหมาะกับ HIS ที่อยู่ในเครือข่ายของโรงพยาบาล) · ยังไม่ทำงานจนกว่าจะสร้าง key · ไม่ได้เชื่อม ระบบก็ใช้แบบกรอกเองได้ตามปกติ</p>
+    <div id="his-body"><p class="hint">กำลังโหลด…</p></div>
+  </section>
+
   <!-- Supplies and implants -->
   <section class="card" data-panel="inventory" hidden>
     <h2>วัสดุสิ้นเปลืองและรากเทียม</h2>
@@ -494,7 +508,7 @@
     document.querySelectorAll('[data-panel]').forEach(p => { p.hidden = p.dataset.panel !== name; });
     $('#affected').hidden = true;
     const load = { roster: loadRoster, rooms: loadRooms, staff: loadStaff, equipment: loadEquipment, inventory: loadInventory,
-                   procedures: loadProcedures, cards: loadCards, io: loadIo, blocks: loadBlocks }[name];
+                   procedures: loadProcedures, cards: loadCards, io: loadIo, blocks: loadBlocks, his: loadHis }[name];
     history.replaceState(null, '', '#' + name);
     load().catch(e => toast(e.message));
   }
@@ -1365,6 +1379,164 @@
     $('#io-check').disabled = !IO_FILE;
     $('#io-result').innerHTML = '';
   });
+  // ------------------------------------------------ hospital information system (HIS)
+  const HIS_STATUS_TONE = { APPLIED: 'ok', UNCHANGED: '', NEEDS_MAPPING: 'warn', NEEDS_ACTION: 'bad', REJECTED: 'bad' };
+  const HIS_KIND_TH = { 'request.upsert': 'สร้าง/แก้ไข', 'request.cancel': 'ยกเลิก', 'request.invalid': 'ข้อมูลผิดรูปแบบ' };
+  let HIS = null, HIS_NEW_KEY = null;
+
+  async function loadHis() {
+    HIS = await api('/api/admin/his');
+    renderHis();
+  }
+
+  function hisTargets(kind, selected) {
+    return `<option value="">— เลือก${esc(HIS.kinds[kind])}ในระบบ —</option>` + HIS.targets[kind].map(t =>
+      `<option value="${esc(t.id)}" ${t.id === selected ? 'selected' : ''}>${esc(t.name)}${t.code ? ' · ' + esc(t.code) : ''}</option>`).join('');
+  }
+
+  function renderHis() {
+    const box = $('#his-body');
+    if (!HIS.ready) {
+      box.innerHTML = '<p class="readonly">ต้องรัน SQL ไฟล์ 017 ก่อน (หน้า ⚙ สถานะระบบ → รัน SQL ที่ยังขาด)</p>';
+      return;
+    }
+    const base = location.origin + '/api/his/v1';
+    const c = HIS.counts || {};
+    const active = HIS.keys.filter(k => !k.revoked);
+    const when = iso => iso ? new Date(iso).toLocaleString('th-TH', { dateStyle: 'medium', timeStyle: 'short' }) : '–';
+    box.innerHTML = `
+      <div class="io-actions">${Object.entries({ APPLIED: 'บันทึกแล้ว', NEEDS_MAPPING: 'รอจับคู่รหัส', NEEDS_ACTION: 'ต้องดำเนินการ', REJECTED: 'ข้อมูลไม่ถูกต้อง' })
+        .map(([k, label]) => `<span class="badge ${c[k] ? HIS_STATUS_TONE[k] : ''}">${label} ${c[k] || 0}</span>`).join('')}<span class="hint">ใน 7 วัน</span></div>
+
+      <h3>1. API key สำหรับระบบ HIS</h3>
+      ${HIS_NEW_KEY ? `<div class="row-item"><b>คัดลอก key นี้ไปใส่ในระบบ HIS ตอนนี้ (แสดงครั้งเดียว ระบบเก็บแค่ค่าที่เข้ารหัสแล้ว)</b>
+        <div class="his-key" id="his-new-key">${esc(HIS_NEW_KEY.key)}</div>
+        <div class="io-actions"><button class="btn" type="button" id="his-copy">คัดลอก</button>
+          <span class="hint">ส่งใน header <code>Authorization: Bearer &lt;key&gt;</code> · อย่าส่งทางแชตหรืออีเมล ให้ฝ่าย IT ใส่ในระบบโดยตรง</span></div></div>` : ''}
+      ${HIS.keys.length ? `<div class="table-scroll"><table class="io"><thead><tr><th>ชื่อ</th><th class="text">สิทธิ์</th><th class="text">ขึ้นต้นด้วย</th><th class="text">ใช้ล่าสุด</th><th></th></tr></thead><tbody>
+        ${HIS.keys.map(k => `<tr><td>${esc(k.name)}${k.revoked ? ' <span class="badge">ยกเลิกแล้ว</span>' : ''}<br><small class="hint">สร้าง ${esc(when(k.created_at))}${k.created_by ? ' โดย ' + esc(k.created_by) : ''}</small></td>
+          <td class="text">${k.scopes.map(sc => esc(HIS.scopes[sc] || sc)).join('<br>')}</td><td class="text"><code>${esc(k.prefix)}…</code></td>
+          <td class="text">${esc(k.last_used_at ? when(k.last_used_at) : 'ยังไม่เคยเรียก')}</td>
+          <td>${k.revoked ? '' : `<button class="btn small danger" type="button" data-his-revoke="${esc(k.id)}" data-name="${esc(k.name)}">ยกเลิก key</button>`}</td></tr>`).join('')}
+        </tbody></table></div>` : '<p class="hint">ยังไม่มี key: ระบบยังไม่รับข้อมูลจาก HIS</p>'}
+      <form id="his-key-form" class="io-actions">
+        <label style="flex:1 1 220px">ชื่อ key (ระบบที่จะใช้)<input type="text" name="name" maxlength="100" placeholder="เช่น HOSxP โรงพยาบาล" required></label>
+        ${Object.entries(HIS.scopes).map(([sc, label]) => `<label class="checks" style="flex-direction:row;gap:6px"><input type="checkbox" name="scope" value="${esc(sc)}" checked>${esc(label)}</label>`).join('')}
+        <button class="btn primary" type="submit">สร้าง API key</button>
+      </form>
+      ${active.length ? `<details><summary>ที่อยู่ API สำหรับฝ่าย IT</summary><ul class="his-endpoints">
+        <li><code>GET ${esc(base)}/ping</code> ทดสอบ key</li>
+        <li><code>POST ${esc(base)}/surgery-requests</code> ส่งใบขอผ่าตัด (สร้าง แก้ไข หรือ <code>"action": "cancel"</code>) · ส่งซ้ำด้วย <code>his_ref</code> เดิมได้</li>
+        <li><code>POST ${esc(base)}/surgery-requests/batch</code> ส่งครั้งละไม่เกิน 200 รายการ</li>
+        <li><code>GET ${esc(base)}/surgery-requests/{his_ref}</code> สถานะคำขอ: รอ จองแล้ว (วัน เวลา ห้อง) ผ่าตัดแล้ว ยกเลิก</li>
+        <li><code>GET ${esc(base)}/schedule?date=YYYY-MM-DD</code> ตารางผ่าตัดของวัน</li>
+        <li>รายละเอียดทุกช่อง: <a href="/api/docs#/HIS" target="_blank" rel="noopener">/api/docs</a> (ต้องเข้าระบบ)</li></ul></details>` : ''}
+
+      <h3>2. รหัสที่ยังจับคู่ไม่ได้</h3>
+      ${HIS.unmapped.length ? `<p class="hint">ใบขอผ่าตัดเหล่านี้รออยู่ในกล่องรับข้อมูล จับคู่แล้วระบบประมวลผลใหม่ให้เอง</p>
+        <div class="rows">${HIS.unmapped.map(m => `<div class="row-item"><div class="title"><b>${esc(m.kind_label)} ${esc(m.his_code)}</b>
+          <span class="hint">${m.label ? esc(m.label) + ' · ' : ''}${m.messages} ใบขอ${m.suggestion ? ' · ระบบเดาให้แล้ว ตรวจก่อนกด' : ''}</span></div>
+          <div class="his-map"><select data-his-map="${esc(m.kind)}" data-code="${esc(m.his_code)}" data-label="${esc(m.label || '')}" aria-label="จับคู่ ${esc(m.his_code)}">${hisTargets(m.kind, m.suggestion)}</select>
+          <button class="btn primary" type="button" data-his-map-save>จับคู่</button></div></div>`).join('')}</div>`
+        : '<p class="hint">ไม่มี · รหัสแพทย์ที่ตรงกับรหัสพนักงาน และหัตถการที่ตรงกับรหัส ICD-9-CM หรือชื่อ จับคู่ให้เอง</p>'}
+
+      <h3>3. ตารางจับคู่รหัส</h3>
+      ${HIS.mappings.length ? `<div class="table-scroll"><table class="io"><thead><tr><th>รหัสของ HIS</th><th class="text">ในระบบนี้</th><th class="text">แก้ล่าสุด</th><th></th></tr></thead><tbody>
+        ${HIS.mappings.map(m => `<tr><td>${esc(m.kind_label)} <b>${esc(m.his_code)}</b>${m.his_label ? '<br><small class="hint">' + esc(m.his_label) + '</small>' : ''}</td>
+          <td class="text">${esc(m.target_name)}</td><td class="text"><small>${esc(when(m.updated_at))}${m.updated_by ? ' · ' + esc(m.updated_by) : ''}</small></td>
+          <td><button class="btn small" type="button" data-his-unmap="${esc(m.kind)}" data-code="${esc(m.his_code)}">ลบ</button></td></tr>`).join('')}
+        </tbody></table></div>` : '<p class="hint">ยังไม่มีการจับคู่</p>'}
+      <form id="his-map-form" class="io-actions">
+        <label>ชนิด<select name="kind">${Object.entries(HIS.kinds).map(([k, label]) => `<option value="${esc(k)}">${esc(label)}</option>`).join('')}</select></label>
+        <label style="flex:0 1 170px">รหัสของ HIS<input type="text" name="his_code" maxlength="100" required></label>
+        <label style="flex:1 1 240px">ในระบบนี้<select name="target_id" required>${hisTargets('surgeon')}</select></label>
+        <button class="btn" type="submit">เพิ่มการจับคู่</button>
+      </form>
+
+      <h3>4. ทดลองส่งใบขอผ่าตัด (เหมือนมาจาก HIS)</h3>
+      <p class="hint">ผ่านขั้นตอนเดียวกับ API จริง แต่ไม่ต้องใช้ key · ใบขอที่สร้างจะเข้ารายการรอผ่าตัดจริง ลบได้ด้วยปุ่มยกเลิกคำขอในหน้าตาราง หรือส่งทดสอบซ้ำแบบยกเลิก</p>
+      <form id="his-test-form">
+        <div class="grid">
+          <label>เลขที่ใบขอ (his_ref)<input type="text" name="his_ref" maxlength="100" required value="TEST-${Date.now().toString().slice(-6)}"></label>
+          <label>HN<input type="text" name="hn" maxlength="50" required value="TEST-HN"></label>
+          <label>ชื่อผู้ป่วย<input type="text" name="patient_name" maxlength="150" required value="ผู้ป่วยทดสอบ"></label>
+          <label>รหัสแพทย์ของ HIS<input type="text" name="surgeon_code" maxlength="100" required value="${esc((HIS.targets.surgeon[0] || {}).code || '')}"></label>
+          <label>รหัสหัตถการ / ICD-9-CM<input type="text" name="procedure_code" maxlength="100" value="${esc((HIS.targets.procedure.find(p => p.code) || {}).code || '')}"></label>
+          <label>ชื่อหัตถการ<input type="text" name="procedure_name" maxlength="200" value="${esc((HIS.targets.procedure.find(p => p.code) || HIS.targets.procedure[0] || {}).name || '')}"></label>
+          <label>ความเร่งด่วน<select name="urgency"><option value="ELECTIVE">นัดล่วงหน้า</option><option value="URGENT">ด่วน</option><option value="EMERGENCY">ฉุกเฉิน</option></select></label>
+          <label>ควรผ่าตัดภายใน<input type="date" name="due_date"></label>
+          <label>ทำอะไร<select name="action"><option value="upsert">สร้าง / แก้ไข</option><option value="cancel">ยกเลิก</option></select></label>
+        </div>
+        <div class="io-actions"><button class="btn primary" type="submit">ส่งทดสอบ</button></div>
+      </form>
+      <div id="his-test-result"></div>
+
+      <h3>5. ข้อความล่าสุดจาก HIS</h3>
+      <p class="hint">ข้อความที่ไม่มีอะไรเปลี่ยน (ส่งซ้ำ) ไม่ถูกเก็บ · ข้อมูลผู้ป่วยในข้อความถูกลบเมื่อบันทึกแล้ว หรือเมื่อครบ 30 วัน</p>
+      ${HIS.inbox.length ? `<div class="table-scroll"><table class="io"><thead><tr><th>เวลา</th><th class="text">จาก</th><th class="text">เลขที่ใบขอ</th><th class="text">ผล</th><th></th></tr></thead><tbody>
+        ${HIS.inbox.map(m => `<tr><td>${esc(when(m.received_at))}</td><td class="text">${esc(m.source === 'test' ? 'ทดสอบ' : m.key || 'API')}<br><small class="hint">${esc(HIS_KIND_TH[m.kind] || m.kind)}</small></td>
+          <td class="text">${esc(m.his_ref || '–')}${m.code ? '<br><small class="hint">' + esc(m.code) + '</small>' : ''}</td>
+          <td class="text"><span class="badge ${HIS_STATUS_TONE[m.status] || ''}">${esc(m.status_label)}</span>${m.detail ? '<br><small>' + esc(m.detail) + '</small>' : ''}</td>
+          <td>${m.retry ? `<button class="btn small" type="button" data-his-retry="${m.id}">ประมวลผลใหม่</button>` : ''}</td></tr>`).join('')}
+        </tbody></table></div>` : '<p class="hint">ยังไม่มีข้อความ</p>'}`;
+
+    $('#his-copy')?.addEventListener('click', () => navigator.clipboard.writeText(HIS_NEW_KEY.key).then(() => toast('คัดลอกแล้ว', true), () => toast('คัดลอกไม่ได้ ให้เลือกข้อความแล้วคัดลอกเอง')));
+    $('#his-key-form').addEventListener('submit', e => {
+      e.preventDefault();
+      const f = e.target, scopes = [...f.querySelectorAll('[name="scope"]:checked')].map(x => x.value);
+      busy(f.querySelector('[type="submit"]'), async () => {
+        const out = await api('/api/admin/his/keys', { name: f.elements.name.value.trim(), scopes });
+        HIS_NEW_KEY = out.key; HIS = out.overview; renderHis();
+        $('#his-new-key').scrollIntoView({ behavior: 'smooth', block: 'center' });
+      });
+    });
+    box.querySelectorAll('[data-his-revoke]').forEach(b => b.addEventListener('click', () => {
+      if (!confirm(`ยกเลิก key "${b.dataset.name}"? ระบบ HIS ที่ใช้ key นี้จะส่งข้อมูลไม่ได้ทันที`)) return;
+      busy(b, async () => { HIS = (await api('/api/admin/his/keys/' + encodeURIComponent(b.dataset.hisRevoke), {}, 'DELETE')).overview; HIS_NEW_KEY = null; renderHis(); });
+    }));
+    box.querySelectorAll('[data-his-map-save]').forEach(b => b.addEventListener('click', () => {
+      const sel = b.parentElement.querySelector('select');
+      if (!sel.value) { toast('เลือกรายการในระบบก่อน'); return; }
+      busy(b, async () => {
+        const out = await api('/api/admin/his/mappings', { kind: sel.dataset.hisMap, his_code: sel.dataset.code, target_id: sel.value, label: sel.dataset.label || null }, 'PUT');
+        HIS = out.overview; renderHis();
+        toast(`จับคู่แล้ว · ประมวลผลใหม่ ${out.result.retried} ใบขอ บันทึกได้ ${out.result.applied}`, true);
+      });
+    }));
+    box.querySelectorAll('[data-his-unmap]').forEach(b => b.addEventListener('click', () => {
+      if (!confirm(`ลบการจับคู่รหัส ${b.dataset.code}?`)) return;
+      busy(b, async () => { HIS = (await api(`/api/admin/his/mappings/${encodeURIComponent(b.dataset.hisUnmap)}/${encodeURIComponent(b.dataset.code)}`, {}, 'DELETE')).overview; renderHis(); });
+    }));
+    const mapForm = $('#his-map-form');
+    mapForm.elements.kind.addEventListener('change', () => { mapForm.elements.target_id.innerHTML = hisTargets(mapForm.elements.kind.value); });
+    mapForm.addEventListener('submit', e => {
+      e.preventDefault();
+      busy(mapForm.querySelector('[type="submit"]'), async () => {
+        const out = await api('/api/admin/his/mappings', { kind: mapForm.elements.kind.value, his_code: mapForm.elements.his_code.value.trim(),
+                                                           target_id: mapForm.elements.target_id.value }, 'PUT');
+        HIS = out.overview; renderHis(); toast('เพิ่มการจับคู่แล้ว', true);
+      });
+    });
+    box.querySelectorAll('[data-his-retry]').forEach(b => b.addEventListener('click', () => busy(b, async () => {
+      const out = await api(`/api/admin/his/inbox/${b.dataset.hisRetry}/retry`, {});
+      HIS = out.overview; renderHis(); toast(out.result.status_label + (out.result.detail ? ': ' + out.result.detail : ''), out.result.status === 'APPLIED');
+    })));
+    $('#his-test-form').addEventListener('submit', e => {
+      e.preventDefault();
+      const f = e.target, v = name => f.elements[name].value.trim() || null;
+      const body = { his_ref: v('his_ref'), action: v('action'), hn: v('hn'), patient_name: v('patient_name'), surgeon_code: v('surgeon_code'),
+                     procedure_code: v('procedure_code'), procedure_name: v('procedure_name'), urgency: v('urgency'), due_date: v('due_date') };
+      busy(f.querySelector('[type="submit"]'), async () => {
+        const out = await api('/api/admin/his/test', body);
+        const r = out.result;
+        HIS = out.overview; renderHis();
+        $('#his-test-result').innerHTML = `<div class="row-item"><div class="title"><b>${esc(r.his_ref || '')}</b><span class="badge ${HIS_STATUS_TONE[r.status] || ''}">${esc(r.status_label)}</span></div>
+          <div>${esc(r.detail || '')}${r.code ? ' · รหัสเคส <b>' + esc(r.code) + '</b>' : ''}</div></div>`;
+        $('#his-test-result').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      });
+    });
+  }
+
   function fileBase64(file) {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
