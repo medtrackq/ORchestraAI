@@ -21,6 +21,8 @@ Environment:
 """
 from __future__ import annotations
 
+import base64
+import binascii
 import os
 from pathlib import Path
 from typing import Literal
@@ -34,6 +36,7 @@ from pydantic import BaseModel, Field
 
 from .auth import (COOKIE, ROLES, SESSION_HOURS, Accounts, AuthError, DbUserStore, MemoryUserStore,
                    ServiceUnavailable, TooManyAttempts, User, can)
+from . import hospital_io
 from .admin_store import require_supabase
 from .intake_service import IntakeService
 from .notify import DbNotifyStore, MemoryNotifyStore, Notifier, NotifyUnavailable
@@ -1016,3 +1019,60 @@ def admin_edit_card(card_id: str, body: CardIn, request: Request) -> dict:
 def admin_delete_card(card_id: str, request: Request) -> dict:
     user, admin = _admin(request, "cards")
     return _run(admin.delete_card, card_id, actor=_actor(user))
+
+
+# ------------------------------------------------- Excel import / export, demo data
+
+XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+class ImportIn(BaseModel):
+    filename: str = Field(min_length=1, max_length=200)
+    content: str = Field(min_length=1, max_length=7_200_000)  # base64 of a file up to 5 MB
+    commit: bool = False  # False: check and show what would change, save nothing
+
+
+class WipeIn(BaseModel):
+    confirm: str = Field(default="", max_length=50)
+
+
+@app.get("/api/admin/export.xlsx")
+def admin_export(request: Request, blank: bool = False) -> Response:
+    """The hospital data as an Excel workbook to edit and upload back (``blank``: the empty form)."""
+    _, admin = _admin(request, "hospital_data")
+    data = _run(hospital_io.build_workbook, admin, blank=blank)
+    name = f"orchestra-{'form' if blank else 'hospital-data'}-{admin.db.today().isoformat()}.xlsx"
+    return Response(data, media_type=XLSX,
+                    headers={"Content-Disposition": f'attachment; filename="{name}"', "Cache-Control": "no-store"})
+
+
+@app.post("/api/admin/import")
+def admin_import(body: ImportIn, request: Request) -> dict:
+    """Check an uploaded workbook (and save it when ``commit`` and it has no errors)."""
+    user, admin = _admin(request, "hospital_data")
+    text = body.content.split(",", 1)[1] if body.content.startswith("data:") else body.content
+    try:
+        content = base64.b64decode(text, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="อ่านไฟล์ไม่ได้ (ข้อมูลไฟล์ไม่ถูกต้อง)") from exc
+    return _run(hospital_io.import_file, admin, body.filename, content, commit=body.commit, actor=_actor(user))
+
+
+@app.get("/api/admin/demo-data")
+def admin_demo_status(request: Request) -> dict:
+    _, admin = _admin(request, "seed")
+    return _run(hospital_io.data_status, admin)
+
+
+@app.post("/api/admin/demo-data/delete-cases")
+def admin_delete_demo_cases(request: Request) -> dict:
+    """Remove the demo day's cases and the invented history; everything else stays."""
+    user, admin = _admin(request, "seed")
+    return _run(hospital_io.delete_demo_cases, admin, actor=_actor(user))
+
+
+@app.post("/api/admin/wipe")
+def admin_wipe(body: WipeIn, request: Request) -> dict:
+    """Delete all hospital data and bookings to start over (user accounts stay)."""
+    user, admin = _admin(request, "seed")
+    return _run(hospital_io.wipe_hospital, admin, body.confirm, actor=_actor(user))

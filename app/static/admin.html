@@ -108,6 +108,17 @@
   .eq-row label + label { flex: 0 1 90px; }
   textarea { resize: vertical; }
   .card-meta { display: grid; gap: 6px; margin: 10px 0 14px; }
+  .io-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 10px 0; }
+  table.io { border-collapse: collapse; width: 100%; font-size: .84rem; margin: 8px 0; }
+  .io th, .io td { border-bottom: 1px solid var(--border); padding: 6px 8px; text-align: right; }
+  .io th:first-child, .io td:first-child { text-align: left; }
+  .io td.bad { color: var(--bad); font-weight: 600; }
+  .io-errors { margin: 6px 0 0; padding-left: 18px; color: var(--bad); font-size: .84rem; }
+  .io-errors li { margin-bottom: 3px; }
+  .io-rows { margin: 4px 0 0; padding-left: 18px; font-size: .82rem; }
+  .io-rows small { color: var(--muted); }
+  .danger-zone { border: 1px solid var(--bad); border-radius: 12px; padding: 12px 14px; display: grid; gap: 8px; }
+  .danger-zone ul { margin: 0; padding-left: 18px; font-size: .84rem; }
   .people { max-height: 220px; overflow: auto; border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; display: grid; gap: 4px; }
   .people label { display: flex; align-items: center; gap: 8px; color: var(--text); font-size: .84rem; }
 
@@ -123,7 +134,7 @@
 <header class="top">
   <div class="brand">
     <span class="orb" aria-hidden="true"></span>
-    <div><h1 id="page-title">ข้อมูลโรงพยาบาล</h1><p id="page-sub">เวรและวันลา · ห้องผ่าตัดและเตียง · บุคลากร · เครื่องมือ · หัตถการ · preference card · วัสดุ/รากเทียม — ระบบใช้ข้อมูลนี้จัดตารางทันที</p></div>
+    <div><h1 id="page-title">ข้อมูลโรงพยาบาล</h1><p id="page-sub">เวรและวันลา · ห้องผ่าตัดและเตียง · บุคลากร · เครื่องมือ · หัตถการ · preference card · วัสดุ/รากเทียม · นำเข้าจาก Excel — ระบบใช้ข้อมูลนี้จัดตารางทันที</p></div>
   </div>
   <nav>
     <a class="btn" href="/">← กลับไปตารางผ่าตัด</a>
@@ -141,6 +152,7 @@
     <button class="tab" role="tab" aria-selected="false" data-tab="procedures" data-perm="hospital_view">หัตถการ</button>
     <button class="tab" role="tab" aria-selected="false" data-tab="cards" data-perm="cards">Preference card</button>
     <button class="tab" role="tab" aria-selected="false" data-tab="inventory" data-perm="inventory_view">วัสดุ/รากเทียม</button>
+    <button class="tab" role="tab" aria-selected="false" data-tab="io" data-perm="hospital_data">นำเข้า/ส่งออก Excel</button>
   </div>
 
   <div id="affected" hidden></div>
@@ -287,6 +299,35 @@
     <div id="card-add-box" hidden><h3>เพิ่ม preference card</h3><form id="form-card" class="row-item"></form></div>
   </section>
 
+  <!-- Excel import / export, demo data -->
+  <section class="card" data-panel="io" hidden>
+    <h2>นำเข้า/ส่งออกข้อมูลด้วย Excel</h2>
+    <p class="hint">ไฟล์เดียวมีทุกแผ่น: ห้องผ่าตัด เตียงพักฟื้น ชนิดเครื่องมือ เครื่องมือรายชิ้น บุคลากร วัสดุ หัตถการ และ preference card
+      (เวรและวันลายังใส่ที่แท็บเวรและวันลา)</p>
+
+    <h3>1. ดาวน์โหลดไฟล์</h3>
+    <div class="io-actions">
+      <button class="btn primary" type="button" id="io-export">ดาวน์โหลดข้อมูลปัจจุบัน (.xlsx)</button>
+      <button class="btn" type="button" id="io-blank">ดาวน์โหลดแบบฟอร์มเปล่า</button>
+    </div>
+    <p class="hint">แก้หรือเพิ่มแถวใน Excel ได้เลย แผ่นแรก "วิธีกรอก" อธิบายทุกคอลัมน์ · ระบบจับคู่กับข้อมูลเดิมด้วยรหัส (หรือชื่อ)
+      แถวที่ตรงกันจะถูกแก้ไข แถวใหม่จะถูกเพิ่ม · <b>รายการที่ไม่มีในไฟล์จะไม่ถูกลบ</b> (ปิดใช้งานได้ด้วยคอลัมน์ "ใช้งาน")</p>
+
+    <h3>2. อัปโหลดไฟล์ที่แก้แล้ว</h3>
+    <div class="io-actions">
+      <label style="flex:0 1 360px">ไฟล์ .xlsx (หรือ .csv ทีละแผ่น) ไม่เกิน 5 MB<input type="file" id="io-file" accept=".xlsx,.csv"></label>
+      <button class="btn primary" type="button" id="io-check" disabled>ตรวจไฟล์</button>
+    </div>
+    <p class="hint">ระบบตรวจทุกแถวและแสดงผลก่อน <b>ยังไม่บันทึกอะไร</b> จนกว่าจะกด "ยืนยันนำเข้า" · ถ้ามีแถวที่ผิดแม้แถวเดียว จะยังนำเข้าไม่ได้</p>
+    <div id="io-result"></div>
+
+    <div id="io-demo" hidden>
+      <h3>3. เริ่มใช้งานจริง: ลบข้อมูลตัวอย่าง</h3>
+      <div class="row-item" id="io-demo-cases"></div>
+      <div class="danger-zone" id="io-wipe"></div>
+    </div>
+  </section>
+
   <!-- Supplies and implants -->
   <section class="card" data-panel="inventory" hidden>
     <h2>วัสดุสิ้นเปลืองและรากเทียม</h2>
@@ -349,11 +390,11 @@
   }
 
   // Days whose bookings no longer fit after a change: offer to re-plan each.
-  function showAffected(affected, done) {
+  function showAffected(affected, done, plain = false) {
     const box = $('#affected');
     if (!affected || !affected.length) {
       box.hidden = !done;
-      box.innerHTML = done ? `<div class="affected"><span class="ok">✓ ${esc(done)} · ไม่มีเคสที่จองไว้ได้รับผลกระทบ</span></div>` : '';
+      box.innerHTML = done ? `<div class="affected"><span class="ok">✓ ${esc(done)}${plain ? '' : ' · ไม่มีเคสที่จองไว้ได้รับผลกระทบ'}</span></div>` : '';
       return;
     }
     box.hidden = false;
@@ -377,7 +418,7 @@
     document.querySelectorAll('[data-panel]').forEach(p => { p.hidden = p.dataset.panel !== name; });
     $('#affected').hidden = true;
     const load = { roster: loadRoster, rooms: loadRooms, staff: loadStaff, equipment: loadEquipment, inventory: loadInventory,
-                   procedures: loadProcedures, cards: loadCards }[name];
+                   procedures: loadProcedures, cards: loadCards, io: loadIo }[name];
     history.replaceState(null, '', '#' + name);
     load().catch(e => toast(e.message));
   }
@@ -998,6 +1039,121 @@
   });
   ['#card-surgeon', '#card-off'].forEach(id => $(id).addEventListener('change', () => { if (CARDS) renderCards(); }));
   $('#card-q').addEventListener('input', () => { if (CARDS) renderCards(); });
+
+  // ------------------------------------------------- Excel import / export
+  let IO_FILE = null, IO_REPORT = null;
+
+  async function loadIo() {
+    $('#io-demo').hidden = !can('seed');
+    if (can('seed')) await loadDemoData();
+  }
+
+  async function download(url, button) {
+    await busy(button, async () => {
+      const res = await fetch(url);
+      if (res.status === 401) { location.href = '/login'; return; }
+      if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.detail || ('HTTP ' + res.status)); }
+      const name = (/filename="([^"]+)"/.exec(res.headers.get('Content-Disposition') || '') || [])[1] || 'orchestra.xlsx';
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(await res.blob());
+      link.download = name;
+      document.body.appendChild(link); link.click(); link.remove();
+      setTimeout(() => URL.revokeObjectURL(link.href), 10000);
+    });
+  }
+  $('#io-export').addEventListener('click', e => download('/api/admin/export.xlsx', e.target));
+  $('#io-blank').addEventListener('click', e => download('/api/admin/export.xlsx?blank=1', e.target));
+
+  $('#io-file').addEventListener('change', e => {
+    IO_FILE = e.target.files[0] || null;
+    $('#io-check').disabled = !IO_FILE;
+    $('#io-result').innerHTML = '';
+  });
+  function fileBase64(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
+      reader.onerror = () => reject(new Error('อ่านไฟล์ไม่ได้'));
+      reader.readAsDataURL(file);
+    });
+  }
+  async function sendFile(commit) {
+    if (IO_FILE.size > 5 * 1024 * 1024) throw new Error('ไฟล์ใหญ่เกิน 5 MB');
+    return api('/api/admin/import', { filename: IO_FILE.name, content: await fileBase64(IO_FILE), commit });
+  }
+  $('#io-check').addEventListener('click', e => busy(e.target, async () => {
+    $('#io-result').innerHTML = '';
+    IO_REPORT = await sendFile(false);
+    renderIoReport(IO_REPORT);
+  }));
+
+  const ACTION_TH = { new: 'เพิ่ม', changed: 'แก้ไข' };
+  function renderIoReport(r) {
+    const saved = r.new + r.changed;
+    const rows = r.sheets.map(s => `<tr><td>${esc(s.title)}${s.source !== s.title ? ` <small class="hint">(${esc(s.source)})</small>` : ''}</td>
+        <td>${s.new}</td><td>${s.changed}</td><td>${s.unchanged}</td><td class="${s.errors.length ? 'bad' : ''}">${s.errors.length}</td></tr>`).join('');
+    const errors = r.sheets.flatMap(s => s.errors.map(x => `<li>แผ่น ${esc(s.title)} แถว ${x.row}${x.key ? ' (' + esc(x.key) + ')' : ''}: ${esc(x.message)}</li>`));
+    const warnings = [...r.warnings, ...r.sheets.flatMap(s => s.warnings)];
+    const details = r.sheets.filter(s => s.rows.length).map(s => `<details><summary>${esc(s.title)}: เพิ่ม ${s.new} · แก้ไข ${s.changed}</summary>
+        <ul class="io-rows">${s.rows.slice(0, 200).map(x => `<li><b>${ACTION_TH[x.action]}</b> แถว ${x.row} ${esc(x.key)}
+          ${x.changes.length ? `<br><small>${x.changes.map(esc).join(' · ')}</small>` : ''}</li>`).join('')}
+          ${s.rows.length > 200 ? `<li>… อีก ${s.rows.length - 200} แถว</li>` : ''}</ul></details>`).join('');
+    let verdict;
+    if (r.committed) verdict = `<div class="affected"><span class="ok">✓ นำเข้าแล้ว: เพิ่ม ${r.new} · แก้ไข ${r.changed} รายการ</span></div>`;
+    else if (r.errors) verdict = `<p class="readonly">พบแถวที่ผิด ${r.errors} แถว — แก้ในไฟล์แล้วอัปโหลดใหม่ (ยังไม่มีอะไรถูกบันทึก)</p>`;
+    else if (!saved) verdict = '<p class="readonly">ข้อมูลในไฟล์ตรงกับในระบบทุกแถว ไม่มีอะไรต้องนำเข้า</p>';
+    else verdict = `<div class="io-actions"><button class="btn primary" type="button" id="io-commit">ยืนยันนำเข้า ${saved} รายการ</button>
+        <span class="hint">ตรวจแล้วไม่มีแถวที่ผิด</span></div>`;
+    $('#io-result').innerHTML = `<div class="row-item">
+        <div class="title"><b>${esc(r.filename)}</b><span>${r.committed ? '<span class="badge ok">บันทึกแล้ว</span>' : '<span class="badge">ผลการตรวจ ยังไม่บันทึก</span>'}</span></div>
+        <table class="io"><thead><tr><th>แผ่น</th><th>เพิ่มใหม่</th><th>แก้ไข</th><th>ไม่เปลี่ยน</th><th>ผิดพลาด</th></tr></thead><tbody>${rows}</tbody></table>
+        ${errors.length ? `<b>แถวที่ต้องแก้</b><ul class="io-errors">${errors.slice(0, 100).join('')}${errors.length > 100 ? `<li>… อีก ${errors.length - 100} แถว</li>` : ''}</ul>` : ''}
+        ${warnings.length ? `<ul class="io-rows">${warnings.map(w => `<li>${esc(w)}</li>`).join('')}</ul>` : ''}
+        ${details}
+        ${verdict}
+      </div>`;
+    $('#io-commit')?.addEventListener('click', e => busy(e.target, async () => {
+      const done = await sendFile(true);
+      STAFF = null; IO_REPORT = done;
+      renderIoReport(done);
+      if (done.committed) showAffected(done.affected, `นำเข้าข้อมูลจาก ${done.filename} แล้ว`);
+      if (can('seed')) await loadDemoData();
+    }));
+  }
+
+  // ---------------------------------------------- demo data, start over
+  async function loadDemoData() {
+    const d = await api('/api/admin/demo-data');
+    const demo = d.demo_cases + d.demo_history;
+    $('#io-demo-cases').innerHTML = `<div class="title"><b>เคสตัวอย่างและประวัติตัวอย่าง</b>
+        ${demo ? `<span class="badge warn">${demo} รายการ</span>` : '<span class="badge ok">ไม่มีแล้ว</span>'}</div>
+      <p class="hint">เคสตัวอย่างของวันแรก ${d.demo_cases} เคส และประวัติเวลาผ่าตัดตัวอย่าง (HN HIST-…) ${d.demo_history} เคส
+        ที่ทำให้รายงานผู้บริหารและการพยากรณ์เวลามีข้อมูลตั้งแต่แรก · ลบแล้วระบบเรียนรู้จากเคสจริงเท่านั้น · ห้อง บุคลากร และข้อมูลอื่นยังอยู่</p>
+      ${demo ? '<div><button class="btn danger" type="button" id="io-demo-delete">ลบเคสตัวอย่างและประวัติตัวอย่าง</button></div>' : ''}`;
+    const counts = Object.entries(d.counts).filter(([, n]) => n > 0);
+    $('#io-wipe').innerHTML = `<b>ล้างข้อมูลโรงพยาบาลทั้งหมด แล้วเริ่มจากไฟล์ Excel</b>
+      ${counts.length ? `<p style="margin:0;font-size:.86rem">${counts.map(([k, n]) => `${esc(k)} <b>${n}</b>`).join(' · ')}</p>` : '<p class="hint">ฐานข้อมูลว่างอยู่แล้ว</p>'}
+      <p class="hint">ลบทุกอย่างข้างบน รวมเวร วันลา การปิดห้อง และการสั่งของ · <b>บัญชีผู้ใช้และการตั้งค่าแจ้งเตือนยังอยู่</b>
+        ${d.linked_users ? `แต่ ${d.linked_users} บัญชีที่ผูกกับรายชื่อบุคลากรจะต้องผูกใหม่หลังนำเข้า` : ''}
+        · ควรกด "ดาวน์โหลดข้อมูลปัจจุบัน" เก็บไว้ก่อน · ย้อนกลับไม่ได้</p>
+      ${counts.length ? `<div class="io-actions"><label style="flex:0 1 260px">พิมพ์ "${esc(d.wipe_phrase)}" เพื่อยืนยัน<input type="text" id="io-wipe-text" autocomplete="off"></label>
+        <button class="btn danger" type="button" id="io-wipe-go" disabled>ล้างข้อมูลทั้งหมด</button></div>` : ''}`;
+    $('#io-demo-delete')?.addEventListener('click', e => {
+      if (!confirm(`ลบเคสตัวอย่าง ${d.demo_cases} เคส และประวัติตัวอย่าง ${d.demo_history} เคส?\nเคสจริงไม่ถูกลบ`)) return;
+      busy(e.target, async () => {
+        const r = await api('/api/admin/demo-data/delete-cases', {});
+        showAffected([], `ลบเคสตัวอย่างและประวัติตัวอย่างแล้ว ${r.requests} รายการ`, true);
+        await loadDemoData();
+      });
+    });
+    $('#io-wipe-text')?.addEventListener('input', e => { $('#io-wipe-go').disabled = e.target.value.trim() !== d.wipe_phrase; });
+    $('#io-wipe-go')?.addEventListener('click', e => busy(e.target, async () => {
+      const r = await api('/api/admin/wipe', { confirm: $('#io-wipe-text').value });
+      STAFF = null;
+      showAffected([], `ล้างข้อมูลแล้ว · ยกเลิกการผูกบัญชี ${r.unlinked_users} บัญชี · ขั้นต่อไป: อัปโหลดไฟล์ Excel ข้อมูลจริง`, true);
+      await loadDemoData();
+    }));
+  }
 
   // ------------------------------------------------------------- inventory
   const SUPPLY_CAT_TH = { IMPLANT: 'รากเทียม', CONSUMABLE: 'วัสดุสิ้นเปลือง' };

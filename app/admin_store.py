@@ -92,6 +92,10 @@ class HospitalAdmin:
     def __init__(self, store: DatabaseStore) -> None:
         self.store = store
         self.db = store.db
+        # While importing a file (store.batch()): what each save did, logged once at the end; the
+        # schema read once; and the bookings checked once at the end instead of after every row.
+        self._batch: list[str] | None = None
+        self._schema: set[tuple[str, str]] | None = None
 
     # ------------------------------------------------------------- helpers
 
@@ -102,12 +106,17 @@ class HospitalAdmin:
         return ts.astimezone(self.db.tz).strftime("%Y-%m-%d %H:%M")
 
     def _columns(self, conn) -> set[tuple[str, str]]:
-        return {
+        if self._batch is not None and self._schema is not None:
+            return self._schema
+        cols = {
             (r["table_name"], r["column_name"])
             for r in conn.execute(
                 "SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = 'public'"
             )
         }
+        if self._batch is not None:
+            self._schema = cols
+        return cols
 
     def _require(self, conn, table: str, column: str) -> None:
         if (table, column) not in self._columns(conn):
@@ -115,6 +124,9 @@ class HospitalAdmin:
                              "supabase/migrations/20261104000000_hospital_data_and_room_closures.sql")
 
     def _log(self, conn, title: str, log: list[str], actor: dict | None, day: date | None = None) -> None:
+        if self._batch is not None:
+            self._batch.append(title)
+            return
         cols = self._columns(conn)
         world = SimpleNamespace(day=day or self.db.today(), has_activity=("orchestra_activity", "activity_id") in cols,
                                 has_actor_col=("orchestra_activity", "actor") in cols)
@@ -124,6 +136,8 @@ class HospitalAdmin:
 
     def _affected(self, conn, first: date, last: date) -> list[dict]:
         """Coming days (from today, at most CHECK_DAYS) whose bookings now break a rule."""
+        if self._batch is not None:
+            return []  # checked once when the whole file is in
         today = self.db.today()
         first, last = max(first, today), min(last, today + timedelta(days=CHECK_DAYS))
         if first > last:
