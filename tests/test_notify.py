@@ -13,7 +13,7 @@ from app.auth import LoginLimiter, MemoryUserStore, User
 from app.notify import LineSender, MemoryNotifyStore, Message, Notifier, Target, build_messages, describe_change
 from orchestra_engine import Assignment, ScheduleChange, SurgeryCase, Urgency, hm
 
-SUB = {"endpoint": "https://push.example.org/abc", "keys": {"p256dh": "BPk", "auth": "xyz"}}
+SUB = {"endpoint": "https://fcm.googleapis.com/fcm/send/abc", "keys": {"p256dh": "BPk", "auth": "xyz"}}
 
 
 def a(cid, start, room="OR-1", team=("S1", "N1")):
@@ -253,6 +253,7 @@ def test_web_push_is_encrypted_for_the_device(monkeypatch):
     public = device.public_key().public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint)
     auth = b"0123456789abcdef"
     b64 = lambda raw: base64.urlsafe_b64encode(raw).rstrip(b"=").decode()  # noqa: E731
+    monkeypatch.setattr("app.notify.push_endpoint_ok", lambda endpoint: True)  # a local stand-in push service
     target = Target("u", "webpush", f"http://127.0.0.1:{server.server_port}/push/abc",
                     {"p256dh": b64(public), "auth": b64(auth)})
     payload = {"title": "ตารางผ่าตัดของคุณเปลี่ยน", "body": "C1: ย้ายเป็น 10:30", "url": "/", "tag": "case"}

@@ -42,6 +42,7 @@ TITLES = {  # Thai names for the page (files not listed show the first comment l
     "20261109000000_case_cancellations.sql": "เหตุผลการงด/เลื่อนผ่าตัด",
     "20261110000000_case_milestones.sql": "เวลาแต่ละขั้นของเคส (กระดานสถานะ)",
     "20261111000000_or_blocks.sql": "บล็อกห้องผ่าตัดรายสัปดาห์",
+    "20261112000000_privacy.sql": "บันทึกการเข้าถึงข้อมูลผู้ป่วย และลบข้อมูลตามระยะเวลาเก็บ (PDPA)",
 }
 ROLES_TH = {"SURGEON": "ศัลยแพทย์", "ANESTHESIOLOGIST": "วิสัญญีแพทย์", "SCRUB_NURSE": "พยาบาลส่งเครื่องมือ",
             "CIRCULATING_NURSE": "พยาบาลช่วยรอบนอก"}
@@ -182,8 +183,13 @@ def settings(mode: str, llm_enabled: bool, push_state: str | None) -> list[dict]
     rows = [
         ("DATABASE_URL", "ฐานข้อมูล Supabase", mode == "supabase",
          "เชื่อมแล้ว" if mode == "supabase" else "ไม่ได้ตั้ง: ใช้ข้อมูลจำลองในหน่วยความจำ (หายเมื่อรีสตาร์ต)", True),
-        ("APP_USERNAME / APP_PASSWORD", "บัญชีหลักของเจ้าของระบบ", bool(_env("APP_PASSWORD")),
-         f"ชื่อผู้ใช้ {_env('APP_USERNAME') or 'orchestra'}" if _env("APP_PASSWORD") else "ไม่ได้ตั้งรหัสผ่าน", True),
+        ("APP_USERNAME / APP_PASSWORD", "บัญชีหลักของเจ้าของระบบ", len(_env("APP_PASSWORD")) >= 12,
+         (f"ชื่อผู้ใช้ {_env('APP_USERNAME') or 'orchestra'}"
+          + (" · รหัสผ่านสั้นกว่า 12 ตัวอักษร ควรเปลี่ยนให้ยาวขึ้น" if len(_env("APP_PASSWORD")) < 12 else ""))
+         if _env("APP_PASSWORD") else "ไม่ได้ตั้งรหัสผ่าน", True),
+        ("SESSION_SECRET", "กุญแจลงชื่อ session ของการเข้าสู่ระบบ", bool(_env("SESSION_SECRET")),
+         "ตั้งแล้ว" if _env("SESSION_SECRET") else "ไม่ได้ตั้ง: ใช้กุญแจที่คำนวณจาก APP_PASSWORD (ควรตั้งเป็นค่าสุ่มยาว ๆ แยกต่างหาก)",
+         False),
         ("ANTHROPIC_API_KEY", "Intake Agent อ่านคำขอด้วย Claude", llm_enabled,
          "ใช้ Claude" if llm_enabled else "ไม่ได้ตั้ง: ใช้กฎคำสำคัญแทน (ยังใช้ได้)", False),
         ("LINE_CHANNEL_ACCESS_TOKEN / LINE_CHANNEL_SECRET", "แจ้งเตือนทาง LINE", line,
@@ -264,6 +270,17 @@ def checklist(conn, migration_rows: list[dict], rls: list[str], users: list) -> 
     accounts = [u for u in users if u.is_active and u.user_id != "env-admin"]
     add("มีบัญชีผู้ใช้ของแต่ละคน", "ok" if len(accounts) > 1 else "info",
         f"{len(accounts)} บัญชี" + ("" if len(accounts) > 1 else " · ควรสร้างบัญชีของแต่ละคน แทนการใช้บัญชีหลักร่วมกัน"), "/#users")
+    logged = "patient_access_log" in tables
+    add("บันทึกการเข้าถึงข้อมูลผู้ป่วย (PDPA)", "ok" if logged else "bad",
+        "บันทึกทุกครั้งที่มีคนเห็น HN / ชื่อผู้ป่วย" if logged else "ยังไม่ได้รัน SQL ไฟล์ 013: ยังไม่มีบันทึกว่าใครเปิดดูข้อมูลผู้ป่วย",
+        "/privacy" if logged else "#migrations")
+    days = None
+    if "app_settings" in tables:
+        row = conn.execute("SELECT value FROM app_settings WHERE key = 'retention_patient_days'").fetchone()
+        days = row["value"] if row else None
+    add("กำหนดระยะเวลาเก็บข้อมูลผู้ป่วย (PDPA)", "ok" if days else "warn",
+        f"ลบ HN ชื่อ และข้อความอิสระ {days} วันหลังผ่าตัด" if days else "ยังไม่ได้กำหนด: ข้อมูลระบุตัวผู้ป่วยถูกเก็บไว้ไม่มีกำหนด",
+        "/privacy")
     return out
 
 

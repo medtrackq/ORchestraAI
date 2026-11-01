@@ -361,6 +361,8 @@ class ScheduleStore:
             if a is None:
                 raise StoreError(f"ไม่พบเคส {case_id} ในตาราง")
             check_own_case(actor, self.result.cases[case_id].surgeon_id)
+            if step in ms.ACTUAL_STEPS:  # into / out of the OR are the actual times: the case's team only
+                check_team(actor, a.staff_ids)
             now = self._clock()
             minutes = self._case_minutes(case_id)
             if clear:
@@ -440,12 +442,13 @@ class ScheduleStore:
             self.pending.pop(cid, None)
         self.result = result
 
-    def _case_id(self, data: dict, prefix: str, commit: bool) -> str:
+    def _case_id(self, data: dict, prefix: str, commit: bool, actor: dict | None = None) -> str:
         """Rebooking a waiting case keeps its id."""
         pending = data.get("pending_id")
         if pending:
             if pending not in self.pending:
                 raise StoreError("คำขอนี้ถูกจองหรือยกเลิกไปแล้ว กรุณาโหลดใหม่")
+            check_own_case(actor, self.pending[pending].surgeon_id)  # surgeons rebook only their own requests
             return pending
         return self._next_id(prefix, commit=commit)
 
@@ -582,7 +585,7 @@ class ScheduleStore:
         with self._lock:
             if start < self.result.now_min:
                 raise StoreError(f"เวลาที่ขอผ่านไปแล้ว (เวลาปัจจุบันของตาราง {fmt(self.result.now_min)})")
-            case = build_case(self.hospital, data, self._case_id(data, "R", commit=False))
+            case = build_case(self.hospital, data, self._case_id(data, "R", commit=False, actor=actor))
             check = self.opt.check_slot(self.result, case, start, verbose=False)
             out = check.to_dict()
             out["booked"] = False
@@ -602,7 +605,7 @@ class ScheduleStore:
     def emergency(self, data: dict, now_text: str, *, day: str | None = None, actor: dict | None = None) -> dict:
         now = parse_time(now_text)
         with self._lock:
-            case = build_case(self.hospital, {**data, "urgency": "EMERGENCY"}, self._case_id(data, "E", commit=False),
+            case = build_case(self.hospital, {**data, "urgency": "EMERGENCY"}, self._case_id(data, "E", commit=False, actor=actor),
                               release=now)
             after = self.opt.insert_emergency(
                 self.result, list(self.result.cases.values()), [case], now_min=now,

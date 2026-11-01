@@ -527,7 +527,9 @@ class HospitalAdmin:
             ]
         return {"beds": beds, "types": list(BED_TYPES), "status_ready": ("recovery_beds", "status") in cols}
 
-    def save_bed(self, data: dict, *, code: str | None = None, actor: dict | None = None) -> dict:
+    def save_bed(self, data: dict, *, code: str | None = None, actor: dict | None = None,
+                 keep_type: bool = False) -> dict:
+        """Add or edit a recovery bed; ``keep_type``: open / close / note only (schedulers), not the bed type."""
         new = code is None
         code = (data.get("code") if new else code) or ""
         if not CODE.match(code):
@@ -547,8 +549,8 @@ class HospitalAdmin:
                                  (code, bed_type))
                 except psycopg.errors.UniqueViolation as exc:
                     raise StoreError(f"มีเตียง {code} อยู่แล้ว") from exc
-            elif conn.execute("UPDATE recovery_beds SET bed_type = %s WHERE bed_code = %s",
-                              (bed_type, code)).rowcount != 1:
+            elif conn.execute("UPDATE recovery_beds SET bed_type = CASE WHEN %s THEN bed_type ELSE %s END "
+                              "WHERE bed_code = %s", (keep_type, bed_type, code)).rowcount != 1:
                 raise StoreError(f"ไม่พบเตียง {code}")
             if extra:
                 conn.execute("UPDATE recovery_beds SET status = %s, note = %s WHERE bed_code = %s", (status, note, code))

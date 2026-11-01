@@ -166,8 +166,20 @@ def synthetic_history(cards: list[dict], *, days: int = 40, seed: int = 7) -> li
 
 # ------------------------------------------------------------ triage / NLP
 
-HN_PATTERN = re.compile(r"\bHN[\s.:#-]*([A-Za-z0-9][A-Za-z0-9/-]{2,})", re.IGNORECASE)
+# Patient identifiers, masked before free text leaves the hospital (Claude API). "HN" may follow Thai
+# text directly (no word boundary), be written "H.N." or in Thai.
+HN_PATTERN = re.compile(r"(?:(?<![A-Za-z])H\.?\s?N\.?|เลขที่ผู้ป่วย|เลขประจำตัวผู้ป่วย|เลข\s*HN)"
+                        r"[\s.:#-]*([A-Za-z0-9][A-Za-z0-9/-]{2,})", re.IGNORECASE)
 LONG_NUMBER = re.compile(r"(?<![\d:.])\d{6,13}(?![\d:.])")
+NUMBER_YEAR = re.compile(r"(?<![\d/])\d{4,10}/\d{2,4}(?![\d/])")  # HN written 54321/66
+ID_NUMBER = re.compile(r"(?<!\d)\d[ -]?\d{4}[ -]?\d{5}[ -]?\d{2}[ -]?\d(?!\d)")  # Thai national ID, with dashes
+PHONE = re.compile(r"(?<!\d)0\d{1,2}[ -]?\d{3}[ -]?\d{3,4}(?!\d)")
+_TH_TITLE = r"(?:นางสาว|นาง|นาย|น\.ส\.|ด\.ช\.|ด\.ญ\.|เด็กชาย|เด็กหญิง|ผู้ป่วยชื่อ|ชื่อผู้ป่วย|ชื่อ)"
+TH_NAME = re.compile(_TH_TITLE + r"\s*([ก-๙]+)(?:(\s+)([ก-๙]+))?")
+EN_NAME = re.compile(r"(?<![A-Za-z])(?:Mr|Mrs|Ms|Miss|Mstr|Master)\.?\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?")
+# A second Thai word after a name is the surname unless it reads like part of the request.
+_NOT_A_NAME = ("ผ่า", "ตัด", "ส่อง", "ไส้", "ต่อม", "ข้อ", "เข่า", "พรุ่งนี้", "วัน", "เวลา", "โมง", "ด่วน", "นาที",
+               "ชั่วโมง", "ชม", "ห้อง", "หมอ", "แพทย์", "เคส", "อายุ", "ปี", "ขอ", "จอง", "นัด", "ฉุกเฉิน", "ไม่")
 
 EMERGENCY_WORDS = ["ฉุกเฉิน", "emergency", "stat", "ทันที", "ด่วนที่สุด", "ด่วนมาก", "ช็อก", "shock",
                    "เลือดออก", "bleeding", "hemorrhage", "haemorrhage", "rupture", "แตก", "ทะลุ",
@@ -216,11 +228,27 @@ EN_WEEKDAYS = {"monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3, "friday
 
 
 def mask_identifiers(text: str) -> tuple[str, str | None]:
-    """Replace HN and long ID numbers with placeholders. Returns (masked, first HN)."""
+    """Replace HN, ID / phone numbers and names after a title with placeholders. Returns (masked, first HN).
+
+    Best effort for free text: it catches the usual ways staff write these, not every possible one, so
+    the request form still asks people not to type more about the patient than the booking needs.
+    """
     match = HN_PATTERN.search(text or "")
     hn = match.group(1) if match else None
     masked = HN_PATTERN.sub("HN [HN]", text or "")
+    masked = ID_NUMBER.sub("[ID]", masked)
+    masked = PHONE.sub("[TEL]", masked)
+    masked = NUMBER_YEAR.sub("[ID]", masked)
     masked = LONG_NUMBER.sub("[ID]", masked)
+
+    def thai_name(m: re.Match) -> str:
+        surname = m.group(3)
+        if surname and not any(w in surname for w in _NOT_A_NAME):
+            return "[ชื่อ]"
+        return "[ชื่อ]" + (m.group(2) + surname if surname else "")
+
+    masked = TH_NAME.sub(thai_name, masked)
+    masked = EN_NAME.sub("[NAME]", masked)
     return masked, hn
 
 

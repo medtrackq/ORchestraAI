@@ -449,7 +449,7 @@ def test_notification_store_in_the_database(store, db_url):
     user = Accounts.store.list()[0]
     key = n.status(user)["webpush"]["public_key"]
     assert WebPushSender(DbNotifyStore(store.db)).public_key() == key  # one key pair for every server process
-    n.subscribe(user, {"endpoint": "https://push.example.org/1", "keys": {"p256dh": "p", "auth": "a"}}, "Phone")
+    n.subscribe(user, {"endpoint": "https://fcm.googleapis.com/fcm/send/1", "keys": {"p256dh": "p", "auth": "a"}}, "Phone")
     n.set_prefs(user, {"case": False})
     status = n.status(user)
     assert status["webpush"]["devices"] == ["Phone"] and status["prefs"]["case"] is False
@@ -457,7 +457,7 @@ def test_notification_store_in_the_database(store, db_url):
     assert notify_store.take_code(code) == "u1" and notify_store.take_code(code) is None
     notify_store.log("u1", "webpush", "test", "t", "b", "sent", None)
     assert n.status(user)["recent"][0]["status"] == "sent"
-    assert n.unsubscribe(user, "https://push.example.org/1") and n.status(user)["webpush"]["devices"] == []
+    assert n.unsubscribe(user, "https://fcm.googleapis.com/fcm/send/1") and n.status(user)["webpush"]["devices"] == []
 
     with __import__("psycopg").connect(db_url, autocommit=True) as conn:
         conn.execute("DROP TABLE notify_targets")

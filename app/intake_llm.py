@@ -27,7 +27,8 @@ SYSTEM = (
     "Write urgency_reason (one short sentence) and notes in Thai. Resolve relative dates against the planning "
     "date given. duration_mins is 0 unless the text states a duration. airborne is true only when the "
     "patient has or is suspected of an airborne infection (e.g. TB, measles, varicella, COVID-19) and needs "
-    "a negative-pressure room. Patient identifiers are masked; never guess them."
+    "a negative-pressure room. HN, ID and phone numbers and patient names written after a title (นาย, นาง, "
+    "Mr, ...) are replaced with placeholders such as [HN], [ID], [TEL], [ชื่อ], [NAME]; never guess or repeat them."
 )
 
 
