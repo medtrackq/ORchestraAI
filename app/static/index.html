@@ -195,6 +195,38 @@
   .staff-tools select { flex: 0 1 220px; }
   .actual-form { display: flex; gap: 8px; flex-wrap: wrap; align-items: end; margin-top: 8px; }
   .actual-form label { flex: 1 1 110px; }
+  /* pre-op readiness: badge on each case, checklist in the case detail, list tab */
+  .g-block.has-rd { padding-right: 22px; }
+  .g-block .rd { position: absolute; right: 3px; bottom: 3px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 99px;
+    font: 700 .64rem/16px system-ui, sans-serif; text-align: center; background: #fff; color: #0f172a; }
+  .g-block .rd.ready { color: #047857; }
+  .g-block .rd.pending { color: #92400e; }
+  .g-block .rd.problem { background: #fee2e2; color: #b91c1c; box-shadow: 0 0 0 1.5px #b91c1c; }
+  .ready-box { border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; margin-top: 10px; display: grid; gap: 8px; }
+  .ready-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .ready-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 10px; align-items: center; font-size: .84rem;
+    padding-top: 6px; border-top: 1px dashed var(--border); }
+  .ready-item small { grid-column: 1 / -1; color: var(--muted); }
+  .ready-item small.problem { color: var(--bad); }
+  .ri-state { font-size: .78rem; white-space: nowrap; }
+  .ri-state.DONE { color: var(--ok); } .ri-state.PROBLEM { color: var(--bad); font-weight: 600; } .ri-state.PENDING { color: var(--warn); }
+  .ri-state.NA { color: var(--muted); }
+  .seg { display: inline-flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end; }
+  .seg button { border: 1px solid var(--border); background: var(--surface); border-radius: 7px; padding: 3px 8px; font-size: .74rem; cursor: pointer; color: var(--muted); }
+  .seg button[aria-pressed="true"] { color: #fff; border-color: transparent; font-weight: 600; }
+  .seg button[aria-pressed="true"][data-status="DONE"] { background: var(--ok); }
+  .seg button[aria-pressed="true"][data-status="NA"] { background: var(--muted); }
+  .seg button[aria-pressed="true"][data-status="PROBLEM"] { background: var(--bad); }
+  .seg button[aria-pressed="true"][data-status="PENDING"] { background: var(--warn); }
+  :root[data-theme="dark"] .seg button[aria-pressed="true"] { color: #04121a; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .seg button[aria-pressed="true"] { color: #04121a; } }
+  @media (max-width: 640px) { .ready-item { grid-template-columns: minmax(0, 1fr); } .seg { justify-content: flex-start; } }
+  .ready-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+  .rchip { font-size: .72rem; padding: 2px 8px; border-radius: 99px; border: 1px solid var(--border); background: var(--surface-2); color: var(--muted); cursor: default; }
+  button.rchip { cursor: pointer; }
+  .rchip.DONE { background: var(--ok-soft); color: var(--ok); border-color: transparent; }
+  .rchip.PROBLEM { background: var(--bad-soft); color: var(--bad); border-color: var(--bad); font-weight: 600; }
+  .rchip.PENDING { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
   [hidden] { display: none !important; }
 
   @media (max-width: 1100px) { .layout { grid-template-columns: minmax(0, 1fr); } }
@@ -242,6 +274,7 @@
       <span>เส้นประ = เริ่มผ่าตัดแล้ว (ล็อก)</span>
       <span>กรอบเขียว = เพิ่งเปลี่ยน</span>
       <span><i style="background: repeating-linear-gradient(45deg, var(--bad-soft) 0 3px, transparent 3px 6px); border: 1px dashed var(--bad)"></i>ปิดห้อง (ซ่อม/ทำความสะอาดใหญ่)</span>
+      <span>วงกลมมุมขวา = ความพร้อมก่อนผ่าตัด: ตัวเลข = รายการที่ยังไม่ได้ · ✓ พร้อม · ! มีปัญหา</span>
     </div>
     <div id="replan-result" class="result"></div>
     <div id="detail" class="detail" hidden></div>
@@ -254,6 +287,7 @@
       <button class="tab" role="tab" aria-selected="true" data-tab="book" data-perm="book">จองผ่าตัด</button>
       <button class="tab er" role="tab" aria-selected="false" data-tab="er" data-perm="emergency">ฉุกเฉิน</button>
       <button class="tab" role="tab" aria-selected="false" data-tab="over" data-perm="overrun">เกินเวลา</button>
+      <button class="tab" role="tab" aria-selected="false" data-tab="ready" data-perm="view">ความพร้อม</button>
       <button class="tab" role="tab" aria-selected="false" data-tab="staff" data-perm="staff_view">บุคลากร</button>
       <button class="tab" role="tab" aria-selected="false" data-tab="equip" data-perm="equipment">เครื่องมือ</button>
       <button class="tab" role="tab" aria-selected="false" data-tab="users" data-perm="users">ผู้ใช้</button>
@@ -351,6 +385,13 @@
       <div id="user-list" class="rows"></div>
     </section>
 
+    <section data-panel="ready" hidden>
+      <p class="hint">รายการเช็กก่อนผ่าตัดของทุกเคสในวันที่แสดง: ใบยินยอม ประเมินวิสัญญี ผลแล็บ งดน้ำงดอาหาร จองเลือด (เฉพาะหัตถการที่ต้องใช้)
+        และทำเครื่องหมายตำแหน่งผ่าตัด · กดป้ายเพื่อสลับ ยังไม่ทำ ↔ เรียบร้อย · ตั้ง "ไม่ต้องใช้" หรือ "มีปัญหา" ได้ที่รายละเอียดเคส</p>
+      <label style="display:flex;align-items:center;gap:6px;margin:8px 0"><input type="checkbox" id="ready-open">เฉพาะเคสที่ยังไม่พร้อม</label>
+      <div class="rows" id="ready-list"></div>
+    </section>
+
     <section data-panel="log" hidden>
       <div id="activity"></div>
     </section>
@@ -385,6 +426,7 @@
   const $ = (sel, root = document) => root.querySelector(sel);
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const hhmm = t => String(Math.floor(t / 60) % 24).padStart(2, '0') + ':' + String(t % 60).padStart(2, '0');
+  const localDay = () => { const d = new Date(); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10); };
   const nowText = () => {
     // Real clock during working hours, otherwise a mid-morning demo time.
     const d = new Date(), m = d.getHours() * 60 + d.getMinutes();
@@ -668,7 +710,104 @@
     renderActivity();
     renderStaff();
     renderCssd();
+    renderReadiness();
     if (selected) showDetail(selected);
+  }
+
+  // ------------------------------------------------------- pre-op readiness
+  const READY_ITEMS = [['consent', 'ใบยินยอมผ่าตัด', 'ยินยอม'], ['anesthesia', 'ประเมินก่อนระงับความรู้สึก', 'วิสัญญี'],
+    ['labs', 'ผลแล็บ/ผลตรวจก่อนผ่าตัด', 'แล็บ'], ['npo', 'งดน้ำงดอาหาร', 'NPO'], ['blood', 'จองเลือด', 'เลือด'],
+    ['site', 'ทำเครื่องหมายตำแหน่งผ่าตัด', 'Site']];
+  const READY_STATE = { PENDING: ['○', 'ยังไม่ทำ'], DONE: ['✓', 'เรียบร้อย'], NA: ['–', 'ไม่ต้องใช้'], PROBLEM: ['!', 'มีปัญหา'] };
+  const SHORT = Object.fromEntries(READY_ITEMS.map(([k, , s]) => [k, s]));
+  const readyOf = cid => (STATE.readiness || {})[cid];
+  function readyText(r) {
+    if (r.status === 'ready') return 'พร้อมผ่าตัด';
+    const parts = [];
+    if (r.problems.length) parts.push('มีปัญหา: ' + r.problems.map(k => SHORT[k]).join(', '));
+    if (r.pending.length) parts.push('ยังไม่ได้: ' + r.pending.map(k => SHORT[k]).join(', '));
+    return parts.join(' · ');
+  }
+  function readyBadge(r) {
+    const mark = r.status === 'ready' ? '✓' : r.status === 'problem' ? '!' : String(r.pending.length);
+    return `<i class="rd ${r.status}" aria-label="${esc(readyText(r))}">${mark}</i>`;
+  }
+  function readyStatusBadge(r) {
+    return r.status === 'ready' ? '<span class="badge ok">✓ พร้อม</span>'
+      : r.status === 'problem' ? `<span class="badge bad">! มีปัญหา ${r.problems.length}</span>`
+      : `<span class="badge warn">ยังไม่พร้อม (เหลือ ${r.pending.length})</span>`;
+  }
+  const surgeonOf = b => (b.team[0] || {}).staff_id;
+  const canReady = b => can('readiness') && STATE.readiness_ready && (STATE.me.role !== 'surgeon' || surgeonOf(b) === STATE.me.staff_id);
+
+  function readinessBox(b) {
+    const r = readyOf(b.case_id);
+    if (!r) return STATE.readiness_ready === false && can('readiness')
+      ? '<p class="hint">รายการเช็กความพร้อมใช้ได้หลังรัน supabase/migrations/20261108000000_case_readiness.sql</p>' : '';
+    const edit = canReady(b);
+    return `<div class="ready-box">
+      <div class="ready-head"><b>ความพร้อมก่อนผ่าตัด</b>${readyStatusBadge(r)}</div>
+      ${READY_ITEMS.map(([key, label]) => {
+        const it = r.items[key], [mark, text] = READY_STATE[it.status];
+        const who = it.by ? `${esc(it.by)} · ${esc(it.at || '')}` : it.auto ? 'หัตถการนี้ไม่ต้องจองเลือด' : '';
+        const note = it.note ? `<small class="${it.status === 'PROBLEM' ? 'problem' : ''}">${esc(it.note)}</small>` : '';
+        return `<div class="ready-item"><span>${esc(label)}</span>
+          ${edit ? `<div class="seg" role="group" aria-label="${esc(label)}">${Object.entries(READY_STATE).map(([st, [, t]]) =>
+            `<button type="button" data-item="${key}" data-status="${st}" aria-pressed="${it.status === st}">${t}</button>`).join('')}</div>`
+            : `<span class="ri-state ${it.status}">${mark} ${text}</span>`}
+          ${note}${who ? `<small>${who}</small>` : ''}</div>`;
+      }).join('')}</div>`;
+  }
+
+  async function setReady(b, item, status) {
+    let note = null;
+    if (status === 'PROBLEM') {
+      const current = readyOf(b.case_id)?.items[item]?.note || '';
+      note = prompt(`${b.case_id}: ${READY_ITEMS.find(x => x[0] === item)[1]} มีปัญหาอะไร (ไม่ต้องใส่ชื่อหรือ HN ผู้ป่วย)`, current);
+      if (note === null || !note.trim()) return;
+    }
+    const data = await api('/api/cases/' + encodeURIComponent(b.case_id) + '/readiness', { item, status, note });
+    STATE = data.state; render();
+  }
+  function wireReadiness(root, b) {
+    root.querySelectorAll('.seg button').forEach(btn => btn.addEventListener('click', () => {
+      if (btn.getAttribute('aria-pressed') === 'true' && btn.dataset.status !== 'PROBLEM') return;
+      busy(btn, () => setReady(b, btn.dataset.item, btn.dataset.status));
+    }));
+  }
+
+  function renderReadiness() {
+    const list = $('#ready-list');
+    if (!STATE.readiness_ready) {
+      list.innerHTML = '<p class="hint">ยังใช้รายการเช็กความพร้อมไม่ได้: ให้รัน supabase/migrations/20261108000000_case_readiness.sql ใน Supabase ก่อน</p>';
+      return;
+    }
+    const onlyOpen = $('#ready-open').checked;
+    const bookings = [...STATE.schedule.bookings].sort((a, b) => a.start_min - b.start_min)
+      .filter(b => readyOf(b.case_id) && (!onlyOpen || readyOf(b.case_id).status !== 'ready'));
+    list.innerHTML = bookings.map(b => {
+      const r = readyOf(b.case_id), edit = canReady(b);
+      return `<div class="row-item" data-ready-case="${esc(b.case_id)}">
+        <div class="title"><b>${esc(b.case_id)} · ${esc(b.start)} ${esc(b.or_id)}</b>${readyStatusBadge(r)}</div>
+        <small class="hint">${esc(b.procedure)}${b.patient_hn && b.patient_hn !== '•••' ? ' · ' + esc(b.patient_hn) : ''} · ${esc((b.team[0] || {}).name || '')}</small>
+        <div class="ready-chips">${READY_ITEMS.map(([key, label, short]) => {
+          const it = r.items[key], [mark] = READY_STATE[it.status];
+          const toggle = edit && (it.status === 'PENDING' || it.status === 'DONE');
+          const title = `${label}: ${READY_STATE[it.status][1]}${it.note ? ' · ' + it.note : ''}`;
+          return toggle ? `<button type="button" class="rchip ${it.status}" data-item="${key}" data-status="${it.status === 'DONE' ? 'PENDING' : 'DONE'}" title="${esc(title)}">${mark} ${short}</button>`
+            : `<span class="rchip ${it.status}" title="${esc(title)}">${mark} ${short}</span>`;
+        }).join('')}
+        <button type="button" class="rchip" data-open="${esc(b.case_id)}">รายละเอียด</button></div>
+      </div>`;
+    }).join('') || `<p class="hint">${STATE.schedule.bookings.length ? 'ทุกเคสพร้อมแล้ว' : 'ไม่มีเคสในวันนี้'}</p>`;
+    list.querySelectorAll('button[data-item]').forEach(btn => btn.addEventListener('click', () => {
+      const b = STATE.schedule.bookings.find(x => x.case_id === btn.closest('[data-ready-case]').dataset.readyCase);
+      busy(btn, () => setReady(b, btn.dataset.item, btn.dataset.status));
+    }));
+    list.querySelectorAll('button[data-open]').forEach(btn => btn.addEventListener('click', () => {
+      selected = btn.dataset.open; renderGantt(); showDetail(selected);
+      $('#detail').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }));
   }
 
   const ROOM_TYPE_TH = { STANDARD: 'มาตรฐาน', HYBRID: 'Hybrid', NEGATIVE_PRESSURE: 'ความดันลบ' };
@@ -697,11 +836,12 @@
     const blocks = STATE.schedule.bookings.map(b => {
       const top = rowOf[b.or_id] * ROW + 6;
       const mine = STATE.me.staff_id && b.team.some(t => t.staff_id === STATE.me.staff_id);
-      const cls = ['g-block', 'u-' + b.urgency, b.frozen ? 'frozen' : '', highlight.has(b.case_id) ? 'hl' : '', selected === b.case_id ? 'sel' : '', mine ? 'mine' : ''].join(' ');
+      const r = readyOf(b.case_id);
+      const cls = ['g-block', 'u-' + b.urgency, b.frozen ? 'frozen' : '', highlight.has(b.case_id) ? 'hl' : '', selected === b.case_id ? 'sel' : '', mine ? 'mine' : '', r ? 'has-rd' : ''].join(' ');
       return `<div class="g-clean" style="left:${pct(b.end_min)};width:${(b.cleanup_end_min - b.end_min) / span * 100}%;top:${top}px"></div>
         <button type="button" class="${cls}" data-case="${esc(b.case_id)}" style="left:${pct(b.start_min)};width:${(b.end_min - b.start_min) / span * 100}%;top:${top}px"
-          title="${esc(b.case_id + ' ' + b.procedure + ' ' + b.start + '-' + b.end)}">
-          <b>${esc(b.case_id)} ${esc(b.procedure)}</b><span>${esc(b.start)}-${esc(b.end)}</span></button>`;
+          title="${esc(b.case_id + ' ' + b.procedure + ' ' + b.start + '-' + b.end + (r ? ' · ' + readyText(r) : ''))}">
+          <b>${esc(b.case_id)} ${esc(b.procedure)}</b><span>${esc(b.start)}-${esc(b.end)}</span>${r ? readyBadge(r) : ''}</button>`;
     }).join('');
     const now = nowMin ? `<div class="g-now" style="left:${pct(nowMin)}"></div>` : '';
     $('#gantt').innerHTML = `
@@ -727,7 +867,9 @@
       </dl>
       ${b.reasoning.length ? '<ul class="why">' + b.reasoning.map(r => '<li>' + esc(r) + '</li>').join('') + '</ul>' : ''}
       ${fatigueBox((STATE.fatigue || []).filter(i => i.case_id === b.case_id), 'เกณฑ์ความเหนื่อยล้าของทีมในเคสนี้')}
+      ${readinessBox(b)}
       ${actualTimes(b)}`;
+    wireReadiness(box, b);
     const form = box.querySelector('.actual-form');
     if (form) form.addEventListener('submit', e => {
       e.preventDefault();
@@ -793,12 +935,34 @@
         <ul>${low.slice(0, 5).map(x => `<li>${esc(x.name)} (${esc(x.id)}): เหลือให้เคสใหม่ ${x.left} ${esc(x.unit)}${x.note ? ' · ' + esc(x.note) : ''}</li>`).join('')}</ul>
         ${STATE.mode === 'supabase' ? '<a class="btn" href="/admin#inventory">ไปที่คลังวัสดุ</a>' : ''}</div>`);
     }
+    const notStarted = new Set(STATE.schedule.bookings.filter(b => !b.frozen).map(b => b.case_id));
+    const rd = Object.entries(STATE.readiness || {}).filter(([cid]) => notStarted.has(cid));
+    const problems = rd.filter(([, r]) => r.status === 'problem'), open = rd.filter(([, r]) => r.status === 'pending');
+    const future = !STATE.date || STATE.date >= localDay();
+    if (future && problems.length) {
+      parts.push(`<div class="banner bad"><b>มีปัญหาความพร้อมก่อนผ่าตัด ${problems.length} เคส</b>
+        <ul>${problems.slice(0, 5).map(([cid, r]) => `<li>${esc(cid)}: ${esc(readyText(r))}</li>`).join('')}</ul>
+        <button class="btn" type="button" data-show-ready>ดูความพร้อม</button></div>`);
+    }
+    if (future && open.length) {
+      parts.push(`<div class="banner warn"><b>ยังไม่พร้อมผ่าตัด ${open.length} เคส</b> (เช็กใบยินยอม ประเมินวิสัญญี ผลแล็บ งดน้ำงดอาหาร จองเลือด และตำแหน่งผ่าตัด)
+        <button class="btn" type="button" data-show-ready>ดูความพร้อม</button></div>`);
+    }
+    const nx = STATE.readiness_next;
+    if (nx && nx.cases.length && nx.date !== STATE.date) {
+      parts.push(`<div class="banner warn"><b>เคสวันที่ ${esc(nx.date)} ยังไม่พร้อม ${nx.cases.length} จาก ${nx.total} เคส</b>
+        <ul>${nx.cases.slice(0, 5).map(c => `<li>${esc(c.case_id)} ${esc(c.start)} ${esc(c.or_id)}${c.surgeon ? ' · ' + esc(c.surgeon) : ''}: ${esc(readyText(c.readiness))}</li>`).join('')}</ul>
+        <a class="btn" href="/?date=${esc(nx.date)}#ready">ไปที่วันนั้น</a></div>`);
+    }
     if (STATE.warnings && STATE.warnings.length) {
       parts.push(`<div class="banner warn"><b>ตารางวันนี้มีจุดขัดกัน ${STATE.warnings.length} รายการ</b> (เช่น มีคนลา ปิดห้อง หรือเครื่องมือเสีย หลังจองแล้ว · ระบบจะไม่เพิ่มจุดขัดกันใหม่)
         <ul>${STATE.warnings.slice(0, 5).map(w => '<li>' + esc(w) + '</li>').join('')}</ul>
         ${can('roster') ? '<button class="btn primary" type="button" id="replan">จัดตารางวันนี้ใหม่เพื่อแก้</button>' : ''}</div>`);
     }
     $('#banners').innerHTML = parts.join('');
+    $('#banners').querySelectorAll('[data-show-ready]').forEach(b => b.addEventListener('click', () => {
+      selectTab('ready'); document.querySelector('[data-panel="ready"]').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }));
     $('#replan')?.addEventListener('click', e => busy(e.target, replanDay));
     const seed = $('#seed');
     if (seed) seed.addEventListener('click', () => busy(seed, async () => {
@@ -1432,6 +1596,7 @@
     loadIntakeInfo().catch(() => {});
   }
 
+  $('#ready-open').addEventListener('change', renderReadiness);
   $('#date').addEventListener('change', e => { if (e.target.value) loadDay(e.target.value).catch(err => toast(err.message)); });
   $('#reload').addEventListener('click', e => busy(e.target, () => loadDay(STATE && STATE.date)));
 
@@ -1445,6 +1610,7 @@
     }
     const asked = new URLSearchParams(location.search).get('date');  // link from the hospital data page
     await loadDay(/^\d{4}-\d{2}-\d{2}$/.test(asked || '') ? asked : null);
+    if (location.hash === '#ready') selectTab('ready');  // link from a readiness banner or reminder
   })().catch(e => {
     $('#banners').innerHTML = `<div class="banner bad"><b>โหลดข้อมูลไม่สำเร็จ</b><br>${esc(e.message)}</div>`;
   });

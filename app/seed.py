@@ -22,6 +22,10 @@ from orchestra_engine.models import DEFAULT_TEAM, InfectionRisk
 HISTORY_TAG = "synthetic history (demo)"
 
 HEAVY = {"ROBOT_DA_VINCI", "C_ARM"}
+NEEDS_BLOOD = {  # demo procedures whose checklist asks for blood to be reserved
+    "Total knee arthroplasty (L)", "Total knee arthroplasty (R)", "Robotic radical prostatectomy",
+    "Robotic partial nephrectomy", "Femoral-popliteal bypass", "Emergency exploratory laparotomy",
+}
 EMERGENCY_PROCEDURES = [
     # (name, surgeon code, minutes, equipment, infection, icu)
     ("Emergency exploratory laparotomy", "SUR-ONCALL", 120, ["MAJOR_GENERAL_TRAY"], "DIRTY", True),
@@ -108,6 +112,9 @@ def seed_resources(conn: psycopg.Connection, tz: ZoneInfo, today: date) -> dict:
             if with_skills:
                 cols.append("required_staff_skills")
                 values.append(Jsonb(skills or {}))
+            if _has_column(conn, "procedures", "requires_blood"):
+                cols.append("requires_blood")
+                values.append(name in NEEDS_BLOOD)
             procedure_ids[name] = conn.execute(
                 f"INSERT INTO procedures ({', '.join(cols)}) VALUES ({', '.join(['%s'] * len(cols))}) "
                 "RETURNING procedure_id",
@@ -170,7 +177,8 @@ def demo_catalog() -> tuple[list[dict], list[dict]]:
         pid = "P-" + re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
         procedures.setdefault(pid, {"id": pid, "name": name, "code": None, "duration": minutes,
                                     "caps": sorted(caps), "icu": icu, "infection": infection,
-                                    "skills": skills or {}, "supplies": dict(supplies or {})})
+                                    "skills": skills or {}, "supplies": dict(supplies or {}),
+                                    "blood": name in NEEDS_BLOOD})
         return pid
 
     for c in elective_day():

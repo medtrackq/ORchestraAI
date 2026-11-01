@@ -410,6 +410,7 @@ class Database:
                 "duration": r["default_duration_mins"], "caps": r["required_room_capabilities"] or [],
                 "icu": bool(r["requires_icu_post_op"]), "infection": r["infection_risk_level"] or "CLEAN",
                 "skills": _skills(r.get("required_staff_skills")), "recovery_mins": r.get("recovery_mins"),
+                "blood": bool(r.get("requires_blood")),
             }
             for r in conn.execute("SELECT * FROM procedures ORDER BY name")
         ]
@@ -787,6 +788,54 @@ class Database:
                      AND s.actual_start_time > NOW() - INTERVAL '2 years'"""
             )
         ]
+
+    def readiness_rows(self, conn: psycopg.Connection, request_ids) -> dict[str, dict[str, dict]] | None:
+        """Checked readiness items per request (None before migration 009)."""
+        if not conn.execute("SELECT to_regclass('public.case_readiness') IS NOT NULL AS ok").fetchone()["ok"]:
+            return None
+        out: dict[str, dict[str, dict]] = {}
+        ids = [uuid.UUID(str(i)) for i in request_ids]
+        if ids:
+            for r in conn.execute("SELECT * FROM case_readiness WHERE request_id = ANY(%s)", (ids,)):
+                out.setdefault(str(r["request_id"]), {})[r["item"]] = {
+                    "status": r["status"], "note": r["note"], "by": r["updated_by"],
+                    "at": r["updated_at"].astimezone(self.tz).strftime("%Y-%m-%d %H:%M")}
+        return out
+
+    def next_cases(self, conn: psycopg.Connection, after: date, days: int) -> tuple[date | None, list[dict]]:
+        """The first day after ``after`` (within ``days``) that has cases, and those cases in start order."""
+        start = datetime(after.year, after.month, after.day, tzinfo=self.tz) + timedelta(days=1)
+        blood = "COALESCE(p.requires_blood, false)" if conn.execute(
+            "SELECT 1 FROM information_schema.columns WHERE table_name = 'procedures' AND column_name = 'requires_blood'"
+        ).fetchone() else "false"
+        rows = list(conn.execute(
+            f"""SELECT s.request_id, s.start_time, s.end_time, o.room_code, r.urgency_level, r.primary_surgeon_id,
+                       COALESCE(p.name, r.raw_nlp_input, 'Surgery') AS procedure_name, {blood} AS blood,
+                       (s.start_time AT TIME ZONE %s)::date AS day
+                FROM scheduled_surgeries s JOIN surgery_requests r USING (request_id)
+                JOIN operating_rooms o ON o.or_id = s.or_id
+                LEFT JOIN procedures p ON p.procedure_id = r.procedure_id
+                WHERE s.status IS DISTINCT FROM 'CANCELLED' AND s.start_time >= %s AND s.start_time < %s
+                ORDER BY s.start_time""",
+            (str(self.tz), start, start + timedelta(days=days)),
+        ))
+        if not rows:
+            return None, []
+        first = rows[0]["day"]
+        taken: set[str] = set()
+        out = []
+        for r in rows:
+            if r["day"] != first:
+                break
+            code = case_code(r["request_id"], r["urgency_level"] or "ELECTIVE", taken)
+            taken.add(code)
+            out.append({"request_id": str(r["request_id"]), "case_id": code,
+                        "start": r["start_time"].astimezone(self.tz).strftime("%H:%M"),
+                        "end": r["end_time"].astimezone(self.tz).strftime("%H:%M"), "or_id": r["room_code"],
+                        "procedure": r["procedure_name"], "urgency": r["urgency_level"],
+                        "surgeon_id": str(r["primary_surgeon_id"]) if r["primary_surgeon_id"] else None,
+                        "blood": bool(r["blood"])})
+        return first, out
 
     def pending(self, conn: psycopg.Connection) -> list[dict]:
         """Requests taken off the schedule (re-plan, emergency) that still need a day."""

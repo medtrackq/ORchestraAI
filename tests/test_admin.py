@@ -229,8 +229,10 @@ def test_bookings_reserve_supplies_and_deliveries_free_them(admin, store, db_url
     assert _rows(db_url, """SELECT r.quantity, r.status FROM supply_reservations r
                             JOIN surgery_requests q USING (request_id) WHERE q.patient_hn = 'HN-S1'""") == [(1, "RESERVED")]
     item = next(i for i in admin.inventory()["items"] if i["code"] == "ROBO-DRAPE")
+    [(used,)] = _rows(db_url, """SELECT count(*) FROM supply_reservations r JOIN supply_items i USING (item_id)
+                                 WHERE i.code = 'ROBO-DRAPE' AND r.status = 'USED'""")  # today's cases that already ended
     # Today's two cases use the two on the shelf; the three arriving tomorrow cover tomorrow's case.
-    assert (item["on_hand"], item["reserved"], item["free"], item["free_later"]) == (2, 3, 0, 2)
+    assert (item["on_hand"] + used, item["reserved"] + used, item["free"], item["free_later"]) == (2, 3, 0, 2)
 
     # Cancelling the order leaves tomorrow's case without a drape kit: reported for re-planning.
     result = admin.cancel_delivery(order["id"])

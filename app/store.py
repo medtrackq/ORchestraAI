@@ -27,6 +27,8 @@ from orchestra_engine import (
 from orchestra_engine.demo import Hospital, build_hospital, elective_day
 from orchestra_engine.models import DEFAULT_TEAM
 
+from . import readiness as rd
+
 
 class StoreError(ValueError):
     """Request that cannot be carried out; the message is shown to the user."""
@@ -258,6 +260,8 @@ class ScheduleStore:
             self.history = [HistoryRecord(r["surgeon_id"], r["procedure_id"], r["actual"])
                             for r in synthetic_history(self.cards)]
             self.actuals: dict[str, list[int | None]] = {}  # case_id -> [start, end] minutes
+            self.readiness: dict[str, dict[str, dict]] = {}  # case_id -> checked pre-op items
+            self.digests: set[str] = set()
             self.pending: dict[str, SurgeryCase] = {}  # taken off the schedule, waiting for a new slot
             self._ids = Counter()
             self.activity: list[Activity] = [Activity(
@@ -311,9 +315,50 @@ class ScheduleStore:
             "options": self.options(),
             "activity": [a.__dict__ for a in reversed(self.activity[-30:])],
             "pending": self.pending_rows(),
+            "readiness": self._readiness(),
+            "readiness_ready": True,
+            "readiness_next": None,  # the demo has one day
             **fatigue_view(self.hospital, self.result),
             **facility_view(self.hospital, self.result),
         }
+
+    # ---------------------------------------------------- pre-op readiness
+
+    def _readiness(self) -> dict:
+        blood = {p["name"]: p.get("blood", False) for p in self.procedures}
+        return {cid: rd.summarize(self.readiness.get(cid, {}), blood.get(case.procedure, False))
+                for cid, case in self.result.cases.items() if cid in self.result.assignments}
+
+    def readiness_update(self, case_id: str, data: dict, *, day: str | None = None, actor: dict | None = None) -> dict:
+        item, status, note = rd.parse_update(data)
+        with self._lock:
+            a = self.result.assignments.get(case_id)
+            if a is None:
+                raise StoreError(f"ไม่พบเคส {case_id} ในตาราง")
+            case = self.result.cases[case_id]
+            check_own_case(actor, case.surgeon_id)
+            rows = self.readiness.setdefault(case_id, {})
+            before = rows.get(item)
+            if status == "PENDING":
+                rows.pop(item, None)
+            else:
+                from datetime import datetime
+
+                rows[item] = {"status": status, "note": note, "by": actor_name(actor),
+                              "at": datetime.now().strftime("%Y-%m-%d %H:%M")}
+        if status == "PROBLEM" and (before or {}).get("note") != note:
+            self._emit(rd.problem_event(date.today(), case_id, item, f"{fmt(a.start_min)}-{fmt(a.end_min)} ห้อง {a.or_id}",
+                                        case.surgeon_id, actor))
+        return {"case_id": case_id, "readiness": self._readiness()[case_id]}
+
+    def readiness_next(self) -> dict | None:
+        return None
+
+    def claim_digest(self, day: str) -> bool:
+        if day in self.digests:
+            return False
+        self.digests.add(day)
+        return True
 
     # ------------------------------------------------------------- writes
 

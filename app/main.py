@@ -24,6 +24,7 @@ from __future__ import annotations
 import base64
 import binascii
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urlparse
@@ -40,6 +41,7 @@ from . import hospital_io, roster_io
 from .admin_store import require_supabase
 from .intake_service import IntakeService
 from .notify import DbNotifyStore, MemoryNotifyStore, Notifier, NotifyUnavailable
+from .readiness import DigestTimer, digest_hour
 from .store import Forbidden, ScheduleStore, StoreError
 
 ROOT = Path(__file__).resolve().parent
@@ -64,7 +66,22 @@ store.listener = notifier.handle  # phone notifications after every saved change
 
 _TZ = ZoneInfo(os.environ.get("APP_TIMEZONE", "Asia/Bangkok"))
 intake = IntakeService()  # Claude pass when ANTHROPIC_API_KEY is set, keyword rules otherwise
-app = FastAPI(title="ORchestraAI", docs_url="/api/docs", redoc_url=None, openapi_url="/api/openapi.json")
+
+
+@asynccontextmanager
+async def _lifespan(_app):
+    """Background job: the daily reminder of the next day's cases that are not ready."""
+    hour = digest_hour()
+    timer = DigestTimer(store, notifier.handle, hour=hour) if hour is not None else None
+    if timer is not None:
+        timer.start()
+    yield
+    if timer is not None:
+        timer.stop()
+
+
+app = FastAPI(title="ORchestraAI", docs_url="/api/docs", redoc_url=None, openapi_url="/api/openapi.json",
+              lifespan=_lifespan)
 
 PUBLIC = {"/login", "/api/login", "/api/health", "/api/line/webhook", "/sw.js", "/manifest.webmanifest",
           "/icons/icon-192.png", "/icons/icon-512.png", "/icons/apple-touch-icon.png", "/icons/badge-96.png"}
@@ -151,6 +168,12 @@ def _shape(state: dict, user: User) -> dict:
     if not patients:
         schedule["bookings"] = [{**b, "patient_hn": "•••", "patient_name": None} for b in schedule["bookings"]]
         state["pending"] = [{**p, "patient_hn": "•••", "patient_name": None} for p in state.get("pending", [])]
+        # checklist notes may hold clinical details: these roles see the status only
+        hide = lambda r: {**r, "items": {k: {**i, "note": None} for k, i in r["items"].items()}}  # noqa: E731
+        state["readiness"] = {cid: hide(r) for cid, r in state.get("readiness", {}).items()}
+        if state.get("readiness_next"):
+            state["readiness_next"] = {**state["readiness_next"], "cases": [
+                {**c, "readiness": hide(c["readiness"])} for c in state["readiness_next"]["cases"]]}
     state["schedule"] = schedule
     activity = []
     for item in state.get("activity", []):
@@ -470,6 +493,20 @@ def record_actual(case_id: str, body: ActualIn, request: Request, date: str | No
     """Record when a case really started / finished; the forecast learns from it."""
     user = _user(request, "record_times")
     result = _run(store.record_actual, case_id, body.start, body.end, day=date, actor=_actor(user))
+    return {"result": result, "state": _state(user, date)}
+
+
+class ReadinessIn(BaseModel):
+    item: str = Field(max_length=20)
+    status: Literal["PENDING", "DONE", "NA", "PROBLEM"]
+    note: str | None = Field(default=None, max_length=200)
+
+
+@app.post("/api/cases/{case_id}/readiness")
+def update_readiness(case_id: str, body: ReadinessIn, request: Request, date: str | None = None) -> dict:
+    """Pre-op checklist: tick, clear or flag one item of a case (surgeons: their own cases)."""
+    user = _user(request, "readiness")
+    result = _run(store.readiness_update, case_id, body.model_dump(), day=date, actor=_actor(user))
     return {"result": result, "state": _state(user, date)}
 
 
@@ -803,6 +840,13 @@ class ProcedureIn(BaseModel):
     infection: Literal["CLEAN", "CONTAMINATED", "DIRTY"] = "CLEAN"
     recovery_mins: int | None = Field(default=None, ge=0, le=10080)
     skills: dict[str, list[str]] = Field(default={}, max_length=4)
+    blood: bool | None = None  # needs blood reserved (left out: unchanged)
+
+    def data(self) -> dict:
+        out = self.model_dump()
+        if out["blood"] is None:
+            del out["blood"]
+        return out
 
 
 @app.post("/api/admin/maintenance")
@@ -852,13 +896,13 @@ def admin_procedures(request: Request) -> dict:
 @app.post("/api/admin/procedures")
 def admin_add_procedure(body: ProcedureIn, request: Request) -> dict:
     user, admin = _admin(request, "hospital_data")
-    return _run(admin.save_procedure, body.model_dump(), actor=_actor(user))
+    return _run(admin.save_procedure, body.data(), actor=_actor(user))
 
 
 @app.patch("/api/admin/procedures/{procedure_id}")
 def admin_edit_procedure(procedure_id: str, body: ProcedureIn, request: Request) -> dict:
     user, admin = _admin(request, "hospital_data")
-    return _run(admin.save_procedure, body.model_dump(), procedure_id=procedure_id, actor=_actor(user))
+    return _run(admin.save_procedure, body.data(), procedure_id=procedure_id, actor=_actor(user))
 
 
 # ------------------------------------------------------------- management reports

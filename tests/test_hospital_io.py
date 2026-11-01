@@ -138,7 +138,7 @@ def test_import_adds_and_changes_records_after_a_preview(admin, store, db_url):
     _row(wb["ห้องผ่าตัด"], room_code)[5].value = "ซ่อมบำรุง"
     wb["บุคลากร"].append(["D-9001", "นพ.นำเข้า ทดสอบ", "ศัลยแพทย์", "Ortho", "robotic_certified", 40, 9, 10, "ใช่"])
     wb["วัสดุและรากเทียม"].append(["SCREW-7", "สกรู 7 มม.", "รากเทียม", "ตัว", None, 20, 5, "ใช่"])
-    wb["หัตถการ"].append(["81.54", "Total knee replacement (import)", 150, "สะอาด", "ไม่", None, "LAMINAR_FLOW",
+    wb["หัตถการ"].append(["81.54", "Total knee replacement (import)", 150, "สะอาด", "ไม่", "ใช่", None, "LAMINAR_FLOW",
                           "SCRUB_NURSE: ORTHO_TRAINED", "screw-7 x2"])
     wb["Preference card"].append(["d-9001", None, "81.54", 140, 20, 0, 2, 1, 0, "C_ARM; ORTHO_KNEE_SET x2", "ท่านอนหงาย"])
     data = _book(store, wb)
@@ -157,7 +157,7 @@ def test_import_adds_and_changes_records_after_a_preview(admin, store, db_url):
     item = next(i for i in admin.inventory()["items"] if i["code"] == "SCREW-7")
     assert (item["category"], item["on_hand"], item["unit"]) == ("IMPLANT", 20, "ตัว")
     proc = next(p for p in admin.procedures()["procedures"] if p["code"] == "81.54")
-    assert proc["skills"] == {"SCRUB_NURSE": ["ORTHO_TRAINED"]} and proc["caps"] == ["LAMINAR_FLOW"]
+    assert proc["skills"] == {"SCRUB_NURSE": ["ORTHO_TRAINED"]} and proc["caps"] == ["LAMINAR_FLOW"] and proc["blood"]
     assert next(p for p in admin.inventory()["procedures"] if p["id"] == proc["id"])["supplies"] == {"SCREW-7": 2}
     card = next(c for c in admin.cards()["cards"] if c["procedure_id"] == proc["id"])
     assert card["surgeon"] == "นพ.นำเข้า ทดสอบ" and card["notes"] == "ท่านอนหงาย"

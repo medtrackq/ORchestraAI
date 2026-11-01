@@ -710,13 +710,15 @@ class HospitalAdmin:
                 {"id": str(r["procedure_id"]), "code": r["icd9_cm_code"], "name": r["name"],
                  "duration": r["default_duration_mins"], "caps": sorted(r["required_room_capabilities"] or []),
                  "icu": bool(r["requires_icu_post_op"]), "infection": r["infection_risk_level"] or "CLEAN",
-                 "recovery_mins": r.get("recovery_mins"), "skills": r.get("required_staff_skills") or {}}
+                 "recovery_mins": r.get("recovery_mins"), "skills": r.get("required_staff_skills") or {},
+                 "blood": bool(r.get("requires_blood"))}
                 for r in conn.execute("SELECT * FROM procedures ORDER BY name")
             ]
         return {"procedures": rows, "infection": list(INFECTION_LEVELS), "roles": list(ROLES),
                 "capabilities": sorted(set(CAPABILITIES) | {c for p in rows for c in p["caps"]}),
                 "recovery_ready": ("procedures", "recovery_mins") in cols,
-                "skills_ready": ("procedures", "required_staff_skills") in cols}
+                "skills_ready": ("procedures", "required_staff_skills") in cols,
+                "blood_ready": ("procedures", "requires_blood") in cols}
 
     def save_procedure(self, data: dict, *, procedure_id: str | None = None, actor: dict | None = None) -> dict:
         name = (data.get("name") or "").strip()
@@ -745,6 +747,8 @@ class HospitalAdmin:
                 fields["recovery_mins"] = recovery
             if ("procedures", "required_staff_skills") in cols:
                 fields["required_staff_skills"] = Jsonb(skills)
+            if ("procedures", "requires_blood") in cols and "blood" in data:  # left out: kept as it is
+                fields["requires_blood"] = bool(data.get("blood"))
             try:
                 if procedure_id is None:
                     procedure_id = str(conn.execute(

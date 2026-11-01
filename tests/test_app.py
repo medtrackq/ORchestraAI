@@ -360,3 +360,23 @@ def test_roster_excel_is_for_schedulers_and_admins(owner):
     assert nurse.post("/api/admin/roster/import", json=body).status_code == 403
     cssd = make_user(owner, "cssd7", "cssd")
     assert cssd.post("/api/admin/roster/import", json=body).status_code == 403
+
+
+def test_readiness_checklist_over_the_api(owner):
+    state = owner.get("/api/state").json()
+    knee = next(b for b in state["schedule"]["bookings"] if b["procedure"].startswith("Total knee"))
+    url = f"/api/cases/{knee['case_id']}/readiness"
+    nurse = make_user(owner, "nurse6", "staff", "SCR-2")
+    r = nurse.post(url, json={"item": "npo", "status": "PROBLEM", "note": "ดื่มน้ำ 07:00"})
+    assert r.status_code == 200 and r.json()["state"]["readiness"][knee["case_id"]]["status"] == "problem"
+    assert nurse.post(url, json={"item": "npo", "status": "PROBLEM"}).status_code == 400  # say what the problem is
+    assert nurse.post(url, json={"item": "npo", "status": "MAYBE"}).status_code == 422
+    other = make_user(owner, "kittipong", "surgeon", "SUR-URO")
+    assert other.post(url, json={"item": "consent", "status": "DONE"}).status_code == 403  # not their case
+    own = make_user(owner, "somchai", "surgeon", "SUR-ORTHO")
+    assert own.post(url, json={"item": "consent", "status": "DONE"}).status_code == 200
+    cssd = make_user(owner, "cssd6", "cssd")
+    assert cssd.post(url, json={"item": "consent", "status": "DONE"}).status_code == 403
+    seen = cssd.get("/api/state").json()["readiness"][knee["case_id"]]
+    assert seen["status"] == "problem" and seen["items"]["npo"]["note"] is None  # status only, no clinical note
+    assert owner.get("/api/state").json()["readiness"][knee["case_id"]]["items"]["npo"]["note"] == "ดื่มน้ำ 07:00"
