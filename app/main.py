@@ -30,6 +30,7 @@ from pydantic import BaseModel, Field
 
 from .auth import (COOKIE, ROLES, SESSION_HOURS, Accounts, AuthError, DbUserStore, MemoryUserStore,
                    ServiceUnavailable, TooManyAttempts, User, can)
+from .admin_store import require_supabase
 from .intake_service import IntakeService
 from .store import Forbidden, ScheduleStore, StoreError
 
@@ -135,6 +136,7 @@ def _shape(state: dict, user: User) -> dict:
     schedule = dict(state["schedule"])
     if not patients:
         schedule["bookings"] = [{**b, "patient_hn": "•••", "patient_name": None} for b in schedule["bookings"]]
+        state["pending"] = [{**p, "patient_hn": "•••", "patient_name": None} for p in state.get("pending", [])]
     state["schedule"] = schedule
     activity = []
     for item in state.get("activity", []):
@@ -171,6 +173,11 @@ def index() -> FileResponse:
 @app.get("/login", include_in_schema=False)
 def login_page() -> FileResponse:
     return FileResponse(ROOT / "static" / "login.html")
+
+
+@app.get("/admin", include_in_schema=False)
+def admin_page() -> FileResponse:
+    return FileResponse(ROOT / "static" / "admin.html")
 
 
 @app.get("/flow", include_in_schema=False)
@@ -298,6 +305,8 @@ class CaseIn(BaseModel):
     procedure_id: str | None = None
     required_staff_roles: dict[str, int] | None = None
     required_staff_skills: dict[str, list[str]] | None = None
+    airborne: bool = False
+    pending_id: str | None = Field(default=None, max_length=64)  # rebook a request waiting for a slot
 
 
 class SlotIn(BaseModel):
@@ -452,3 +461,183 @@ def seed_demo(request: Request) -> dict:
         raise HTTPException(status_code=400, detail="ใช้ได้เฉพาะเมื่อเชื่อม Supabase")
     result = _run(store.seed_demo)
     return {"result": result, "state": _state(user, result["date"])}
+
+
+# ------------------------------------------------------------- hospital data
+
+class RoomIn(BaseModel):
+    code: str | None = Field(default=None, max_length=20)
+    type: str = Field(default="STANDARD", max_length=50)
+    capabilities: list[str] = Field(default=[], max_length=20)
+    base_turnover_mins: int = 30
+    infectious_turnover_mins: int = 60
+    status: str = "AVAILABLE"
+
+
+class ClosureIn(BaseModel):
+    room: str = Field(max_length=20)
+    start_date: str
+    start_time: str = Field(default="00:00", pattern=TIME)
+    end_date: str
+    end_time: str = Field(default="00:00", pattern=TIME)
+    reason: str | None = Field(default=None, max_length=200)
+
+
+class StaffIn(BaseModel):
+    code: str = Field(max_length=50)
+    name: str = Field(max_length=150)
+    role: str
+    specialty: str | None = Field(default=None, max_length=100)
+    skills: list[str] = Field(default=[], max_length=30)
+    max_hours_per_week: float = 48
+    max_hours_per_day: float = 10
+    min_rest_hours: float = 8
+    active: bool = True
+
+
+class ShiftsIn(BaseModel):
+    staff_ids: list[str] = Field(max_length=200)
+    date_from: str
+    date_to: str
+    weekdays: list[int] = [0, 1, 2, 3, 4, 5, 6]
+    start: str = Field(default="08:00", pattern=TIME)
+    end: str = Field(default="16:00", pattern=TIME)
+    type: Literal["REGULAR", "ON_CALL", "LEAVE"] = "REGULAR"
+    note: str | None = Field(default=None, max_length=200)
+
+
+class ShiftDeleteIn(BaseModel):
+    ids: list[str] = Field(max_length=2000)
+
+
+class EquipmentTypeIn(BaseModel):
+    name: str = Field(max_length=150)
+    category: str = "INSTRUMENT_TRAY"
+    requires_sterilization: bool = True
+    sterilization_mins: int = 120
+
+
+class EquipmentUnitIn(BaseModel):
+    serial: str | None = Field(default=None, max_length=100)
+    type_id: str
+    location: str | None = Field(default=None, max_length=100)
+
+
+def _admin(request: Request, permission: str):
+    user = _user(request, permission)
+    return user, _run(require_supabase, store)
+
+
+@app.get("/api/admin/rooms")
+def admin_rooms(request: Request) -> dict:
+    _, admin = _admin(request, "hospital_view")
+    return _run(admin.rooms)
+
+
+@app.post("/api/admin/rooms")
+def admin_add_room(body: RoomIn, request: Request) -> dict:
+    user, admin = _admin(request, "hospital_data")
+    return _run(admin.save_room, body.model_dump(), actor=_actor(user))
+
+
+@app.patch("/api/admin/rooms/{code}")
+def admin_edit_room(code: str, body: RoomIn, request: Request) -> dict:
+    user, admin = _admin(request, "hospital_data")
+    return _run(admin.save_room, body.model_dump(), code=code, actor=_actor(user))
+
+
+@app.post("/api/admin/closures")
+def admin_add_closure(body: ClosureIn, request: Request) -> dict:
+    """Close a room for a period (repair, deep cleaning); reports days to re-plan."""
+    user, admin = _admin(request, "roster")
+    return _run(admin.add_closure, body.model_dump(), actor=_actor(user))
+
+
+@app.delete("/api/admin/closures/{closure_id}")
+def admin_delete_closure(closure_id: str, request: Request) -> dict:
+    user, admin = _admin(request, "roster")
+    return _run(admin.delete_closure, closure_id, actor=_actor(user))
+
+
+@app.get("/api/admin/staff")
+def admin_staff(request: Request) -> dict:
+    _, admin = _admin(request, "hospital_view")
+    return _run(admin.staff)
+
+
+@app.post("/api/admin/staff")
+def admin_add_staff(body: StaffIn, request: Request) -> dict:
+    user, admin = _admin(request, "hospital_data")
+    return _run(admin.save_staff, body.model_dump(), actor=_actor(user))
+
+
+@app.patch("/api/admin/staff/{staff_id}")
+def admin_edit_staff(staff_id: str, body: StaffIn, request: Request) -> dict:
+    user, admin = _admin(request, "hospital_data")
+    return _run(admin.save_staff, body.model_dump(), staff_id=staff_id, actor=_actor(user))
+
+
+@app.get("/api/admin/shifts")
+def admin_shifts(request: Request, date_from: str | None = None, date_to: str | None = None,
+                 staff_id: str | None = None) -> dict:
+    _, admin = _admin(request, "hospital_view")
+    return _run(admin.shifts, date_from, date_to, staff_id)
+
+
+@app.post("/api/admin/shifts")
+def admin_add_shifts(body: ShiftsIn, request: Request) -> dict:
+    """Shifts or leave for several people and days at once (end before start = past midnight)."""
+    user, admin = _admin(request, "roster")
+    return _run(admin.add_shifts, body.model_dump(), actor=_actor(user))
+
+
+@app.post("/api/admin/shifts/delete")
+def admin_delete_shifts(body: ShiftDeleteIn, request: Request) -> dict:
+    user, admin = _admin(request, "roster")
+    return _run(admin.delete_shifts, body.model_dump(), actor=_actor(user))
+
+
+@app.get("/api/admin/equipment")
+def admin_equipment(request: Request) -> dict:
+    _, admin = _admin(request, "hospital_view")
+    return _run(admin.equipment)
+
+
+@app.post("/api/admin/equipment-types")
+def admin_add_type(body: EquipmentTypeIn, request: Request) -> dict:
+    user, admin = _admin(request, "hospital_data")
+    return _run(admin.save_type, body.model_dump(), actor=_actor(user))
+
+
+@app.patch("/api/admin/equipment-types/{type_id}")
+def admin_edit_type(type_id: str, body: EquipmentTypeIn, request: Request) -> dict:
+    user, admin = _admin(request, "hospital_data")
+    return _run(admin.save_type, body.model_dump(), type_id=type_id, actor=_actor(user))
+
+
+@app.post("/api/admin/equipment-units")
+def admin_add_unit(body: EquipmentUnitIn, request: Request) -> dict:
+    user, admin = _admin(request, "hospital_data")
+    return _run(admin.save_unit, body.model_dump(), actor=_actor(user))
+
+
+@app.patch("/api/admin/equipment-units/{serial}")
+def admin_edit_unit(serial: str, body: EquipmentUnitIn, request: Request) -> dict:
+    user, admin = _admin(request, "hospital_data")
+    return _run(admin.save_unit, body.model_dump(), serial=serial, actor=_actor(user))
+
+
+@app.post("/api/replan")
+def replan(request: Request, date: str | None = None) -> dict:
+    """Re-plan the cases of a day that have not started yet (fixes conflicts after data changes)."""
+    user = _user(request, "roster")
+    result = _run(store.replan, date, actor=_actor(user))
+    return {"result": result, "state": _state(user, date)}
+
+
+@app.post("/api/pending/{pending_id}/cancel")
+def cancel_pending(pending_id: str, request: Request, date: str | None = None) -> dict:
+    """Give up a request that was taken off the schedule and is waiting for a new slot."""
+    user = _user(request, "book")
+    result = _run(store.cancel_pending, pending_id, actor=_actor(user))
+    return {"result": result, "state": _state(user, date)}

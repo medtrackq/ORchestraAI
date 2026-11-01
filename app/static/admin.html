@@ -1,0 +1,627 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ข้อมูลโรงพยาบาล · ORchestraAI</title>
+<link href="https://fonts.googleapis.com/css2?family=Prompt:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #f4f6fb; --surface: #ffffff; --surface-2: #f8fafc; --text: #0f172a; --muted: #64748b;
+    --border: #e2e8f0; --accent: #0e7490; --accent-soft: #e0f2fe; --ok: #047857; --ok-soft: #d1fae5;
+    --bad: #b91c1c; --bad-soft: #fee2e2; --warn: #b45309; --warn-soft: #fef3c7; --leave: #7c3aed; --leave-soft: #ede9fe;
+    --shadow: 0 1px 3px rgba(15,23,42,.08), 0 8px 24px rgba(15,23,42,.06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0b1220; --surface: #111a2e; --surface-2: #0f172a; --text: #e2e8f0; --muted: #94a3b8;
+      --border: #1f2a44; --accent: #22d3ee; --accent-soft: rgba(34,211,238,.12); --ok: #34d399; --ok-soft: rgba(16,185,129,.15);
+      --bad: #f87171; --bad-soft: rgba(239,68,68,.15); --warn: #fbbf24; --warn-soft: rgba(245,158,11,.15);
+      --leave: #a78bfa; --leave-soft: rgba(139,92,246,.18); --shadow: none;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0b1220; --surface: #111a2e; --surface-2: #0f172a; --text: #e2e8f0; --muted: #94a3b8;
+    --border: #1f2a44; --accent: #22d3ee; --accent-soft: rgba(34,211,238,.12); --ok: #34d399; --ok-soft: rgba(16,185,129,.15);
+    --bad: #f87171; --bad-soft: rgba(239,68,68,.15); --warn: #fbbf24; --warn-soft: rgba(245,158,11,.15);
+    --leave: #a78bfa; --leave-soft: rgba(139,92,246,.18); --shadow: none;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 'Prompt', 'Noto Sans Thai', system-ui, sans-serif; }
+  button, input, select, textarea { font: inherit; color: inherit; }
+  .top { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; padding: 14px 24px; background: var(--surface); border-bottom: 1px solid var(--border); }
+  .brand { display: flex; align-items: center; gap: 12px; }
+  .orb { width: 14px; height: 14px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 12px var(--accent); }
+  .brand h1 { margin: 0; font-size: 1.15rem; }
+  .brand p { margin: 0; font-size: .8rem; color: var(--muted); }
+  .top nav { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .btn { border: 1px solid var(--border); background: var(--surface); padding: 8px 14px; border-radius: 8px; cursor: pointer; text-decoration: none; color: var(--text); font-size: .88rem; }
+  .btn:hover { border-color: var(--accent); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  :root[data-theme="dark"] .btn.primary { color: #04121a; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .btn.primary { color: #04121a; } }
+  .btn.small { padding: 4px 10px; font-size: .8rem; }
+  .btn.danger { color: var(--bad); }
+  .btn:disabled { opacity: .55; cursor: progress; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .who { display: flex; flex-direction: column; font-size: .8rem; line-height: 1.25; text-align: right; }
+  .who small { color: var(--muted); }
+
+  main { padding: 20px 24px 40px; max-width: 1280px; margin: 0 auto; display: grid; gap: 16px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow); padding: 18px; min-width: 0; }
+  h2 { margin: 0 0 4px; font-size: 1.05rem; }
+  h3 { margin: 18px 0 8px; font-size: .95rem; }
+  .hint { font-size: .8rem; color: var(--muted); margin: 0; }
+  .tabs { display: flex; flex-wrap: wrap; gap: 4px; background: var(--surface); border: 1px solid var(--border); padding: 4px; border-radius: 12px; }
+  .tab { flex: 1 1 auto; border: 0; background: transparent; padding: 10px 8px; border-radius: 8px; cursor: pointer; font-size: .9rem; color: var(--muted); }
+  .tab[aria-selected="true"] { background: var(--accent-soft); color: var(--text); font-weight: 600; }
+  form { display: grid; gap: 10px; }
+  label { display: grid; gap: 4px; font-size: .82rem; color: var(--muted); }
+  input[type="text"], input[type="number"], input[type="time"], input[type="date"], input[type="search"], select, textarea {
+    width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); color: var(--text); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; align-items: end; }
+  fieldset { border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px 10px; margin: 0; min-width: 0; }
+  legend { font-size: .78rem; color: var(--muted); padding: 0 4px; }
+  .checks { display: flex; flex-wrap: wrap; gap: 6px 14px; }
+  .checks label { display: flex; align-items: center; gap: 6px; color: var(--text); font-size: .84rem; }
+  .rows { display: grid; gap: 10px; }
+  .row-item { border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; display: grid; gap: 10px; font-size: .86rem; background: var(--surface); }
+  .row-item .title { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .row-item .title b { font-size: .95rem; }
+  .row-item .actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+  .badge { font-size: .72rem; padding: 2px 9px; border-radius: 99px; background: var(--surface-2); border: 1px solid var(--border); color: var(--muted); white-space: nowrap; }
+  .badge.ok { background: var(--ok-soft); color: var(--ok); border-color: transparent; }
+  .badge.bad { background: var(--bad-soft); color: var(--bad); border-color: transparent; }
+  .badge.warn { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
+  .badge.leave { background: var(--leave-soft); color: var(--leave); border-color: transparent; }
+  .toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; margin-bottom: 12px; }
+  .toolbar > label { flex: 0 1 200px; }
+  .affected { border: 1px solid var(--warn); background: var(--warn-soft); color: var(--warn); border-radius: 12px; padding: 12px 14px; font-size: .86rem; }
+  .affected ul { margin: 6px 0 0; padding-left: 18px; }
+  .affected li { margin-bottom: 6px; }
+  .affected .ok { color: var(--ok); }
+  .readonly { font-size: .8rem; color: var(--muted); background: var(--surface-2); border: 1px dashed var(--border); border-radius: 10px; padding: 8px 12px; }
+
+  /* Roster grid: people x days */
+  .roster-scroll { overflow-x: auto; border: 1px solid var(--border); border-radius: 12px; }
+  table.roster { border-collapse: collapse; width: 100%; min-width: 760px; font-size: .78rem; }
+  .roster th, .roster td { border-bottom: 1px solid var(--border); border-left: 1px solid var(--border); padding: 6px; vertical-align: top; text-align: left; }
+  .roster th { background: var(--surface-2); font-weight: 600; position: sticky; top: 0; }
+  .roster th.today { color: var(--accent); }
+  .roster td.person { border-left: 0; min-width: 150px; position: sticky; left: 0; background: var(--surface); z-index: 1; }
+  .roster td.person small { display: block; color: var(--muted); }
+  .chip { display: flex; align-items: center; justify-content: space-between; gap: 4px; border-radius: 6px; padding: 2px 6px; margin-bottom: 3px; background: var(--accent-soft); white-space: nowrap; }
+  .chip.ON_CALL { background: var(--warn-soft); color: var(--warn); }
+  .chip.LEAVE { background: var(--leave-soft); color: var(--leave); }
+  .chip button { border: 0; background: transparent; cursor: pointer; color: inherit; padding: 0 2px; font-size: .9rem; line-height: 1; }
+  .chip input { margin: 0; }
+  .people { max-height: 220px; overflow: auto; border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; display: grid; gap: 4px; }
+  .people label { display: flex; align-items: center; gap: 8px; color: var(--text); font-size: .84rem; }
+
+  #toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); background: var(--bad); color: #fff; padding: 10px 16px; border-radius: 10px; font-size: .88rem; max-width: calc(100% - 32px); display: none; z-index: 50; }
+  [hidden] { display: none !important; }
+  @media (max-width: 600px) {
+    .top, main { padding-left: 16px; padding-right: 16px; }
+    .row-item .actions { justify-content: stretch; }
+  }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <span class="orb" aria-hidden="true"></span>
+    <div><h1>ข้อมูลโรงพยาบาล</h1><p>ห้องผ่าตัด · บุคลากร · เวรและวันลา · เครื่องมือ — ระบบใช้ข้อมูลนี้จัดตารางทันที</p></div>
+  </div>
+  <nav>
+    <a class="btn" href="/">← กลับไปตารางผ่าตัด</a>
+    <span class="who" id="who"></span>
+    <button class="btn" id="logout" type="button">ออกจากระบบ</button>
+  </nav>
+</header>
+
+<main>
+  <div class="tabs" role="tablist">
+    <button class="tab" role="tab" aria-selected="true" data-tab="roster">เวรและวันลา</button>
+    <button class="tab" role="tab" aria-selected="false" data-tab="rooms">ห้องผ่าตัด</button>
+    <button class="tab" role="tab" aria-selected="false" data-tab="staff">บุคลากร</button>
+    <button class="tab" role="tab" aria-selected="false" data-tab="equipment">เครื่องมือ</button>
+  </div>
+
+  <div id="affected" hidden></div>
+
+  <!-- Roster: shifts and leave -->
+  <section class="card" data-panel="roster">
+    <h2>เวรและวันลา</h2>
+    <p class="hint">Staffing Agent จัดคนเข้าเคสเฉพาะช่วงที่อยู่เวร (ปกติหรือ on-call) และไม่ใช่วันลา · เวรที่เวลาเลิกน้อยกว่าเวลาเริ่มคือเวรข้ามคืน</p>
+    <h3>เพิ่มเวรหรือวันลา</h3>
+    <form id="form-shift">
+      <div class="grid">
+        <label>ประเภท<select name="type">
+          <option value="REGULAR">เวรปกติ</option><option value="ON_CALL">เวร on-call</option><option value="LEAVE">ลา (ลาป่วย/ลาพักร้อน/ประชุม)</option>
+        </select></label>
+        <label>ตั้งแต่วันที่<input type="date" name="date_from" required></label>
+        <label>ถึงวันที่<input type="date" name="date_to" required></label>
+        <label>เวลาเริ่ม<input type="time" name="start" value="08:00" required></label>
+        <label>เวลาเลิก<input type="time" name="end" value="16:00" required></label>
+      </div>
+      <div class="checks"><label><input type="checkbox" name="whole_day">ทั้งวัน (00:00-24:00)</label></div>
+      <fieldset><legend>วันในสัปดาห์</legend><div class="checks" id="weekdays"></div></fieldset>
+      <label>หมายเหตุ (ไม่บังคับ)<input type="text" name="note" maxlength="200" placeholder="เช่น ลาพักร้อน, ประชุมวิชาการ"></label>
+      <fieldset><legend>บุคลากร</legend>
+        <div class="toolbar" style="margin-bottom:8px">
+          <label>บทบาท<select id="pick-role"></select></label>
+          <button class="btn small" type="button" id="pick-all">เลือกทั้งหมดที่แสดง</button>
+          <button class="btn small" type="button" id="pick-none">ไม่เลือก</button>
+        </div>
+        <div class="people" id="pick-people"></div>
+      </fieldset>
+      <div><button class="btn primary" type="submit">บันทึก</button></div>
+    </form>
+    <p class="readonly" id="roster-readonly" hidden>บัญชีนี้ดูได้อย่างเดียว</p>
+
+    <h3>ตารางเวร</h3>
+    <div class="toolbar">
+      <label>ตั้งแต่<input type="date" id="view-from"></label>
+      <label>จำนวนวัน<select id="view-days"><option>7</option><option>14</option><option>28</option></select></label>
+      <label>บทบาท<select id="view-role"></select></label>
+      <button class="btn" type="button" id="view-prev">← ก่อนหน้า</button>
+      <button class="btn" type="button" id="view-next">ถัดไป →</button>
+      <button class="btn danger" type="button" id="delete-selected" hidden>ลบที่เลือก</button>
+    </div>
+    <div class="roster-scroll"><table class="roster" id="roster"></table></div>
+  </section>
+
+  <!-- Rooms and closures -->
+  <section class="card" data-panel="rooms" hidden>
+    <h2>ห้องผ่าตัด</h2>
+    <p class="hint">OR Facility Agent: เคสติดเชื้อทางอากาศต้องใช้ห้องที่มีความดันลบ (ประเภท "ห้องความดันลบ" หรือความสามารถ NEGATIVE_PRESSURE) · เคสสกปรก/ติดเชื้อใช้เวลาทำความสะอาดแบบติดเชื้อ</p>
+    <h3>ปิดห้องชั่วคราว (ซ่อม ทำความสะอาดใหญ่ ตรวจสอบ)</h3>
+    <form id="form-closure">
+      <div class="grid">
+        <label>ห้อง<select name="room" required></select></label>
+        <label>ปิดตั้งแต่วันที่<input type="date" name="start_date" required></label>
+        <label>เวลา<input type="time" name="start_time" value="08:00" required></label>
+        <label>เปิดใหม่วันที่<input type="date" name="end_date" required></label>
+        <label>เวลา<input type="time" name="end_time" value="12:00" required></label>
+      </div>
+      <label>เหตุผล<input type="text" name="reason" maxlength="200" placeholder="เช่น ซ่อมระบบปรับอากาศ, ทำความสะอาดใหญ่"></label>
+      <div><button class="btn primary" type="submit">ปิดห้อง</button></div>
+    </form>
+    <p class="readonly" id="closure-missing" hidden>ยังปิดห้องชั่วคราวไม่ได้: ให้รัน supabase/migrations/20261104000000_hospital_data_and_room_closures.sql ใน Supabase ก่อน</p>
+    <div class="rows" id="closures" style="margin-top:10px"></div>
+
+    <h3>ห้องทั้งหมด</h3>
+    <div class="rows" id="rooms"></div>
+    <div id="room-add-box">
+      <h3>เพิ่มห้อง</h3>
+      <form id="form-room" class="row-item"></form>
+    </div>
+  </section>
+
+  <!-- Staff -->
+  <section class="card" data-panel="staff" hidden>
+    <h2>บุคลากร</h2>
+    <p class="hint">ทักษะใช้จับคู่กับหัตถการ (เช่น ROBOTIC_CERTIFIED) · เกณฑ์ชั่วโมงใช้ป้องกันความเหนื่อยล้า · ปิดใช้งานแทนการลบ เพื่อเก็บประวัติเคสเดิม</p>
+    <div class="toolbar">
+      <label>ค้นหา<input type="search" id="staff-q" placeholder="ชื่อหรือรหัส"></label>
+      <label>บทบาท<select id="staff-role"></select></label>
+    </div>
+    <div class="rows" id="staff"></div>
+    <div id="staff-add-box">
+      <h3>เพิ่มบุคลากร</h3>
+      <form id="form-staff" class="row-item"></form>
+    </div>
+  </section>
+
+  <!-- Equipment -->
+  <section class="card" data-panel="equipment" hidden>
+    <h2>เครื่องมือ</h2>
+    <p class="hint">สถานะรายเครื่อง (กำลังอบ, ซ่อม) อัปเดตได้ที่แท็บ "เครื่องมือ" ในหน้าตารางผ่าตัด (CSSD)</p>
+    <h3>ชนิดเครื่องมือ</h3>
+    <div class="rows" id="types"></div>
+    <div id="type-add-box"><h3>เพิ่มชนิดเครื่องมือ</h3><form id="form-type" class="row-item"></form></div>
+    <h3>เครื่องรายชิ้น</h3>
+    <div class="rows" id="units"></div>
+    <div id="unit-add-box"><h3>เพิ่มเครื่อง</h3><form id="form-unit" class="row-item"></form></div>
+  </section>
+</main>
+<div id="toast" role="alert"></div>
+
+<script>
+  const $ = (sel, root = document) => root.querySelector(sel);
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  let ME = null, STAFF = null, ROOMS = null;
+
+  const ROLE_TH = { SURGEON: 'ศัลยแพทย์', ANESTHESIOLOGIST: 'วิสัญญีแพทย์', SCRUB_NURSE: 'พยาบาลส่งเครื่องมือ', CIRCULATING_NURSE: 'พยาบาลช่วยรอบนอก' };
+  const ROOM_TYPE_TH = { STANDARD: 'ห้องมาตรฐาน', HYBRID: 'ห้อง Hybrid', NEGATIVE_PRESSURE: 'ห้องความดันลบ' };
+  const CAP_TH = { LAMINAR_FLOW: 'Laminar flow', LEAD_LINED_XRAY: 'บุตะกั่ว (X-ray)', NEGATIVE_PRESSURE: 'ความดันลบ', ROBOTIC_READY: 'รองรับหุ่นยนต์' };
+  const STATUS_TH = { AVAILABLE: 'ใช้งานได้', MAINTENANCE: 'ซ่อมบำรุง', CLOSED: 'ปิดใช้งาน' };
+  const SHIFT_TH = { REGULAR: 'เวรปกติ', ON_CALL: 'on-call', LEAVE: 'ลา' };
+  const CATEGORY_TH = { HEAVY_MACHINE: 'เครื่องขนาดใหญ่', INSTRUMENT_TRAY: 'ชุดเครื่องมือ', OTHER: 'อื่น ๆ' };
+  const DAY_TH = ['จ', 'อ', 'พ', 'พฤ', 'ศ', 'ส', 'อา'];  // Monday first (Python weekday)
+  const can = perm => !!(ME && ME.permissions.includes(perm));
+  const options = (map, sel, keys) => (keys || Object.keys(map)).map(k => `<option value="${esc(k)}" ${k === sel ? 'selected' : ''}>${esc(map[k] || k)}</option>`).join('');
+  const isoDay = d => d.toISOString().slice(0, 10);
+  const addDays = (iso, n) => { const d = new Date(iso + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return isoDay(d); };
+  const localToday = () => { const d = new Date(); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10); };
+
+  async function api(path, body, method) {
+    const res = await fetch(path, body === undefined ? {} : {
+      method: method || 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+    });
+    if (res.status === 401) { location.href = '/login'; throw new Error('กรุณาเข้าสู่ระบบ'); }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const detail = Array.isArray(data.detail) ? data.detail.map(d => (d.loc || []).slice(-1)[0] + ': ' + d.msg).join(', ') : data.detail;
+      throw new Error(detail || ('HTTP ' + res.status));
+    }
+    return data;
+  }
+  function toast(msg, ok = false) {
+    const el = $('#toast');
+    el.style.background = ok ? 'var(--ok)' : 'var(--bad)';
+    el.textContent = msg; el.style.display = 'block';
+    clearTimeout(toast.t); toast.t = setTimeout(() => { el.style.display = 'none'; }, 6000);
+  }
+  async function busy(button, fn) {
+    const label = button.textContent;
+    button.disabled = true; button.textContent = 'กำลังบันทึก…';
+    try { await fn(); } catch (e) { toast(e.message); } finally { button.disabled = false; button.textContent = label; }
+  }
+
+  // Days whose bookings no longer fit after a change: offer to re-plan each.
+  function showAffected(affected, done) {
+    const box = $('#affected');
+    if (!affected || !affected.length) {
+      box.hidden = !done;
+      box.innerHTML = done ? `<div class="affected"><span class="ok">✓ ${esc(done)} · ไม่มีเคสที่จองไว้ได้รับผลกระทบ</span></div>` : '';
+      return;
+    }
+    box.hidden = false;
+    box.innerHTML = `<div class="affected"><b>⚠ ${esc(done || 'บันทึกแล้ว')} แต่มีเคสที่จองไว้ขัดกับข้อมูลใหม่</b>
+      <ul>${affected.map(a => `<li><b>${esc(a.date)}</b> · ${a.count} จุด: ${esc(a.problems.slice(0, 2).join('; '))}
+        ${can('roster') ? `<button class="btn small primary" type="button" data-replan="${esc(a.date)}">จัดตารางวันนั้นใหม่</button>` : ''}
+        <a class="btn small" href="/?date=${esc(a.date)}">ดูตาราง</a></li>`).join('')}</ul></div>`;
+    box.querySelectorAll('[data-replan]').forEach(b => b.addEventListener('click', () => busy(b, async () => {
+      const data = await api('/api/replan?date=' + encodeURIComponent(b.dataset.replan), {});
+      const r = data.result;
+      const li = b.closest('li');
+      li.innerHTML = `<span class="ok">✓ ${esc(b.dataset.replan)}: จัดใหม่แล้ว ${r.changes.length} เคส · แจ้งเตือน ${r.notifications.length} ข้อความ</span>`
+        + (r.unscheduled.length ? `<br><b>จัดไม่ได้ ${r.unscheduled.length} เคส (ต้องหาวันใหม่):</b> ${esc(r.unscheduled.map(u => u.case_id + ' ' + u.reasons.join('; ')).join(' | '))}` : '');
+    })));
+    box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
+  // ------------------------------------------------------------------ tabs
+  function selectTab(name) {
+    document.querySelectorAll('.tab').forEach(t => t.setAttribute('aria-selected', String(t.dataset.tab === name)));
+    document.querySelectorAll('[data-panel]').forEach(p => { p.hidden = p.dataset.panel !== name; });
+    $('#affected').hidden = true;
+    const load = { roster: loadRoster, rooms: loadRooms, staff: loadStaff, equipment: loadEquipment }[name];
+    load().catch(e => toast(e.message));
+  }
+  document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => selectTab(t.dataset.tab)));
+
+  // ---------------------------------------------------------------- roster
+  async function ensureStaff() { if (!STAFF) STAFF = await api('/api/admin/staff'); return STAFF; }
+
+  function roleOptions(all) {
+    return '<option value="">ทุกบทบาท</option>' + options(ROLE_TH, '', all);
+  }
+
+  function renderPeoplePicker() {
+    const role = $('#pick-role').value;
+    const keep = new Set([...document.querySelectorAll('#pick-people input:checked')].map(x => x.value));
+    $('#pick-people').innerHTML = STAFF.staff.filter(p => p.active && (!role || p.role === role)).map(p =>
+      `<label><input type="checkbox" value="${esc(p.id)}" ${keep.has(p.id) ? 'checked' : ''}>${esc(p.name)} <small class="hint">${esc(ROLE_TH[p.role] || p.role)} · ${esc(p.code)}</small></label>`).join('')
+      || '<p class="hint">ยังไม่มีบุคลากร</p>';
+  }
+
+  async function loadRoster() {
+    await ensureStaff();
+    const editable = can('roster');
+    $('#form-shift').hidden = !editable;
+    $('#roster-readonly').hidden = editable;
+    if (!$('#pick-role').options.length) {
+      $('#pick-role').innerHTML = roleOptions(STAFF.roles);
+      $('#view-role').innerHTML = roleOptions(STAFF.roles);
+      $('#weekdays').innerHTML = DAY_TH.map((d, i) => `<label><input type="checkbox" name="weekday" value="${i}" checked>${d}</label>`).join('');
+      const today = localToday();
+      const f = $('#form-shift');
+      f.elements['date_from'].value = today; f.elements['date_to'].value = addDays(today, 6);
+      $('#view-from').value = today;
+    }
+    renderPeoplePicker();
+    await loadGrid();
+  }
+
+  async function loadGrid() {
+    const from = $('#view-from').value || localToday();
+    const days = Number($('#view-days').value);
+    const to = addDays(from, days - 1);
+    const data = await api(`/api/admin/shifts?date_from=${from}&date_to=${to}`);
+    const role = $('#view-role').value;
+    const dates = Array.from({ length: days }, (_, i) => addDays(from, i));
+    const today = localToday();
+    const people = STAFF.staff.filter(p => (p.active || data.shifts.some(s => s.staff_id === p.id)) && (!role || p.role === role));
+    // Each row is one shift or one day of leave; it is shown on the day it starts.
+    const cell = (pid, day) => data.shifts.filter(s => s.staff_id === pid && s.start.slice(0, 10) === day)
+      .map(s => {
+        const overnight = s.end.slice(0, 10) !== s.start.slice(0, 10);
+        const time = s.type === 'LEAVE' && s.start.slice(11) === '00:00' && s.end.slice(11) === '00:00' ? 'ลาทั้งวัน'
+          : `${s.start.slice(11)}-${s.end.slice(11)}${overnight && s.type !== 'LEAVE' ? '⁺¹' : ''}`;
+        const title = `${SHIFT_TH[s.type]} ${s.start} ถึง ${s.end}${s.note ? ' · ' + s.note : ''}`;
+        return `<div class="chip ${esc(s.type)}" title="${esc(title)}">${can('roster') ? `<input type="checkbox" data-shift="${esc(s.id)}" aria-label="เลือก">` : ''}
+          <span>${s.type === 'REGULAR' ? '' : esc(SHIFT_TH[s.type]) + ' '}${esc(time)}</span></div>`;
+      }).join('');
+    const head = `<tr><th>บุคลากร</th>${dates.map(d => {
+      const w = (new Date(d + 'T00:00:00Z').getUTCDay() + 6) % 7;
+      return `<th class="${d === today ? 'today' : ''}">${DAY_TH[w]} ${d.slice(8)}/${d.slice(5, 7)}</th>`;
+    }).join('')}</tr>`;
+    const body = people.map(p => `<tr><td class="person">${esc(p.name)}<small>${esc(ROLE_TH[p.role] || p.role)}${p.active ? '' : ' · ปิดใช้งาน'}</small></td>
+      ${dates.map(d => `<td>${cell(p.id, d)}</td>`).join('')}</tr>`).join('');
+    $('#roster').innerHTML = `<thead>${head}</thead><tbody>${body || `<tr><td colspan="${days + 1}" class="hint">ไม่มีบุคลากร</td></tr>`}</tbody>`;
+    const syncDelete = () => { $('#delete-selected').hidden = !document.querySelector('#roster input[data-shift]:checked'); };
+    $('#roster').querySelectorAll('input[data-shift]').forEach(x => x.addEventListener('change', syncDelete));
+    syncDelete();
+  }
+
+  $('#pick-role').addEventListener('change', renderPeoplePicker);
+  $('#pick-all').addEventListener('click', () => document.querySelectorAll('#pick-people input').forEach(x => { x.checked = true; }));
+  $('#pick-none').addEventListener('click', () => document.querySelectorAll('#pick-people input').forEach(x => { x.checked = false; }));
+  ['#view-from', '#view-days', '#view-role'].forEach(id => $(id).addEventListener('change', () => loadGrid().catch(e => toast(e.message))));
+  $('#view-prev').addEventListener('click', () => { $('#view-from').value = addDays($('#view-from').value, -Number($('#view-days').value)); loadGrid().catch(e => toast(e.message)); });
+  $('#view-next').addEventListener('click', () => { $('#view-from').value = addDays($('#view-from').value, Number($('#view-days').value)); loadGrid().catch(e => toast(e.message)); });
+  $('#form-shift').elements['whole_day'].addEventListener('change', e => {
+    const f = $('#form-shift');
+    if (e.target.checked) { f.elements['start'].value = '00:00'; f.elements['end'].value = '00:00'; }
+  });
+  $('#form-shift').elements['type'].addEventListener('change', e => {
+    const f = $('#form-shift');
+    f.elements['whole_day'].checked = e.target.value === 'LEAVE';
+    if (e.target.value === 'LEAVE') { f.elements['start'].value = '00:00'; f.elements['end'].value = '00:00'; }
+  });
+  $('#form-shift').addEventListener('submit', e => {
+    e.preventDefault();
+    const f = e.target;
+    const body = {
+      type: f.elements['type'].value, date_from: f.elements['date_from'].value, date_to: f.elements['date_to'].value,
+      start: f.elements['start'].value, end: f.elements['end'].value, note: f.elements['note'].value.trim() || null,
+      weekdays: [...f.querySelectorAll('input[name="weekday"]:checked')].map(x => Number(x.value)),
+      staff_ids: [...document.querySelectorAll('#pick-people input:checked')].map(x => x.value),
+    };
+    if (!body.staff_ids.length) { toast('เลือกบุคลากรอย่างน้อย 1 คน'); return; }
+    busy(f.querySelector('[type="submit"]'), async () => {
+      const r = await api('/api/admin/shifts', body);
+      showAffected(r.affected, `เพิ่ม${SHIFT_TH[body.type] === 'ลา' ? 'วันลา' : SHIFT_TH[body.type]} ${r.created} รายการแล้ว`);
+      $('#view-from').value = body.date_from;
+      await loadGrid();
+    });
+  });
+  $('#delete-selected').addEventListener('click', e => {
+    const ids = [...document.querySelectorAll('#roster input[data-shift]:checked')].map(x => x.dataset.shift);
+    if (!ids.length || !confirm(`ลบเวร/วันลาที่เลือก ${ids.length} รายการ?`)) return;
+    busy(e.target, async () => {
+      const r = await api('/api/admin/shifts/delete', { ids });
+      showAffected(r.affected, `ลบแล้ว ${r.deleted} รายการ`);
+      await loadGrid();
+    });
+  });
+
+  // ----------------------------------------------------------------- rooms
+  function roomFields(r, data) {
+    const caps = data.capabilities.map(c => `<label><input type="checkbox" name="cap" value="${esc(c)}" ${r.capabilities.includes(c) ? 'checked' : ''}>${esc(CAP_TH[c] || c)}</label>`).join('');
+    return `<div class="grid">
+        ${r.code === undefined ? '<label>รหัสห้อง<input type="text" name="code" required maxlength="20" placeholder="เช่น OR-5"></label>' : ''}
+        <label>ประเภท<select name="type">${options(ROOM_TYPE_TH, r.type, [...new Set([...data.types, r.type])])}</select></label>
+        <label>สถานะ<select name="status">${options(STATUS_TH, r.status, data.statuses)}</select></label>
+        <label>ทำความสะอาดปกติ (นาที)<input type="number" name="base" min="0" max="240" value="${r.base_turnover_mins}"></label>
+        <label>หลังเคสติดเชื้อ (นาที)<input type="number" name="dirty" min="0" max="480" value="${r.infectious_turnover_mins}"></label>
+      </div>
+      <fieldset><legend>ความสามารถของห้อง</legend><div class="checks">${caps}
+        <label>อื่น ๆ <input type="text" name="extra" placeholder="A-Z_ คั่นด้วยจุลภาค" style="width:180px"></label></div></fieldset>`;
+  }
+  function readRoom(form) {
+    const extra = form.elements['extra'].value.split(',').map(x => x.trim().toUpperCase()).filter(Boolean);
+    return {
+      code: form.elements['code']?.value.trim(), type: form.elements['type'].value, status: form.elements['status'].value,
+      base_turnover_mins: Number(form.elements['base'].value), infectious_turnover_mins: Number(form.elements['dirty'].value),
+      capabilities: [...form.querySelectorAll('input[name="cap"]:checked')].map(x => x.value).concat(extra),
+    };
+  }
+
+  async function loadRooms() {
+    const data = ROOMS = await api('/api/admin/rooms');
+    const edit = can('hospital_data');
+    $('#form-closure').hidden = !can('roster') || !data.closures_ready;
+    $('#closure-missing').hidden = data.closures_ready;
+    const f = $('#form-closure');
+    f.elements['room'].innerHTML = data.rooms.map(r => `<option>${esc(r.code)}</option>`).join('');
+    if (!f.elements['start_date'].value) { f.elements['start_date'].value = f.elements['end_date'].value = localToday(); }
+    $('#closures').innerHTML = data.closures.map(c => `<div class="row-item"><div class="title">
+        <span><b>${esc(c.room)}</b> ปิด ${esc(c.start)} ถึง ${esc(c.end)}${c.reason ? ' · ' + esc(c.reason) : ''}<br><small class="hint">${esc(c.by || '')}</small></span>
+        ${can('roster') ? `<button class="btn small danger" type="button" data-closure="${esc(c.id)}">ยกเลิกการปิด</button>` : ''}</div></div>`).join('')
+      || (data.closures_ready ? '<p class="hint">ไม่มีการปิดห้องที่กำลังจะถึง</p>' : '');
+    $('#closures').querySelectorAll('[data-closure]').forEach(b => b.addEventListener('click', () => {
+      if (!confirm('ยกเลิกการปิดห้องนี้?')) return;
+      busy(b, async () => { await api('/api/admin/closures/' + b.dataset.closure, {}, 'DELETE'); showAffected([], 'ยกเลิกการปิดห้องแล้ว'); await loadRooms(); });
+    }));
+    $('#rooms').innerHTML = data.rooms.map(r => `<form class="row-item" data-room="${esc(r.code)}">
+        <div class="title"><b>${esc(r.code)}</b><span>
+          <span class="badge ${r.status === 'AVAILABLE' ? 'ok' : 'bad'}">${esc(STATUS_TH[r.status] || r.status)}</span>
+          <span class="badge">${esc(ROOM_TYPE_TH[r.type] || r.type)}</span></span></div>
+        ${edit ? roomFields(r, data) + '<div class="actions"><button class="btn primary" type="submit">บันทึก</button></div>'
+          : `<small class="hint">${esc(r.capabilities.map(c => CAP_TH[c] || c).join(', ') || 'ไม่มีความสามารถพิเศษ')} · ทำความสะอาด ${r.base_turnover_mins}/${r.infectious_turnover_mins} นาที</small>`}
+      </form>`).join('') || '<p class="hint">ยังไม่มีห้อง</p>';
+    $('#rooms').querySelectorAll('form').forEach(form => form.addEventListener('submit', e => {
+      e.preventDefault();
+      busy(form.querySelector('[type="submit"]'), async () => {
+        const r = await api('/api/admin/rooms/' + encodeURIComponent(form.dataset.room), readRoom(form), 'PATCH');
+        showAffected(r.affected, `บันทึกห้อง ${form.dataset.room} แล้ว`);
+        await loadRooms();
+      });
+    }));
+    $('#room-add-box').hidden = !edit;
+    if (edit) $('#form-room').innerHTML = roomFields({ type: 'STANDARD', status: 'AVAILABLE', capabilities: [], base_turnover_mins: 30, infectious_turnover_mins: 60 }, data)
+      + '<div class="actions"><button class="btn primary" type="submit">เพิ่มห้อง</button></div>';
+  }
+  $('#form-room').addEventListener('submit', e => {
+    e.preventDefault();
+    busy(e.target.querySelector('[type="submit"]'), async () => {
+      const body = readRoom(e.target);
+      await api('/api/admin/rooms', body);
+      showAffected([], `เพิ่มห้อง ${body.code} แล้ว`);
+      await loadRooms();
+    });
+  });
+  $('#form-closure').addEventListener('submit', e => {
+    e.preventDefault();
+    const f = e.target;
+    const body = Object.fromEntries(['room', 'start_date', 'start_time', 'end_date', 'end_time', 'reason'].map(k => [k, f.elements[k].value]));
+    busy(f.querySelector('[type="submit"]'), async () => {
+      const r = await api('/api/admin/closures', body);
+      showAffected(r.affected, `ปิดห้อง ${body.room} แล้ว`);
+      f.elements['reason'].value = '';
+      await loadRooms();
+    });
+  });
+
+  // ----------------------------------------------------------------- staff
+  function staffFields(p, data) {
+    return `<div class="grid">
+        <label>รหัสพนักงาน<input type="text" name="code" required maxlength="50" value="${esc(p.code || '')}"></label>
+        <label>ชื่อ-สกุล<input type="text" name="name" required maxlength="150" value="${esc(p.name || '')}"></label>
+        <label>บทบาท<select name="role">${options(ROLE_TH, p.role, data.roles)}</select></label>
+        <label>ความเชี่ยวชาญ<input type="text" name="specialty" maxlength="100" value="${esc(p.specialty || '')}" placeholder="เช่น ORTHOPEDICS"></label>
+      </div>
+      <label>ทักษะ (คั่นด้วยจุลภาค, A-Z_) <input type="text" name="skills" value="${esc((p.skills || []).join(', '))}" list="skill-list" placeholder="เช่น ROBOTIC_CERTIFIED, PEDIATRIC_ANESTHESIA"></label>
+      <div class="grid">
+        <label>ชม.ผ่าตัดสูงสุด / 7 วัน<input type="number" name="weekly" min="1" max="168" step="0.5" value="${p.max_hours_per_week ?? 48}"></label>
+        <label>ชม.ผ่าตัดสูงสุด / วัน<input type="number" name="daily" min="1" max="24" step="0.5" value="${p.max_hours_per_day ?? 10}" ${data.limits_ready ? '' : 'disabled title="รัน migration 004 ก่อน"'}></label>
+        <label>ชม.พักหลังเคสดึก<input type="number" name="rest" min="0" max="24" step="0.5" value="${p.min_rest_hours ?? 8}" ${data.limits_ready ? '' : 'disabled title="รัน migration 004 ก่อน"'}></label>
+        <label style="display:flex;flex-direction:row;align-items:center;gap:6px;color:var(--text)"><input type="checkbox" name="active" ${p.active === false ? '' : 'checked'}>ใช้งาน</label>
+      </div>`;
+  }
+  function readStaff(form) {
+    return {
+      code: form.elements['code'].value.trim(), name: form.elements['name'].value.trim(), role: form.elements['role'].value,
+      specialty: form.elements['specialty'].value.trim() || null,
+      skills: form.elements['skills'].value.split(',').map(x => x.trim().toUpperCase()).filter(Boolean),
+      max_hours_per_week: Number(form.elements['weekly'].value), max_hours_per_day: Number(form.elements['daily'].value),
+      min_rest_hours: Number(form.elements['rest'].value), active: form.elements['active'].checked,
+    };
+  }
+
+  async function loadStaff() {
+    STAFF = await api('/api/admin/staff');
+    renderStaff();
+  }
+
+  function renderStaff() {
+    const data = STAFF;
+    const edit = can('hospital_data');
+    if (!$('#staff-role').options.length) $('#staff-role').innerHTML = roleOptions(data.roles);
+    if (!$('#skill-list')) document.body.insertAdjacentHTML('beforeend', '<datalist id="skill-list"></datalist>');
+    $('#skill-list').innerHTML = data.skills.map(s => `<option value="${esc(s)}">`).join('');
+    const q = $('#staff-q').value.trim().toLowerCase(), role = $('#staff-role').value;
+    const shown = data.staff.filter(p => (!role || p.role === role) && (!q || (p.name + ' ' + p.code).toLowerCase().includes(q)));
+    $('#staff').innerHTML = shown.map(p => `<details class="row-item">
+        <summary class="title" style="cursor:pointer"><span><b>${esc(p.name)}</b> <small class="hint">${esc(p.code)} · ${esc(ROLE_TH[p.role] || p.role)}${p.specialty ? ' · ' + esc(p.specialty) : ''}</small></span>
+          <span><span class="badge ${p.active ? 'ok' : 'bad'}">${p.active ? 'ใช้งาน' : 'ปิดใช้งาน'}</span>
+          <span class="badge">${p.max_hours_per_week}/${p.max_hours_per_day} ชม. · พัก ${p.min_rest_hours}</span>
+          ${p.skills.map(s => `<span class="badge warn">${esc(s)}</span>`).join(' ')}</span></summary>
+        ${edit ? `<form data-staff="${esc(p.id)}">${staffFields(p, data)}<div class="actions"><button class="btn primary" type="submit">บันทึก</button></div></form>` : ''}
+      </details>`).join('') || '<p class="hint">ไม่พบบุคลากร</p>';
+    $('#staff').querySelectorAll('form').forEach(form => form.addEventListener('submit', e => {
+      e.preventDefault();
+      busy(form.querySelector('[type="submit"]'), async () => {
+        const body = readStaff(form);
+        const r = await api('/api/admin/staff/' + form.dataset.staff, body, 'PATCH');
+        showAffected(r.affected, `บันทึก ${body.name} แล้ว`);
+        await loadStaff();
+      });
+    }));
+    $('#staff-add-box').hidden = !edit;
+    if (edit && !$('#form-staff').innerHTML) $('#form-staff').innerHTML = staffFields({ role: 'SCRUB_NURSE' }, data)
+      + '<div class="actions"><button class="btn primary" type="submit">เพิ่มบุคลากร</button></div>';
+  }
+  $('#staff-q').addEventListener('input', () => { if (STAFF) renderStaff(); });
+  $('#staff-role').addEventListener('change', () => { if (STAFF) renderStaff(); });
+  $('#form-staff').addEventListener('submit', e => {
+    e.preventDefault();
+    busy(e.target.querySelector('[type="submit"]'), async () => {
+      const body = readStaff(e.target);
+      await api('/api/admin/staff', body);
+      showAffected([], `เพิ่ม ${body.name} แล้ว · อย่าลืมเพิ่มเวรในแท็บ "เวรและวันลา"`);
+      $('#form-staff').innerHTML = '';
+      await loadStaff();
+    });
+  });
+
+  // ------------------------------------------------------------- equipment
+  async function loadEquipment() {
+    const data = await api('/api/admin/equipment');
+    const edit = can('hospital_data');
+    const typeFields = t => `<div class="grid">
+        <label>ชื่อชนิด<input type="text" name="name" required maxlength="150" value="${esc(t.name || '')}"></label>
+        <label>หมวด<select name="category">${options(CATEGORY_TH, t.category, data.categories)}</select></label>
+        <label>เวลาอบฆ่าเชื้อหลังใช้ (นาที)<input type="number" name="minutes" min="0" max="1440" value="${t.sterilization_mins ?? 120}"></label>
+        <label style="display:flex;flex-direction:row;align-items:center;gap:6px;color:var(--text)"><input type="checkbox" name="sterile" ${t.requires_sterilization === false ? '' : 'checked'}>ต้องส่ง CSSD</label>
+      </div>`;
+    const readType = f => ({ name: f.elements['name'].value.trim(), category: f.elements['category'].value,
+      sterilization_mins: Number(f.elements['minutes'].value), requires_sterilization: f.elements['sterile'].checked });
+    const typeOptions = sel => data.types.map(t => `<option value="${esc(t.id)}" ${t.id === sel ? 'selected' : ''}>${esc(t.name)}</option>`).join('');
+    const unitFields = u => `<div class="grid">
+        ${u.serial === undefined ? '<label>หมายเลขเครื่อง<input type="text" name="serial" required maxlength="100" placeholder="เช่น LAP-04"></label>' : ''}
+        <label>ชนิด<select name="type_id">${typeOptions(u.type_id)}</select></label>
+        <label>ที่เก็บ<input type="text" name="location" maxlength="100" value="${esc(u.location || '')}" placeholder="เช่น CSSD_ZONE"></label>
+      </div>`;
+    const readUnit = f => ({ serial: f.elements['serial']?.value.trim(), type_id: f.elements['type_id'].value, location: f.elements['location'].value.trim() || null });
+
+    $('#types').innerHTML = data.types.map(t => `<form class="row-item" data-type="${esc(t.id)}">
+        <div class="title"><b>${esc(t.name)}</b><span><span class="badge">${esc(CATEGORY_TH[t.category] || t.category)}</span>
+          <span class="badge">${t.units} เครื่อง</span><span class="badge">${t.requires_sterilization ? 'อบ ' + t.sterilization_mins + ' นาที' : 'ไม่ต้องอบ'}</span></span></div>
+        ${edit ? typeFields(t) + '<div class="actions"><button class="btn primary" type="submit">บันทึก</button></div>' : ''}</form>`).join('')
+      || '<p class="hint">ยังไม่มีชนิดเครื่องมือ</p>';
+    $('#units').innerHTML = data.units.map(u => `<form class="row-item" data-unit="${esc(u.serial)}">
+        <div class="title"><b>${esc(u.serial)}</b><span><span class="badge">${esc(u.type)}</span><span class="badge ${u.status === 'AVAILABLE' ? 'ok' : 'warn'}">${esc(u.status)}</span></span></div>
+        ${edit ? unitFields(u) + '<div class="actions"><button class="btn primary" type="submit">บันทึก</button></div>' : ''}</form>`).join('')
+      || '<p class="hint">ยังไม่มีเครื่องมือ</p>';
+    $('#types').querySelectorAll('form').forEach(f => f.addEventListener('submit', e => {
+      e.preventDefault();
+      busy(f.querySelector('[type="submit"]'), async () => { await api('/api/admin/equipment-types/' + f.dataset.type, readType(f), 'PATCH'); showAffected([], 'บันทึกแล้ว'); await loadEquipment(); });
+    }));
+    $('#units').querySelectorAll('form').forEach(f => f.addEventListener('submit', e => {
+      e.preventDefault();
+      busy(f.querySelector('[type="submit"]'), async () => {
+        const r = await api('/api/admin/equipment-units/' + encodeURIComponent(f.dataset.unit), readUnit(f), 'PATCH');
+        showAffected(r.affected, `บันทึก ${f.dataset.unit} แล้ว`); await loadEquipment();
+      });
+    }));
+    ['#type-add-box', '#unit-add-box'].forEach(id => { $(id).hidden = !edit; });
+    if (edit) {
+      $('#form-type').innerHTML = typeFields({}) + '<div class="actions"><button class="btn primary" type="submit">เพิ่มชนิด</button></div>';
+      $('#form-unit').innerHTML = data.types.length ? unitFields({}) + '<div class="actions"><button class="btn primary" type="submit">เพิ่มเครื่อง</button></div>'
+        : '<p class="hint">เพิ่มชนิดเครื่องมือก่อน</p>';
+      $('#form-type').onsubmit = e => { e.preventDefault(); busy(e.target.querySelector('[type="submit"]'), async () => { await api('/api/admin/equipment-types', readType(e.target)); showAffected([], 'เพิ่มชนิดเครื่องมือแล้ว'); await loadEquipment(); }); };
+      $('#form-unit').onsubmit = e => { e.preventDefault(); busy(e.target.querySelector('[type="submit"]'), async () => { const b = readUnit(e.target); await api('/api/admin/equipment-units', b); showAffected([], `เพิ่ม ${b.serial} แล้ว`); await loadEquipment(); }); };
+    }
+  }
+
+  // ---------------------------------------------------------------- start
+  $('#logout').addEventListener('click', async () => { await api('/api/logout', {}).catch(() => {}); location.href = '/login'; });
+  (async () => {
+    ME = (await api('/api/me')).user;
+    if (ME.must_change_password) { location.href = '/'; return; }
+    $('#who').innerHTML = `<span>${esc(ME.display_name)}</span><small>${esc(ME.role_label)}</small>`;
+    if (!can('hospital_view')) {
+      document.querySelector('main').innerHTML = '<div class="card"><h2>ไม่มีสิทธิ์</h2><p class="hint">หน้านี้สำหรับผู้ดูแลระบบและผู้จัดตาราง</p></div>';
+      return;
+    }
+    selectTab('roster');
+  })().catch(e => {
+    document.querySelector('main').innerHTML = `<div class="card"><h2>เปิดหน้านี้ไม่ได้</h2><p class="hint">${esc(e.message)}</p></div>`;
+  });
+</script>
+</body>
+</html>

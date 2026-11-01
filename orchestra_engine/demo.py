@@ -54,7 +54,7 @@ def _person(staff_id, name, role, start, end, skills=(), used=24.0, more_shifts=
 def build_hospital() -> Hospital:
     rooms = [
         OperatingRoom("OR-1", "STANDARD", {"LAMINAR_FLOW"}),
-        OperatingRoom("OR-2", "STANDARD"),
+        OperatingRoom("OR-2", "STANDARD", {"NEGATIVE_PRESSURE"}),
         OperatingRoom("OR-3", "STANDARD", {"ROBOTIC_READY"}),
         OperatingRoom("OR-4", "HYBRID", {"LEAD_LINED_XRAY"}),
     ]

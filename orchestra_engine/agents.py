@@ -326,10 +326,15 @@ def _facility(opt, case: SurgeryCase, start: int, busy: Busy) -> AgentVerdict:
             room_states.append(ResourceStatus(r.or_id, False, r.status.lower()))
             continue
         spans = busy.room.get(r.or_id, []) + [(a, b, OTHER_DAY) for a, b in r.blocked]
-        nxt = earliest_free(spans, dur + turnover, start, [(r.open_min, r.close(horizon))], dur, latest)
+        closures = [(a, b, "closure") for a, b, _ in r.closures]
+        nxt = earliest_free(spans + closures, dur + turnover, start, [(r.open_min, r.close(horizon))], dur, latest)
         clash = _clash(spans, start, end + turnover)
+        shut = r.closed_at(start, end + turnover)
         if start < r.open_min or end > r.close(horizon):
             room_states.append(ResourceStatus(r.or_id, False, "closed at that time", nxt))
+        elif shut:
+            why = f" ({shut[2]})" if shut[2] else ""
+            room_states.append(ResourceStatus(r.or_id, False, f"closed {fmt(shut[0])}-{fmt(shut[1])}{why}", nxt))
         elif clash:
             note = _clash_note(clash, start, "busy with {case}, clean at {end}", "booked for {case} at {start}")
             room_states.append(ResourceStatus(r.or_id, False, note, nxt))

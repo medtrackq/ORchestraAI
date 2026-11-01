@@ -23,7 +23,7 @@ from . import seed
 from .db import ConflictError, Database, DatabaseUnavailable, World, case_code
 from .intake_service import IntakeContext
 from .store import (Activity, StoreError, actor_name, build_case, check_own_case, check_team, equipment_rows,
-                    fatigue_log, fatigue_view, parse_time, ready_minute, staff_skills)
+                    fatigue_log, fatigue_view, parse_time, ready_minute, room_options, staff_skills)
 
 
 class DatabaseStore:
@@ -81,6 +81,23 @@ class DatabaseStore:
             raise StoreError("ตารางที่คำนวณได้ไม่ผ่านการตรวจ: " + "; ".join(new[:3]))
 
     @staticmethod
+    def _request_id(conn, data: dict, actor: dict | None = None) -> tuple[uuid.UUID, bool]:
+        """A new request, or the waiting (PENDING) request being rebooked."""
+        pending = data.get("pending_id")
+        if not pending:
+            return uuid.uuid4(), False
+        try:
+            request_id = uuid.UUID(pending)
+        except ValueError as exc:
+            raise StoreError("รหัสคำขอที่รอจัดไม่ถูกต้อง") from exc
+        row = conn.execute("SELECT status, primary_surgeon_id FROM surgery_requests WHERE request_id = %s",
+                           (request_id,)).fetchone()
+        if row is None or row["status"] != "PENDING":
+            raise StoreError("คำขอนี้ถูกจองหรือยกเลิกไปแล้ว กรุณาโหลดใหม่")
+        check_own_case(actor, str(row["primary_surgeon_id"]))
+        return request_id, True
+
+    @staticmethod
     def _request(data: dict, request_id: uuid.UUID) -> dict:
         name = (data.get("patient_name") or "").strip()
         if not name:
@@ -108,7 +125,8 @@ class DatabaseStore:
             activity = self.db.activity(conn, world) if world.has_activity else [
                 a.__dict__ for a in reversed(self._fallback_activity.get(world.day, [])[-30:])
             ]
-        return self._state(world, activity)
+            pending = self.db.pending(conn)
+        return {**self._state(world, activity), "pending": pending}
 
     def _state(self, world: World, activity: list[dict]) -> dict:
         schedule = world.result.to_dict()
@@ -133,7 +151,7 @@ class DatabaseStore:
             "schedule": schedule,
             "axis": {"start": max(0, start), "end": min(24 * 60, end)},
             "options": {
-                "rooms": [{"id": r.or_id, "type": r.room_type, "caps": sorted(r.capabilities)} for r in h.rooms],
+                "rooms": room_options(h),
                 "surgeons": [
                     {"id": s.staff_id, "name": s.name, "shifts": [f"{fmt(a)}-{fmt(b)}" for a, b in s.shifts]}
                     for s in h.staff if s.role == "SURGEON" and s.is_active
@@ -243,10 +261,10 @@ class DatabaseStore:
             world = self.db.load(conn, self._day(day))
             if start < world.now_min:
                 raise StoreError(f"เวลาที่ขอผ่านไปแล้ว (ตอนนี้ {fmt(world.now_min)} ของวันที่ {world.day})")
-            request_id = uuid.uuid4()
+            request_id, existing = self._request_id(conn, data, actor)
             case = build_case(world.hospital, data,
                               case_code(request_id, data.get("urgency") or "ELECTIVE", set(world.result.cases)))
-            request = self._request(data, request_id) if commit else None
+            request = {**self._request(data, request_id), "existing": existing} if commit else None
             check = self._optimizer(world).check_slot(world.result, case, start, verbose=False)
             out = check.to_dict()
             out["booked"] = False
@@ -266,10 +284,10 @@ class DatabaseStore:
         now = parse_time(now_text)
         with self._transaction(write=True) as conn:
             world = self.db.load(conn, self._day(day))
-            request_id = uuid.uuid4()
+            request_id, existing = self._request_id(conn, data, actor)
             case = build_case(world.hospital, {**data, "urgency": "EMERGENCY"},
                               case_code(request_id, "EMERGENCY", set(world.result.cases)), release=now)
-            request = self._request(data, request_id)
+            request = {**self._request(data, request_id), "existing": existing}
             after = self._optimizer(world).insert_emergency(
                 world.result, list(world.result.cases.values()), [case], now_min=now,
                 scenario_name=f"Emergency {case.case_id}", verbose=False,
@@ -314,6 +332,43 @@ class DatabaseStore:
         self.db.save(conn, world, after, new_requests, activity=self._record(conn, world, activity))
         return {"changes": data["changes"], "notifications": data["notifications"],
                 "unscheduled": data["unscheduled"], "log": log, "fatigue": [i.to_dict() for i in tired]}
+
+    def replan(self, day: str | None = None, *, actor: dict | None = None) -> dict:
+        """Re-plan the cases of a day that have not started (after leave, a room closure, ...),
+        changing as little as possible."""
+        with self._transaction(write=True) as conn:
+            world = self.db.load(conn, self._day(day))
+            if world.now_min >= 24 * 60:
+                raise StoreError(f"วันที่ {world.day} ผ่านไปแล้ว")
+            if not world.result.assignments:
+                raise StoreError(f"วันที่ {world.day} ยังไม่มีเคส")
+            problems = self._problems(world, world.result)
+            after = self._optimizer(world).reschedule(
+                world.result, list(world.result.cases.values()), now_min=world.now_min,
+                scenario_name=f"Replan {world.day}", verbose=False,
+            )
+            title = f"จัดตารางวันที่ {world.day} ใหม่" + (f" (แก้ {len(problems)} จุดขัดกัน)" if problems else "")
+            return self._save_change(conn, world, after, "replan", title, "", {}, actor)
+
+    def cancel_pending(self, pending_id: str, *, actor: dict | None = None) -> dict:
+        """Give up a request waiting to be rebooked (e.g. the patient went elsewhere)."""
+        try:
+            request_id = uuid.UUID(pending_id)
+        except ValueError as exc:
+            raise StoreError("รหัสคำขอไม่ถูกต้อง") from exc
+        with self._transaction(write=True) as conn:
+            owner = conn.execute("SELECT primary_surgeon_id FROM surgery_requests WHERE request_id = %s",
+                                 (request_id,)).fetchone()
+            if owner is not None:
+                check_own_case(actor, str(owner["primary_surgeon_id"]))
+            row = self.db.cancel_request(conn, request_id)
+            if row is None:
+                raise StoreError("คำขอนี้ถูกจองหรือยกเลิกไปแล้ว")
+            world = self.db.load(conn, self.db.today())
+            code = case_code(request_id, row["urgency_level"], set())
+            self.db.log_activity(conn, world, self._record(conn, world, Activity(
+                "cancel", f"ยกเลิกคำขอที่รอจัด {code}", [], actor=actor_name(actor))))
+        return {"cancelled": pending_id}
 
     def seed_demo(self) -> dict:
         """Fill an empty database with the synthetic demo hospital and book today's demo cases."""

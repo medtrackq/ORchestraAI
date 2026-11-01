@@ -46,6 +46,7 @@ TABLES = (
     "recovery_beds", "procedures", "surgeon_preference_cards", "surgery_requests", "scheduled_surgeries",
     "resource_allocations",
 )
+OPTIONAL_TABLES = ("room_closures",)  # RLS is checked once the migration that creates them has run
 
 
 log = logging.getLogger("orchestra.db")
@@ -166,6 +167,10 @@ class World:
     has_activity: bool = False
     rls_off: list[str] = field(default_factory=list)
     has_actor_col: bool = False
+    columns: frozenset = frozenset()  # (table, column) pairs present: optional migrations
+
+    def has(self, table: str, column: str) -> bool:
+        return (table, column) in self.columns
 
     def minute(self, ts: datetime | None, default: int = 0) -> int:
         if ts is None:
@@ -280,7 +285,7 @@ class Database:
             for r in conn.execute(
                 "SELECT relname, relrowsecurity FROM pg_class "
                 "WHERE relnamespace = 'public'::regnamespace AND relkind = 'r' AND relname = ANY(%s)",
-                (list(TABLES),),
+                (list(TABLES + OPTIONAL_TABLES),),
             )
         }
 
@@ -293,6 +298,18 @@ class Database:
             ))
             room_ids[r["room_code"]] = r["or_id"]
             room_codes[r["or_id"]] = r["room_code"]
+        if ("room_closures", "closure_id") in columns:
+            closed: dict[str, list] = {}
+            for r in conn.execute(
+                "SELECT or_id, start_time, end_time, reason FROM room_closures "
+                "WHERE end_time > %(start)s AND start_time < %(end)s ORDER BY start_time", span,
+            ):
+                code = room_codes.get(r["or_id"])
+                if code:
+                    closed.setdefault(code, []).append((minute(r["start_time"]), minute(r["end_time"]), r["reason"]))
+            for room in rooms:
+                room.closures = tuple(closed.get(room.or_id, ()))
+                room.__post_init__()
 
         shifts: dict[uuid.UUID, list] = {}
         leave: dict[uuid.UUID, list] = {}
@@ -373,6 +390,8 @@ class Database:
         recovery_sel = ", s.recovery_end_time" if has_recovery_col else ""
         if ("procedures", "required_staff_skills") in columns:
             recovery_sel += ", p.required_staff_skills"
+        if ("surgery_requests", "airborne_isolation") in columns:
+            recovery_sel += ", r.airborne_isolation"
         rows = list(conn.execute(
             f"""SELECT s.schedule_id, s.request_id, s.or_id, s.reserved_bed_id, s.start_time, s.end_time,
                        s.cleanup_end_time, s.status, s.actual_start_time, s.actual_end_time,
@@ -470,6 +489,7 @@ class Database:
                 required_equipment_types=[unit_by_serial[s].eq_type for s in unit_list],
                 infection_risk=infection, requires_icu_post_op=bool(r["icu"]),
                 recovery_mins=recovery, patient_name=r["patient_name"],
+                airborne=bool(r.get("airborne_isolation")),
             )
             cases[cid] = case
             assignments[cid] = Assignment(
@@ -490,7 +510,9 @@ class Database:
         return World(
             day, start, result.now_min, hospital, room_ids, unit_ids, bed_ids,
             {key: tid for tid, key in type_keys.items()}, procedures, cards, result, bookings,
-            has_recovery_col, has_activity, sorted(t for t in TABLES if not rls.get(t, False)), has_actor_col,
+            has_recovery_col, has_activity,
+            sorted(t for t in TABLES + OPTIONAL_TABLES if not rls.get(t, t in OPTIONAL_TABLES)), has_actor_col,
+            frozenset(columns),
         )
 
     @staticmethod
@@ -587,15 +609,28 @@ class Database:
                     continue
                 case = after.cases[cid]
                 request_id = request["request_id"]
-                conn.execute(
-                    """INSERT INTO surgery_requests (request_id, patient_hn, patient_name, primary_surgeon_id,
-                           procedure_id, urgency_level, raw_nlp_input, ai_predicted_duration_mins,
-                           preferred_date_start, preferred_date_end, status)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'SCHEDULED')""",
-                    (request_id, case.patient_hn, request["patient_name"], uuid.UUID(case.surgeon_id),
-                     request.get("procedure_id"), case.urgency.value, request.get("raw_text"),
-                     case.duration_mins, world.day, world.day),
-                )
+                cols = ["request_id", "patient_hn", "patient_name", "primary_surgeon_id", "procedure_id",
+                        "urgency_level", "raw_nlp_input", "ai_predicted_duration_mins", "preferred_date_start",
+                        "preferred_date_end", "status"]
+                values = [request_id, case.patient_hn, request["patient_name"], uuid.UUID(case.surgeon_id),
+                          request.get("procedure_id"), case.urgency.value, request.get("raw_text"),
+                          case.duration_mins, world.day, world.day, "SCHEDULED"]
+                if world.has("surgery_requests", "airborne_isolation"):
+                    cols.append("airborne_isolation")
+                    values.append(case.airborne)
+                if request.get("existing"):  # a request waiting to be rebooked keeps its id and history
+                    cur = conn.execute(
+                        f"UPDATE surgery_requests SET {', '.join(f'{c} = %s' for c in cols[1:])} "
+                        "WHERE request_id = %s AND status = 'PENDING'",
+                        [*values[1:], request_id],
+                    )
+                    if cur.rowcount != 1:
+                        raise ConflictError(f"{cid}: the waiting request was booked or cancelled meanwhile")
+                else:
+                    conn.execute(
+                        f"INSERT INTO surgery_requests ({', '.join(cols)}) VALUES ({', '.join(['%s'] * len(cols))})",
+                        values,
+                    )
                 self._insert_schedule(conn, world, uuid.uuid4(), request_id, case, a, None)
             if activity is not None:
                 self.log_activity(conn, world, activity)
@@ -633,6 +668,43 @@ class Database:
                      AND s.actual_start_time > NOW() - INTERVAL '2 years'"""
             )
         ]
+
+    def pending(self, conn: psycopg.Connection) -> list[dict]:
+        """Requests taken off the schedule (re-plan, emergency) that still need a day."""
+        cols = {r["column_name"] for r in conn.execute(
+            "SELECT column_name FROM information_schema.columns WHERE table_name = 'surgery_requests'")}
+        airborne = "r.airborne_isolation" if "airborne_isolation" in cols else "false"
+        rows = conn.execute(
+            f"""SELECT r.request_id, r.patient_hn, r.patient_name, r.primary_surgeon_id, r.procedure_id,
+                       r.urgency_level, r.raw_nlp_input, r.ai_predicted_duration_mins, r.preferred_date_start,
+                       r.created_at, {airborne} AS airborne, p.name AS procedure_name, s.full_name AS surgeon_name
+                FROM surgery_requests r
+                LEFT JOIN procedures p ON p.procedure_id = r.procedure_id
+                LEFT JOIN staff s ON s.staff_id = r.primary_surgeon_id
+                WHERE r.status = 'PENDING' AND NOT EXISTS (
+                    SELECT 1 FROM scheduled_surgeries x
+                    WHERE x.request_id = r.request_id AND x.status IS DISTINCT FROM 'CANCELLED')
+                ORDER BY CASE r.urgency_level WHEN 'EMERGENCY' THEN 0 WHEN 'URGENT' THEN 1 ELSE 2 END,
+                         r.preferred_date_start NULLS LAST, r.created_at
+                LIMIT 200"""
+        ).fetchall()
+        return [
+            {"id": str(r["request_id"]), "code": case_code(r["request_id"], r["urgency_level"], set()),
+             "patient_hn": r["patient_hn"], "patient_name": r["patient_name"],
+             "surgeon_id": str(r["primary_surgeon_id"]) if r["primary_surgeon_id"] else None,
+             "surgeon": r["surgeon_name"], "procedure_id": str(r["procedure_id"]) if r["procedure_id"] else None,
+             "procedure": r["procedure_name"] or r["raw_nlp_input"] or "Surgery", "urgency": r["urgency_level"],
+             "duration_mins": r["ai_predicted_duration_mins"], "airborne": bool(r["airborne"]),
+             "was_on": r["preferred_date_start"].isoformat() if r["preferred_date_start"] else None}
+            for r in rows
+        ]
+
+    @staticmethod
+    def cancel_request(conn: psycopg.Connection, request_id: uuid.UUID) -> dict | None:
+        return conn.execute(
+            "UPDATE surgery_requests SET status = 'CANCELLED' WHERE request_id = %s AND status = 'PENDING' "
+            "RETURNING patient_hn, urgency_level, request_id", (request_id,),
+        ).fetchone()
 
     @staticmethod
     def people(conn: psycopg.Connection) -> list[dict]:

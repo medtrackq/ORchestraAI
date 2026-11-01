@@ -271,3 +271,18 @@ def test_claude_refusal_is_reported(monkeypatch):
     monkeypatch.setattr(llm, "_get_client", lambda: client)
     with pytest.raises(IntakeUnavailable):
         llm.parse("text", PROCS, SURGEONS, TODAY)
+
+
+@pytest.mark.parametrize("text, airborne, infection", [
+    ("ผู้ป่วยวัณโรคปอด ผ่าตัดถุงน้ำดี", True, "CLEAN"),
+    ("pt with active TB for lap chole", True, "CLEAN"),
+    ("ติดเชื้อทางอากาศ ขอห้องความดันลบ", True, "CLEAN"),  # not a dirty wound
+    ("ฝีที่ก้น ติดเชื้อ ขอผ่าระบาย", False, "DIRTY"),
+    ("burn 20% TBSA debridement", False, "CLEAN"),  # TBSA is not TB
+    ("ผู้ป่วยโควิด ไส้ติ่งทะลุ", True, "DIRTY"),
+])
+def test_airborne_infection_is_flagged(text, airborne, infection):
+    from orchestra_engine.intake import parse_rules
+
+    fields = parse_rules(text, [], [], date(2026, 11, 1))
+    assert (fields["airborne"], fields["infection_risk"]) == (airborne, infection)

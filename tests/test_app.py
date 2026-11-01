@@ -259,3 +259,21 @@ def test_required_skills_reach_the_engine(owner):
     assert owner.post("/api/slot-check", json=bad).status_code == 400
     bad = {"case": _case(required_staff_skills={"JANITOR": ["MOP"]}), "start": "10:00"}
     assert owner.post("/api/slot-check", json=bad).status_code == 400
+
+
+def test_displaced_case_waits_and_can_be_cancelled(owner):
+    c04 = store.result.assignments["C04"]
+    now = f"{(c04.start_min + 30) // 60:02d}:{(c04.start_min + 30) % 60:02d}"
+    r = owner.post("/api/overrun", json={"case_id": "C04", "new_duration_mins": 600, "now": now}).json()
+    waiting = r["state"]["pending"]
+    assert [p["code"] for p in waiting] == ["C05"]  # the next robotic case no longer fits today
+    assert waiting[0]["patient_hn"] == "HN-0005"
+
+    cssd = make_user(owner, "cssd2", "cssd")
+    assert cssd.get("/api/state").json()["pending"][0]["patient_hn"] == "•••"
+    assert cssd.post("/api/pending/C05/cancel", json={}).status_code == 403
+
+    r = owner.post("/api/pending/C05/cancel", json={})
+    assert r.status_code == 200 and r.json()["state"]["pending"] == []
+    assert owner.post("/api/pending/C05/cancel", json={}).status_code == 400
+    assert owner.post("/api/replan", json={}).status_code == 200

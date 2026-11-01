@@ -47,6 +47,7 @@ DEFAULT_TEAM = {
 DEFAULT_RECOVERY_MINS = {BedType.PACU: 60, BedType.ICU_SURGICAL: 24 * 60}
 
 UNUSABLE_ROOM_STATUSES = frozenset({"MAINTENANCE", "CLOSED", "OUT_OF_SERVICE"})
+NEGATIVE_PRESSURE = "NEGATIVE_PRESSURE"  # room type / capability for airborne-infection cases
 UNUSABLE_EQUIPMENT_STATUSES = frozenset({"MAINTENANCE"})
 
 
@@ -60,6 +61,8 @@ class OperatingRoom:
 
     ``room_type`` also counts as a capability, so a procedure may require
     either ``"HYBRID"`` (a room type) or ``"ROBOTIC_READY"`` (a capability).
+    ``closures`` are planned closed periods (``room_closures``: repair, deep
+    cleaning): ``(start, end, reason)``; nothing may occupy the room then.
     """
 
     or_id: str
@@ -71,10 +74,17 @@ class OperatingRoom:
     close_min: int | None = None  # None = open until the end of the horizon
     status: str = "AVAILABLE"
     blocked: tuple[tuple[int, int], ...] = ()  # held by bookings outside this horizon
+    closures: tuple[tuple[int, int, str], ...] = ()
 
     def __post_init__(self) -> None:
         self.capabilities = frozenset(self.capabilities)
         self.blocked = _spans(self.blocked)
+        spans = []
+        for c in self.closures:
+            a, b = int(c[0]), int(c[1])
+            if b > a:
+                spans.append((a, b, str(c[2]) if len(c) > 2 and c[2] else ""))
+        self.closures = tuple(sorted(spans))
 
     @property
     def all_capabilities(self) -> frozenset[str]:
@@ -87,8 +97,12 @@ class OperatingRoom:
     def supports(self, required: frozenset[str]) -> bool:
         return required <= self.all_capabilities
 
+    def closed_at(self, start: int, end: int) -> tuple[int, int, str] | None:
+        """The planned closure overlapping ``[start, end)``, if any."""
+        return next((c for c in self.closures if c[0] < end and start < c[1]), None)
+
     def turnover_for(self, case: "SurgeryCase") -> int:
-        if case.infection_risk == InfectionRisk.DIRTY:
+        if case.infection_risk == InfectionRisk.DIRTY or case.airborne:
             return self.infectious_turnover_mins
         return self.base_turnover_mins
 
@@ -199,7 +213,9 @@ class SurgeryCase:
 
     ``required_equipment_types`` lists one entry per unit needed, so two trays
     of the same type are written twice. ``required_staff_skills`` maps a role
-    to skills every person filling that role must have.
+    to skills every person filling that role must have. ``airborne`` marks a
+    patient with an airborne infection (e.g. TB, measles): the case needs a
+    negative-pressure room and the long (infectious) room turnover.
     """
 
     case_id: str
@@ -219,6 +235,7 @@ class SurgeryCase:
     release_min: int = 0  # earliest start (patient ready / arrival)
     deadline_min: int | None = None  # latest allowed start
     patient_name: str | None = None
+    airborne: bool = False
 
     def __post_init__(self) -> None:
         if self.duration_mins <= 0:
@@ -226,6 +243,8 @@ class SurgeryCase:
         self.urgency = Urgency(self.urgency)
         self.infection_risk = InfectionRisk(self.infection_risk)
         self.required_capabilities = frozenset(self.required_capabilities)
+        if self.airborne:
+            self.required_capabilities |= {NEGATIVE_PRESSURE}
         self.required_equipment_types = tuple(self.required_equipment_types)
         self.required_staff_skills = {
             role: frozenset(skills) for role, skills in self.required_staff_skills.items()
