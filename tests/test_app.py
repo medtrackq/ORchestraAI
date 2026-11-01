@@ -318,3 +318,16 @@ def test_management_report_and_csv(owner):
     nurse = make_user(owner, "nurse9", "staff", "SCR-2")
     assert nurse.get("/api/reports").status_code == 403
     assert nurse.get("/api/reports/cases.csv").status_code == 403
+
+
+def test_preference_cards_need_supabase_and_the_cards_permission(owner):
+    assert owner.get("/api/admin/cards").status_code == 400  # demo data cannot be edited
+    surgeon = make_user(owner, "napat2", "surgeon", "SUR-GEN")
+    assert "cards" in surgeon.get("/api/me").json()["user"]["permissions"]
+    assert surgeon.get("/api/admin/cards").status_code == 400  # allowed, but needs Supabase
+    nurse = make_user(owner, "nurse8", "staff", "SCR-2")
+    assert nurse.get("/api/admin/cards").status_code == 403
+    cssd = make_user(owner, "cssd8", "cssd")
+    assert cssd.post("/api/admin/cards", json={"duration": 60}).status_code == 403
+    assert cssd.request("DELETE", "/api/admin/cards/x", json={}).status_code == 403
+    assert owner.post("/api/admin/cards", json={"duration": 5}).status_code == 422  # out of range

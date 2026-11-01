@@ -974,3 +974,45 @@ async def line_webhook(request: Request) -> dict:
     except NotifyUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     return {"linked": linked}
+
+
+# ------------------------------------------------------------- preference cards
+
+class CardEquipmentIn(BaseModel):
+    type_id: str
+    count: int = Field(default=1, ge=0, le=5)
+
+
+class CardIn(BaseModel):
+    surgeon_id: str | None = None
+    procedure_id: str | None = None
+    duration: int = Field(ge=15, le=1440)
+    stddev: int = Field(default=15, ge=0, le=240)
+    roles: dict[str, int] = Field(default={}, max_length=4)
+    equipment: list[CardEquipmentIn] = Field(default=[], max_length=20)
+    notes: str | None = Field(default=None, max_length=1000)
+
+
+@app.get("/api/admin/cards")
+def admin_cards(request: Request) -> dict:
+    """Preference cards with each surgeon's recorded times (surgeons see their own)."""
+    user, admin = _admin(request, "cards")
+    return _run(admin.cards, _actor(user))
+
+
+@app.post("/api/admin/cards")
+def admin_add_card(body: CardIn, request: Request) -> dict:
+    user, admin = _admin(request, "cards")
+    return _run(admin.save_card, body.model_dump(), actor=_actor(user))
+
+
+@app.patch("/api/admin/cards/{card_id}")
+def admin_edit_card(card_id: str, body: CardIn, request: Request) -> dict:
+    user, admin = _admin(request, "cards")
+    return _run(admin.save_card, body.model_dump(), card_id=card_id, actor=_actor(user))
+
+
+@app.delete("/api/admin/cards/{card_id}")
+def admin_delete_card(card_id: str, request: Request) -> dict:
+    user, admin = _admin(request, "cards")
+    return _run(admin.delete_card, card_id, actor=_actor(user))

@@ -560,12 +560,15 @@
     return out;
   }
 
+  // How many of each equipment type a list asks for (a card may want two trays of one kind).
+  const countOf = list => (list || []).reduce((m, t) => { m[t] = (m[t] || 0) + 1; return m; }, {});
+
   // Intake defaults: procedure (room, ICU, infection, skills) + surgeon preference card (time, team, equipment).
   function applyDefaults(form) {
     const o = STATE.options;
     const pid = form.elements['procedure_id']?.value;
     const hint = form.querySelector('[data-role="card-hint"]');
-    form.dataset.roles = '';
+    form.dataset.roles = ''; form.dataset.eq = '';
     if (!pid) { hint.textContent = ''; return; }
     const p = (o.procedures || []).find(x => x.id === pid);
     const card = (o.cards || []).find(c => c.procedure_id === pid && c.surgeon_id === form.elements['surgeon_id'].value);
@@ -573,6 +576,7 @@
     form.elements['duration_mins'].value = card ? card.duration : p.duration;
     form.querySelectorAll('input[name="cap"]').forEach(x => { x.checked = p.caps.includes(x.value); });
     form.querySelectorAll('input[name="eq"]').forEach(x => { x.checked = card ? card.equipment.includes(x.value) : false; });
+    form.dataset.eq = card ? JSON.stringify(countOf(card.equipment)) : '';
     form.elements['icu'].checked = p.icu;
     form.elements['infection_risk'].value = p.infection;
     renderSkills(form, p.skills || {});
@@ -582,7 +586,9 @@
     delete form.dataset.durationTouched;
     updatePrediction(form);
     hint.textContent = card
-      ? `ค่าจาก preference card: ${card.duration} นาที (±${card.stddev ?? '?'}), ทีม ${Object.entries(card.roles).map(([r, n]) => n + ' ' + r).join(', ')}`
+      ? `ค่าจาก preference card: ${card.duration} นาที (±${card.stddev ?? '?'}), ทีม ${Object.entries(card.roles).filter(([, n]) => n > 0).map(([r, n]) => n + ' ' + r).join(', ') || 'ไม่ต้องใช้ทีมเพิ่ม'}`
+        + (card.equipment.length ? ', เครื่องมือ ' + Object.entries(countOf(card.equipment)).map(([t, n]) => n > 1 ? `${t} ×${n}` : t).join(', ') : '')
+        + (card.notes ? ' · หมายเหตุ: ' + card.notes : '')
       : 'ศัลยแพทย์คนนี้ยังไม่มี preference card สำหรับหัตถการนี้ ใช้เวลามาตรฐานของหัตถการและทีมมาตรฐาน';
   }
 
@@ -609,6 +615,7 @@
 
   function readCase(form, urgency) {
     const f = new FormData(form);
+    const eqCounts = form.dataset.eq ? JSON.parse(form.dataset.eq) : {};
     const skills = {};
     f.getAll('skill').forEach(v => { const [role, sk] = v.split(':'); (skills[role] ||= []).push(sk); });
     return {
@@ -618,7 +625,7 @@
       duration_mins: Number(f.get('duration_mins')),
       urgency,
       required_capabilities: f.getAll('cap'),
-      required_equipment_types: f.getAll('eq'),
+      required_equipment_types: f.getAll('eq').flatMap(t => Array(eqCounts[t] || 1).fill(t)),
       requires_icu_post_op: f.get('icu') === 'on',
       infection_risk: f.get('infection_risk'),
       required_staff_skills: skills,
@@ -640,7 +647,10 @@
     $('#date').hidden = !db;
     if (db) $('#date').value = STATE.date;
     $('#reset').hidden = db || !can('reset');
-    $('#admin-link').hidden = !db || !(can('hospital_view') || can('inventory_view'));
+    const hospital = can('hospital_view') || can('inventory_view');
+    $('#admin-link').hidden = !db || !(hospital || can('cards'));
+    $('#admin-link').textContent = hospital ? 'ข้อมูลโรงพยาบาล' : 'Preference card ของฉัน';
+    $('#admin-link').href = hospital ? '/admin' : '/admin#cards';
     $('#reports-link').hidden = !can('reports');
     $('#who').innerHTML = `<span>${esc(STATE.me.display_name)}</span><small>${esc(STATE.me.role_label)}</small>`;
     $('#change-pass').hidden = STATE.me.user_id === 'env-admin' || STATE.me.user_id === 'dev';
@@ -1349,7 +1359,10 @@
     if (f.patient_hn) form.elements['patient_hn'].value = f.patient_hn;
     pick('complexity', f.complexity);
     if (f.required_capabilities) form.querySelectorAll('input[name="cap"]').forEach(x => { x.checked = f.required_capabilities.includes(x.value); });
-    if (f.required_equipment_types) form.querySelectorAll('input[name="eq"]').forEach(x => { x.checked = f.required_equipment_types.includes(x.value); });
+    if (f.required_equipment_types) {
+      form.querySelectorAll('input[name="eq"]').forEach(x => { x.checked = f.required_equipment_types.includes(x.value); });
+      form.dataset.eq = JSON.stringify(countOf(f.required_equipment_types));
+    }
     if (f.required_staff_roles) form.dataset.roles = JSON.stringify(f.required_staff_roles);
     if (f.required_staff_skills) renderSkills(form, f.required_staff_skills);
     if (f.required_supplies) renderSupplies(form, f.required_supplies);

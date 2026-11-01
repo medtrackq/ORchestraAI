@@ -48,6 +48,7 @@ PERMISSIONS = {
     "inventory_view": {"admin", "scheduler", "cssd"},  # supplies and implants stock
     "inventory": {"admin", "cssd"},  # receive, count, order supplies; what procedures use
     "reports": {"admin", "scheduler"},  # management reports
+    "cards": {"admin", "scheduler", "surgeon"},  # surgeon preference cards (surgeons: their own)
     "users": {"admin"},
     "seed": {"admin"},
     "reset": {"admin"},
