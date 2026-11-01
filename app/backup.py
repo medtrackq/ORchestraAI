@@ -117,15 +117,31 @@ def dump(url: str) -> tuple[tempfile.SpooledTemporaryFile, dict]:
     return out, manifest
 
 
+def _safe(text) -> str:
+    text = str(text)
+    if any(ord(ch) < 32 for ch in text):  # a line break would end the psql command early
+        raise StoreError("ชื่อตารางหรือคอลัมน์ในไฟล์สำรองมีอักขระควบคุม")
+    return text
+
+
+def _ident(name) -> str:
+    return '"' + _safe(name).replace('"', '""') + '"'
+
+
+def _literal(text) -> str:
+    return "'" + _safe(text).replace("'", "''") + "'"
+
+
 def restore_sql(manifest: dict) -> str:
+    """Names are quoted (they come from the database's own catalog, but a script must not trust that)."""
     lines = ["-- ORchestraAI: restore this backup into an EMPTY database that already has every SQL file run.",
              "-- In the unzipped folder:  psql \"$DATABASE_URL\" -f restore.sql", r"\set ON_ERROR_STOP on", "BEGIN;"]
     for t in manifest["tables"]:
-        cols = ", ".join(f'"{c}"' for c in t["columns"])
-        lines.append("\\copy public.\"" + t["name"] + f"\" ({cols}) FROM '{t['file']}' WITH (FORMAT csv, HEADER)")
+        cols = ", ".join(_ident(c) for c in t["columns"])
+        lines.append(f"\\copy public.{_ident(t['name'])} ({cols}) FROM {_literal(t['file'])} WITH (FORMAT csv, HEADER)")
     for s in manifest["sequences"]:
-        lines.append(f"SELECT setval('{s['sequence']}', COALESCE((SELECT max(\"{s['column']}\") FROM "
-                     f"public.\"{s['table']}\"), 0) + 1, false);")
+        lines.append(f"SELECT setval({_literal(s['sequence'])}, COALESCE((SELECT max({_ident(s['column'])}) FROM "
+                     f"public.{_ident(s['table'])}), 0) + 1, false);")
     lines.append("COMMIT;")
     return "\n".join(lines) + "\n"
 

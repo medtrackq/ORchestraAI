@@ -7,6 +7,7 @@ from __future__ import annotations
 from datetime import date, timedelta
 
 from orchestra_engine import fmt
+from orchestra_engine.intake import mask_identifiers
 
 from .store import StoreError, with_roles
 
@@ -57,6 +58,9 @@ def order_key(row: dict):
             row.get("code") or "")
 
 
+MAX_AHEAD_DAYS = 366  # a search may start at most this far ahead
+
+
 def search_days(first: date, days: int, skip_weekends: bool) -> list[date]:
     days = max(1, min(int(days), MAX_SEARCH_DAYS))
     span = [first + timedelta(days=i) for i in range(days)]
@@ -97,8 +101,13 @@ def alerts(rows: list[dict]) -> list[dict]:
     return sorted(due, key=lambda r: (r["days_left"], r.get("code") or ""))
 
 
+def label(text) -> str:
+    """A procedure as typed, for notifications and the activity log: without HN / names."""
+    return mask_identifiers(str(text or "")[:200])[0][:120]
+
+
 def digest_event(day: str, rows: list[dict]) -> dict:
     """The daily reminder of waiting cases past or near their due date (case codes only, no patient identity)."""
     return {"type": "waitlist_digest", "day": day, "cases": [
-        {"code": r["code"], "procedure": r["procedure"], "surgeon": r.get("surgeon"), "surgeon_id": r.get("surgeon_id"),
+        {"code": r["code"], "procedure": label(r["procedure"]), "surgeon": r.get("surgeon"), "surgeon_id": r.get("surgeon_id"),
          "status": r["due_status"], "days_left": r["days_left"], "due_date": r["due_date"]} for r in alerts(rows)]}

@@ -35,6 +35,9 @@ PER_HOUR = 20           # reports one person may send in an hour
 ERRORS_PER_HOUR = 30    # browser errors one person may send in an hour
 NOTIFY_EVERY_S = 900    # at most one "new error" notification per 15 minutes
 MEMORY_LIMIT = 500
+ERRORS_KEPT = 1000      # rows in app_errors (oldest dropped): a flood of new kinds cannot fill the database
+REPORTS_KEPT_DAYS = 365 # reports and errors are removed after this (retention job)
+ERRORS_KEPT_DAYS = 180
 CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 DIGITS = re.compile(r"\d+")
 HEX_ID = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", re.I)
@@ -43,7 +46,14 @@ HEX_ID = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
 def scrub(text, limit: int) -> str:
     """Free text without patient identifiers (best effort) or control characters, at most ``limit`` long."""
     text = CONTROL.sub(" ", str(text or "")).strip()
-    return mask_identifiers(text[: limit * 2])[0][:limit].strip()
+    return mask_identifiers(text[: limit * 2], strict=True)[0][:limit].strip()
+
+
+def describe(exc: BaseException) -> str:
+    """An exception for the error list: its type and first line only (database errors add the failing
+    row, with patient data, on the lines after)."""
+    first = (str(exc).strip().splitlines() or [""])[0]
+    return f"{type(exc).__name__}: {first}"[:500]
 
 
 def clean_page(url) -> str | None:
@@ -51,7 +61,7 @@ def clean_page(url) -> str | None:
     if not url:
         return None
     parts = urlsplit(str(url)[:500])
-    path = re.sub(r"[^A-Za-z0-9/_.-]", "", parts.path)[:80] or "/"
+    path = "/" + re.sub(r"[^A-Za-z0-9/_.-]", "", parts.path).lstrip("/")[:80]  # never "//host": a link off the site
     day = (parse_qs(parts.query).get("date") or [""])[0]
     tab = parts.fragment if re.fullmatch(r"[A-Za-z0-9_-]{1,30}", parts.fragment or "") else ""
     return path + (f"?date={day}" if re.fullmatch(r"\d{4}-\d{2}-\d{2}", day) else "") + (f"#{tab}" if tab else "")
@@ -131,11 +141,14 @@ class Feedback:
     def submit(self, user, kind: str, message: str, page: str | None = None, agent: str | None = None) -> dict:
         if kind not in KINDS:
             raise StoreError("ประเภทไม่ถูกต้อง")
+        short = "กรุณาเขียนรายละเอียดสั้น ๆ ว่าเกิดอะไรขึ้น หรืออยากให้ปรับอะไร"
+        if len(str(message or "").strip()) < 3:
+            raise StoreError(short)
+        if not self._allow(("report", user.user_id), PER_HOUR):  # before the masking: that is the costly part
+            raise StoreError("ส่งเรื่องหลายครั้งเกินไปในชั่วโมงนี้ กรุณาลองใหม่ภายหลัง หรือติดต่อผู้ดูแลระบบโดยตรง")
         text = scrub(message, MAX_MESSAGE)
         if len(text) < 3:
-            raise StoreError("กรุณาเขียนรายละเอียดสั้น ๆ ว่าเกิดอะไรขึ้น หรืออยากให้ปรับอะไร")
-        if not self._allow(("report", user.user_id), PER_HOUR):
-            raise StoreError("ส่งเรื่องหลายครั้งเกินไปในชั่วโมงนี้ กรุณาลองใหม่ภายหลัง หรือติดต่อผู้ดูแลระบบโดยตรง")
+            raise StoreError(short)
         row = {"kind": kind, "message": text, "page": clean_page(page), "agent": scrub(agent, 200) or None,
                "status": "NEW", "created_at": datetime.now().astimezone(), **_who(user)}
         stored = False
@@ -213,6 +226,9 @@ class Feedback:
                                    VALUES (%(fingerprint)s, %(source)s, %(where_at)s, %(message)s, %(page)s, %(last_user)s)
                                    ON CONFLICT (fingerprint) DO UPDATE SET occurrences = app_errors.occurrences + 1,
                                        last_seen = NOW()""", row)
+                            conn.execute("""DELETE FROM app_errors WHERE error_id IN (
+                                                SELECT error_id FROM app_errors ORDER BY last_seen DESC OFFSET %s)""",
+                                         (ERRORS_KEPT,))
                             return True
                         conn.execute(
                             """UPDATE app_errors SET occurrences = occurrences + 1, last_seen = NOW(), status = 'NEW',
@@ -331,6 +347,20 @@ class Feedback:
         return {"reports": reports, "errors": errors}
 
 
+def purge(conn) -> dict:
+    """Retention: old reports and errors go (they may hold text people typed). Run daily by the PDPA job."""
+    out = {"reports": 0, "errors": 0}
+    if _table(conn, "app_feedback"):
+        out["reports"] = conn.execute(
+            """DELETE FROM app_feedback WHERE created_at < NOW() - make_interval(days => %s)
+               OR (status = 'DONE' AND COALESCE(updated_at, created_at) < NOW() - make_interval(days => %s))""",
+            (REPORTS_KEPT_DAYS, ERRORS_KEPT_DAYS)).rowcount
+    if _table(conn, "app_errors"):
+        out["errors"] = conn.execute("DELETE FROM app_errors WHERE last_seen < NOW() - make_interval(days => %s)",
+                                     (ERRORS_KEPT_DAYS,)).rowcount
+    return out
+
+
 class ErrorLogHandler(logging.Handler):
     """Errors that the app logs (background jobs, notifications, ...) also go to the admin's error list."""
 
@@ -340,10 +370,9 @@ class ErrorLogHandler(logging.Handler):
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
-            message = record.getMessage()
+            message = (record.getMessage().splitlines() or [""])[0]
             if record.exc_info and record.exc_info[1] is not None:
-                exc = record.exc_info[1]
-                message += f": {type(exc).__name__}: {exc}"
+                message += ": " + describe(record.exc_info[1])
             self.feedback.record_error("job", record.name.replace("orchestra.", ""), message)
         except Exception:  # logging must never fail the caller
             pass

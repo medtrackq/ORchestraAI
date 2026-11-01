@@ -533,6 +533,8 @@ class DatabaseStore:
         requested = parse_time(start_text)
         today = self.db.today()
         first = max(self._day(day), today)
+        if first > today + timedelta(days=wl.MAX_AHEAD_DAYS):
+            raise StoreError("ค้นหาวันว่างได้ล่วงหน้าไม่เกิน 1 ปี")
         due = wl.parse_due(data.get("due_date"), today)
         if data.get("urgency") == "EMERGENCY":
             raise StoreError("เคสฉุกเฉินใช้แท็บฉุกเฉิน (แทรกในวันนี้ทันที)")
@@ -585,7 +587,7 @@ class DatabaseStore:
             self.db.add_waiting(conn, world, case, request, request["due_date"])
             due = f" · ควรผ่าตัดภายใน {wl.thai_date(request['due_date'])}" if request["due_date"] else ""
             self.db.log_activity(conn, world, self._record(conn, world, Activity(
-                "waitlist", f"เพิ่มเข้ารายการรอผ่าตัด {case.case_id} {case.procedure}{due}", [],
+                "waitlist", f"เพิ่มเข้ารายการรอผ่าตัด {case.case_id} {wl.label(case.procedure)}{due}", [],
                 actor=actor_name(actor))))
         return {"id": str(request_id), "code": case.case_id, "due_date": request["due_date"].isoformat() if request["due_date"] else None}
 

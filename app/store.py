@@ -526,7 +526,7 @@ class ScheduleStore:
             if due:
                 self.due[cid] = due
             note = f" · ควรผ่าตัดภายใน {wl.thai_date(due)}" if due else ""
-            self.activity.append(Activity("waitlist", f"เพิ่มเข้ารายการรอผ่าตัด {cid} {case.procedure}{note}", [],
+            self.activity.append(Activity("waitlist", f"เพิ่มเข้ารายการรอผ่าตัด {cid} {wl.label(case.procedure)}{note}", [],
                                           actor=actor_name(actor)))
         return {"id": cid, "code": cid, "due_date": due.isoformat() if due else None}
 

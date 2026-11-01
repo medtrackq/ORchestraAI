@@ -29,6 +29,8 @@ from types import SimpleNamespace
 
 from psycopg.types.json import Jsonb
 
+from orchestra_engine.intake import mask_identifiers
+
 from .db import case_code
 from .store import StoreError
 
@@ -41,6 +43,16 @@ STATUS_TH = {"APPLIED": "บันทึกแล้ว", "UNCHANGED": "ไม�
 URGENCIES = ("ELECTIVE", "URGENT", "EMERGENCY")
 KEY_PREFIX = "orc_"
 PER_MINUTE = 300          # calls per key per minute
+ITEMS_PER_MINUTE = 1200   # requests per key per minute (a batch counts each request in it)
+ALERTS_PER_WINDOW = 20    # HIS notifications per 10 minutes (a misbehaving HIS must not flood phones);
+EMERGENCIES_PER_WINDOW = 60  # emergency requests have their own, higher limit
+ALERT_WINDOW_S = 600
+DETAIL_MAX = 500          # his_inbox.detail
+CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+FAILS_PER_MINUTE = 30     # wrong keys from one address per minute (then 429 without a database lookup)
+FAILS_ALL_PER_MINUTE = 600
+READY_CHECK_S = 300       # migration 017 found: checked again after this
+ANON_PREFIX = "anon:"     # his_ref of a case whose identity was removed (privacy.apply): a one-way hash
 INBOX_KEEP_DAYS = 30      # a message that never applied keeps its HN / name this long
 INBOX_DROP_DAYS = 180     # inbox rows (without patient data) are kept this long
 BATCH_MAX = 200
@@ -79,7 +91,7 @@ def _norm(text) -> str:
 
 
 def _person(text) -> str:
-    text = re.sub(r"\(.*?\)", "", str(text or ""))
+    text = re.sub(r"\([^()]*\)", "", str(text or "")[:200])
     text = re.sub(r"^(ศ\.|รศ\.|ผศ\.|นพ\.|พญ\.|ทพ\.|ทญ\.|dr\.?|prof\.?)+", "", text.strip(), flags=re.I)
     return re.sub(r"[\s.]", "", text).lower()
 
@@ -98,8 +110,8 @@ def normalize(payload: dict) -> dict:
     if not isinstance(payload, dict):
         raise StoreError("ข้อมูลต้องเป็น JSON object")
     ref = str(payload.get("his_ref") or "").strip()
-    if not ref or len(ref) > 100:
-        raise StoreError("his_ref (เลขที่ใบขอผ่าตัดของ HIS) ต้องมี และยาวไม่เกิน 100 ตัวอักษร")
+    if not ref or len(ref) > 100 or CONTROL.search(ref) or ref.startswith(ANON_PREFIX):
+        raise StoreError("his_ref (เลขที่ใบขอผ่าตัดของ HIS) ต้องมี ยาวไม่เกิน 100 ตัวอักษร และไม่มีอักขระควบคุม")
     action = str(payload.get("action") or "upsert").lower()
     if action not in ("upsert", "cancel"):
         raise StoreError("action ต้องเป็น upsert หรือ cancel")
@@ -114,7 +126,8 @@ def normalize(payload: dict) -> dict:
     msg["hn"] = msg["hn"][:50]
     msg["surgeon_name"] = str(payload.get("surgeon_name") or "").strip()[:200] or None
     msg["procedure_code"] = str(payload.get("procedure_code") or "").strip()[:100] or None
-    msg["procedure_name"] = str(payload.get("procedure_name") or "").strip()[:200] or None
+    # Shown to the admin and in notifications: no HN / patient name even if the HIS put one in the label.
+    msg["procedure_name"] = mask_identifiers(str(payload.get("procedure_name") or "").strip()[:200])[0] or None
     if not msg["procedure_code"] and not msg["procedure_name"]:
         raise StoreError("ต้องมี procedure_code หรือ procedure_name")
     urgency = str(payload.get("urgency") or "ELECTIVE").upper()
@@ -137,6 +150,24 @@ def normalize(payload: dict) -> dict:
     return msg
 
 
+def anon_ref(ref: str) -> str:
+    """What ``privacy.apply`` leaves in ``his_ref``: the order number cannot be read back from it, but the
+    same order sent again still finds the case (so it is neither recreated nor given its name back)."""
+    return ANON_PREFIX + hashlib.sha256(ref.encode()).hexdigest()
+
+
+ANON_REF_SQL = "'" + ANON_PREFIX + "' || encode(sha256(convert_to(his_ref, 'UTF8')), 'hex')"
+
+
+def purge_inbox(conn) -> int:
+    """Retention for the inbox (run on each message and by the daily PDPA job, so it also happens when the
+    HIS stops sending): HN / names of messages that never applied go after ``INBOX_KEEP_DAYS``."""
+    cleared = conn.execute("""UPDATE his_inbox SET payload = NULL WHERE payload IS NOT NULL
+                              AND received_at < NOW() - make_interval(days => %s)""", (INBOX_KEEP_DAYS,)).rowcount
+    conn.execute("DELETE FROM his_inbox WHERE received_at < NOW() - make_interval(days => %s)", (INBOX_DROP_DAYS,))
+    return cleared
+
+
 def _stored(msg: dict) -> dict:
     return {k: (v.isoformat() if isinstance(v, date) else v) for k, v in msg.items()}
 
@@ -154,6 +185,10 @@ class His:
         self.access = access    # privacy.AccessLog: the HIS reading patient data is logged too
         self._lock = threading.Lock()
         self._calls: dict[str, deque] = defaultdict(deque)
+        self._fails: dict[str, deque] = defaultdict(deque)
+        self._items: dict[str, deque] = defaultdict(deque)
+        self._alerts: dict[str, deque] = defaultdict(deque)
+        self._ready_until = 0.0
 
     # ------------------------------------------------------------- plumbing
 
@@ -163,11 +198,26 @@ class His:
         return self.store
 
     def _tell(self, event: dict) -> None:
-        if self.notify is not None:
-            try:
-                self.notify(event)
-            except Exception:
-                log.warning("HIS notification failed", exc_info=True)
+        if self.notify is None:
+            return
+        kind = "emergency" if event.get("what") == "emergency" else "other"
+        limit = EMERGENCIES_PER_WINDOW if kind == "emergency" else ALERTS_PER_WINDOW
+        now = time.monotonic()
+        with self._lock:
+            sent = self._alerts[kind]
+            while sent and now - sent[0] > ALERT_WINDOW_S:
+                sent.popleft()
+            if len(sent) > limit:  # already said that it went quiet
+                return
+            sent.append(now)
+            if len(sent) > limit:
+                event = {"type": "his_alert", "what": "action" if kind == "emergency" else "mapping",
+                         "detail": "HIS ส่งเรื่องที่ต้องดูเข้ามาจำนวนมาก หยุดแจ้งเตือนไว้ 10 นาที "
+                                   "ดูทั้งหมดได้ที่รายการรอผ่าตัด และหน้าข้อมูลโรงพยาบาล แท็บเชื่อมต่อ HIS"}
+        try:
+            self.notify({**event, "detail": str(event.get("detail", ""))[:300]})
+        except Exception:
+            log.warning("HIS notification failed", exc_info=True)
 
     def _world(self, conn):
         """What the insert and the activity log need to know about the schema (no full day is loaded:
@@ -218,23 +268,59 @@ class His:
             self._log(conn, f"ยกเลิก API key ของ HIS: {row['name']}", (actor or {}).get("name"))
         return {"revoked": key_id}
 
-    def authenticate(self, raw: str | None, scope: str) -> Client:
-        """The caller's key (``Authorization: Bearer <key>`` or ``X-API-Key``) with the scope asked for."""
+    def _too_many_fails(self, address: str, now: float) -> bool:
+        with self._lock:
+            for key, limit in ((address, FAILS_PER_MINUTE), ("*", FAILS_ALL_PER_MINUTE)):
+                fails = self._fails.get(key)
+                while fails and now - fails[0] > 60:
+                    fails.popleft()
+                if fails is not None and not fails and key != "*":
+                    del self._fails[key]
+                elif fails is not None and len(fails) >= limit:
+                    return True
+        return False
+
+    def _failed(self, address: str, now: float) -> None:
+        with self._lock:
+            if len(self._fails) > 10_000:  # many addresses: forget the quiet ones
+                for key in [k for k, v in self._fails.items() if not v or now - v[-1] > 60]:
+                    del self._fails[key]
+            self._fails[address].append(now)
+            self._fails["*"].append(now)
+
+    def _ready(self, conn) -> bool:
+        """``ready`` for the API calls, remembered for a while once true (every call would ask otherwise)."""
+        if time.monotonic() < self._ready_until:
+            return True
+        ok = ready(conn)
+        if ok:
+            self._ready_until = time.monotonic() + READY_CHECK_S
+        return ok
+
+    def authenticate(self, raw: str | None, scope: str | None, address: str | None = None) -> Client:
+        """The caller's key (``Authorization: Bearer <key>`` or ``X-API-Key``) with the scope asked for
+        (``None``: any). Wrong keys are limited per address (and in all), so guessing cannot load the database."""
+        now = time.monotonic()
+        address = address or "unknown"
+        if self._too_many_fails(address, now):
+            raise HisAuthError("ส่ง API key ผิดหลายครั้งเกินไป ลองใหม่ในอีก 1 นาที", 429)
         raw = (raw or "").strip()
         if raw.lower().startswith("bearer "):
             raw = raw[7:].strip()
         if not raw.startswith(KEY_PREFIX) or len(raw) > 100:
+            self._failed(address, now)
             raise HisAuthError("ต้องส่ง API key ใน header Authorization: Bearer <key>")
         store = self._db()
         with store._transaction(write=False) as conn:
-            if not ready(conn):
+            if not self._ready(conn):
                 raise HisUnavailable(NEED_SQL)
             row = conn.execute("""SELECT key_id, name, scopes FROM his_api_keys
                                   WHERE key_hash = %s AND revoked_at IS NULL""", (_hash(raw),)).fetchone()
         if row is None:
+            self._failed(address, now)
             raise HisAuthError("API key ไม่ถูกต้องหรือถูกยกเลิกแล้ว")
-        if scope not in (row["scopes"] or []):
-            raise HisAuthError(f"key นี้ไม่มีสิทธิ์ {scope}", 403)
+        if not row["scopes"] or (scope is not None and scope not in row["scopes"]):
+            raise HisAuthError(f"key นี้ไม่มีสิทธิ์ {scope}" if scope else "key นี้ไม่มีสิทธิ์ใดเลย", 403)
         now = time.monotonic()
         with self._lock:
             calls = self._calls[str(row["key_id"])]
@@ -247,6 +333,17 @@ class His:
             conn.execute("""UPDATE his_api_keys SET last_used_at = NOW() WHERE key_id = %s
                             AND (last_used_at IS NULL OR last_used_at < NOW() - INTERVAL '1 minute')""", (row["key_id"],))
         return Client(str(row["key_id"]), row["name"], tuple(row["scopes"] or ()))
+
+    def charge(self, client: Client, extra: int) -> None:
+        """Count requests beyond the call itself (a batch) against ``ITEMS_PER_MINUTE``."""
+        now = time.monotonic()
+        with self._lock:
+            items = self._items[client.key_id or "-"]
+            while items and now - items[0] > 60:
+                items.popleft()
+            if len(items) + 1 + max(extra, 0) > ITEMS_PER_MINUTE:
+                raise HisAuthError(f"ส่งเกิน {ITEMS_PER_MINUTE} รายการต่อนาที", 429)
+            items.extend([now] * (1 + max(extra, 0)))
 
     # ------------------------------------------------------------- matching codes
 
@@ -275,16 +372,16 @@ class His:
         return None
 
     @staticmethod
-    def _suggest(conn, kind: str, label: str | None) -> str | None:
+    def _suggest(kind: str, label: str | None, surgeons: list[dict], procs: list[dict]) -> str | None:
         """A likely match by name, offered to the admin (never applied by itself for doctors)."""
         if not label:
             return None
         if kind == "surgeon":
-            rows = [r for r in conn.execute("SELECT staff_id, full_name FROM staff WHERE role = 'SURGEON' AND is_active")
-                    if _person(r["full_name"]) and (_person(r["full_name"]) in _person(label) or _person(label) in _person(r["full_name"]))]
-            return str(rows[0]["staff_id"]) if len(rows) == 1 else None
-        rows = [r for r in conn.execute("SELECT procedure_id, name FROM procedures") if _norm(label) in _norm(r["name"])]
-        return str(rows[0]["procedure_id"]) if len(rows) == 1 else None
+            rows = [s for s in surgeons if _person(s["name"]) and (_person(s["name"]) in _person(label)
+                                                                    or _person(label) in _person(s["name"]))]
+        else:
+            rows = [p for p in procs if _norm(label) in _norm(p["name"])]
+        return rows[0]["id"] if len(rows) == 1 else None
 
     # ------------------------------------------------------------- receiving
 
@@ -297,7 +394,7 @@ class His:
             if not ready(conn):
                 raise HisUnavailable(NEED_SQL)
             self._cleanup(conn)
-            ref = str((payload or {}).get("his_ref") or "")[:100] or None
+            ref = CONTROL.sub("", str((payload or {}).get("his_ref") or ""))[:100] or None
             try:
                 msg = normalize(payload)
             except StoreError as exc:
@@ -305,13 +402,22 @@ class His:
                 msg = None
             else:
                 out = self._apply(conn, msg, who)
+                # Older messages of this order still waiting for codes are out of date now: matching a
+                # code later must not apply them over this one (or bring back a cancelled order).
+                stale = conn.execute(
+                    """UPDATE his_inbox SET status = 'UNCHANGED', payload = NULL,
+                              detail = 'มีข้อความใหม่กว่าของเลขที่นี้แล้ว (ไม่ใช้ข้อความนี้)'
+                       WHERE his_ref = %s AND status = 'NEEDS_MAPPING'""", (msg["his_ref"],)).rowcount
+                if stale and msg["action"] == "cancel" and out["status"] == "REJECTED":
+                    out = {"status": "APPLIED", "result": "cancelled",
+                           "detail": "ยกเลิกแล้ว (คำขอนี้ยังรอจับคู่รหัส จึงยังไม่เคยเข้ารายการรอผ่าตัด)"}
             if out["status"] != "UNCHANGED":
                 keep = out["status"] == "NEEDS_MAPPING" and msg is not None
                 row = conn.execute(
                     """INSERT INTO his_inbox (source, key_id, kind, his_ref, status, detail, missing, request_id, payload)
                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING message_id""",
                     (source, uuid.UUID(client.key_id) if client and client.key_id else None,
-                     f"request.{msg['action'] if msg else 'invalid'}", ref, out["status"], out.get("detail"),
+                     f"request.{msg['action'] if msg else 'invalid'}", ref, out["status"], (out.get("detail") or "")[:DETAIL_MAX] or None,
                      Jsonb(out["missing"]) if out.get("missing") else None, out.get("request_id"),
                      Jsonb(_stored(msg)) if keep else None)).fetchone()
                 out["message_id"] = row["message_id"]
@@ -320,14 +426,27 @@ class His:
         out.pop("request_id", None)
         return {"his_ref": ref, **out, "status_label": STATUS_TH[out["status"]]}
 
+    def _find(self, conn, ref: str, fields: str, world=None):
+        """The request for an HIS order number, also after its identity was removed (hashed ``his_ref``)."""
+        world = world or self._world(conn)
+        anon = "r.anonymized_at" if world.has("surgery_requests", "anonymized_at") else "NULL::timestamptz AS anonymized_at"
+        return conn.execute(
+            f"""SELECT {fields}, {anon}
+                FROM surgery_requests r
+                LEFT JOIN scheduled_surgeries s ON s.request_id = r.request_id AND s.status IS DISTINCT FROM 'CANCELLED'
+                LEFT JOIN operating_rooms o ON o.or_id = s.or_id
+                WHERE r.his_ref = ANY(%s) ORDER BY r.his_ref = %s DESC LIMIT 1""",  # noqa: S608 (fixed field lists)
+            ([ref, anon_ref(ref)], ref)).fetchone()
+
     def _apply(self, conn, msg: dict, who: str | None) -> dict:
-        existing = conn.execute(
-            """SELECT r.request_id, r.status, r.urgency_level, r.primary_surgeon_id, r.procedure_id, r.patient_hn,
-                      r.patient_name, r.ai_predicted_duration_mins, r.due_date, r.requested_date,
-                      s.start_time, s.actual_start_time, s.actual_end_time
-               FROM surgery_requests r
-               LEFT JOIN scheduled_surgeries s ON s.request_id = r.request_id AND s.status IS DISTINCT FROM 'CANCELLED'
-               WHERE r.his_ref = %s""", (msg["his_ref"],)).fetchone()
+        existing = self._find(conn, msg["his_ref"], """r.request_id, r.status, r.urgency_level, r.primary_surgeon_id,
+                      r.procedure_id, r.patient_hn, r.patient_name, r.ai_predicted_duration_mins, r.due_date,
+                      r.requested_date, s.start_time, s.actual_start_time, s.actual_end_time""")
+        if existing is not None and existing["anonymized_at"] is not None:
+            # Past the retention period: sending the order again must not bring the HN / name back.
+            return {"code": case_code(existing["request_id"], existing["urgency_level"], set()),
+                    "request_id": existing["request_id"], "status": "UNCHANGED", "result": "anonymized",
+                    "detail": "คำขอนี้เกินระยะเวลาเก็บข้อมูลผู้ป่วยแล้ว (ลบข้อมูลระบุตัวตนแล้ว) ไม่เปลี่ยนข้อมูล"}
         if msg["action"] == "cancel":
             return self._cancel(conn, msg, existing, who)
 
@@ -364,7 +483,7 @@ class His:
         extra = {"his_ref": msg["his_ref"], "requested_date": msg["requested_date"]}
         due = msg["due_date"] if world.has("surgery_requests", "due_date") else None
         self.store.db.add_waiting(conn, world, case, request, due, extra=extra)
-        self._log(conn, f"รับคำขอผ่าตัดจาก HIS {code} {proc['name']} (เลขที่ {msg['his_ref']})", who, world)
+        self._log(conn, f"รับคำขอผ่าตัดจาก HIS {code} {proc['name']}", who, world)
         events = [{"type": "his_alert", "what": "emergency", "code": code, "procedure": proc["name"],
                    "detail": f"คำขอผ่าตัดฉุกเฉินจาก HIS: {code} {proc['name']}"}] if msg["urgency"] == "EMERGENCY" else []
         return {"status": "APPLIED", "detail": "สร้างคำขอใหม่ในรายการรอผ่าตัด", "code": code, "result": "created",
@@ -418,7 +537,7 @@ class His:
             db = self.store.db
             db.cancel_request(conn, existing["request_id"])
             db.record_given_up(conn, existing["request_id"], code, "HIS", None, who)
-            self._log(conn, f"HIS ยกเลิกคำขอ {code} (เลขที่ {msg['his_ref']})", who)
+            self._log(conn, f"HIS ยกเลิกคำขอ {code}", who)
             return {**base, "status": "APPLIED", "detail": "ยกเลิกคำขอในรายการรอผ่าตัดแล้ว", "result": "cancelled"}
         if existing["actual_start_time"] is not None:
             return {**base, "status": "UNCHANGED", "detail": "ผ่าตัดไปแล้ว ยกเลิกไม่ได้", "result": "done"}
@@ -433,6 +552,7 @@ class His:
         with self._db()._transaction(write=True) as conn:
             if not ready(conn):
                 raise HisUnavailable(NEED_SQL)
+            purge_inbox(conn)  # a message past INBOX_KEEP_DAYS has no data left to apply
             row = conn.execute("SELECT payload, status FROM his_inbox WHERE message_id = %s FOR UPDATE",
                                (message_id,)).fetchone()
             if row is None or row["payload"] is None or row["status"] != "NEEDS_MAPPING":
@@ -441,7 +561,8 @@ class His:
             conn.execute("""UPDATE his_inbox SET status = %s, detail = %s, missing = %s, request_id = %s,
                                    payload = CASE WHEN %s = 'NEEDS_MAPPING' THEN payload END
                             WHERE message_id = %s""",
-                         (out["status"], out.get("detail"), Jsonb(out["missing"]) if out.get("missing") else None,
+                         (out["status"], (out.get("detail") or "")[:DETAIL_MAX] or None,
+                          Jsonb(out["missing"]) if out.get("missing") else None,
                           out.get("request_id"), out["status"], message_id))
         for event in out.pop("events", []):
             if event.get("what") != "mapping":
@@ -449,10 +570,9 @@ class His:
         out.pop("request_id", None)
         return {**out, "status_label": STATUS_TH[out["status"]]}
 
-    def _cleanup(self, conn) -> None:
-        conn.execute("""UPDATE his_inbox SET payload = NULL WHERE payload IS NOT NULL
-                        AND received_at < NOW() - make_interval(days => %s)""", (INBOX_KEEP_DAYS,))
-        conn.execute("DELETE FROM his_inbox WHERE received_at < NOW() - make_interval(days => %s)", (INBOX_DROP_DAYS,))
+    @staticmethod
+    def _cleanup(conn) -> None:
+        purge_inbox(conn)
 
     # ------------------------------------------------------------- mapping (admin)
 
@@ -482,6 +602,7 @@ class His:
                                 updated_by = EXCLUDED.updated_by, updated_at = NOW()""",
                          (kind, his_code, str(target), (label or "")[:200] or None, (actor or {}).get("name")))
             self._log(conn, f"จับคู่รหัส HIS {KINDS[kind]} {his_code} → {found['name']}", (actor or {}).get("name"))
+            purge_inbox(conn)
             waiting = [r["message_id"] for r in conn.execute(
                 """SELECT message_id FROM his_inbox WHERE status = 'NEEDS_MAPPING' AND payload IS NOT NULL
                    AND missing @> %s ORDER BY message_id""", (Jsonb([{"kind": kind, "his_code": his_code}]),))]
@@ -506,17 +627,14 @@ class His:
     # ------------------------------------------------------------- reading back (HIS)
 
     def request_status(self, his_ref: str, client: Client, address: str | None = None) -> dict:
+        if not his_ref or len(his_ref) > 100 or CONTROL.search(his_ref) or his_ref.startswith(ANON_PREFIX):
+            raise StoreError("ไม่พบคำขอเลขที่นี้")
         store = self._db()
         with store._transaction(write=False) as conn:
             if not ready(conn):
                 raise HisUnavailable(NEED_SQL)
-            row = conn.execute(
-                """SELECT r.request_id, r.status, r.urgency_level, r.due_date, s.start_time, s.end_time,
-                          s.actual_start_time, s.actual_end_time, o.room_code
-                   FROM surgery_requests r
-                   LEFT JOIN scheduled_surgeries s ON s.request_id = r.request_id AND s.status IS DISTINCT FROM 'CANCELLED'
-                   LEFT JOIN operating_rooms o ON o.or_id = s.or_id
-                   WHERE r.his_ref = %s""", (his_ref,)).fetchone()
+            row = self._find(conn, his_ref, """r.request_id, r.status, r.urgency_level, r.due_date, s.start_time,
+                          s.end_time, s.actual_start_time, s.actual_end_time, o.room_code""")
         if row is None:
             raise StoreError("ไม่พบคำขอเลขที่นี้")
         out = {"his_ref": his_ref, "code": case_code(row["request_id"], row["urgency_level"], set()), **self._state(row)}
@@ -556,7 +674,8 @@ class His:
                    WHERE s.status IS DISTINCT FROM 'CANCELLED' AND s.start_time >= %s AND s.start_time < %s
                    ORDER BY o.room_code, s.start_time""", (start, start + timedelta(days=1))).fetchall()
         cases = [{
-            "code": case_code(r["request_id"], r["urgency_level"], set()), "his_ref": r["his_ref"], "hn": r["patient_hn"],
+            "code": case_code(r["request_id"], r["urgency_level"], set()),
+            "his_ref": None if (r["his_ref"] or "").startswith(ANON_PREFIX) else r["his_ref"], "hn": r["patient_hn"],
             "urgency": r["urgency_level"], "procedure": r["procedure"], "procedure_code": r["icd9_cm_code"],
             "surgeon": r["surgeon"], "surgeon_code": codes.get(str(r["surgeon_id"])) or r["employee_code"],
             **self._state(r)} for r in rows]
@@ -586,12 +705,15 @@ class His:
                          "updated_by": r["updated_by"], "updated_at": r["updated_at"].isoformat()}
                         for r in conn.execute("SELECT * FROM his_mappings ORDER BY kind, his_code")]
             unmapped: dict[tuple, dict] = {}
-            for r in conn.execute("""SELECT missing FROM his_inbox WHERE status = 'NEEDS_MAPPING' AND payload IS NOT NULL"""):
+            for r in conn.execute("""SELECT missing FROM his_inbox WHERE status = 'NEEDS_MAPPING' AND payload IS NOT NULL
+                                      AND received_at >= NOW() - make_interval(days => %s)
+                                      ORDER BY message_id DESC LIMIT 2000""", (INBOX_KEEP_DAYS,)):
                 for m in r["missing"] or []:
                     item = unmapped.setdefault((m["kind"], m["his_code"]), {**m, "kind_label": KINDS[m["kind"]], "messages": 0})
                     item["messages"] += 1
+            unmapped = dict(sorted(unmapped.items())[:200])  # a page the admin can work through
             for item in unmapped.values():
-                item["suggestion"] = self._suggest(conn, item["kind"], item.get("label") or item["his_code"])
+                item["suggestion"] = self._suggest(item["kind"], item.get("label") or item["his_code"], surgeons, procs)
             key_names = {k["id"]: k["name"] for k in keys}
             inbox = [{"id": r["message_id"], "received_at": r["received_at"].isoformat(), "source": r["source"],
                       "key": key_names.get(str(r["key_id"])) if r["key_id"] else None, "kind": r["kind"],
@@ -601,9 +723,10 @@ class His:
                       "retry": r["status"] == "NEEDS_MAPPING" and r["has_payload"]}
                      for r in conn.execute("""SELECT i.message_id, i.received_at, i.source, i.key_id, i.kind, i.his_ref,
                                                      i.status, i.detail, i.request_id, r.urgency_level,
-                                                     i.payload IS NOT NULL AS has_payload
+                                                     i.payload IS NOT NULL AND i.received_at >= NOW()
+                                                         - make_interval(days => %s) AS has_payload
                                               FROM his_inbox i LEFT JOIN surgery_requests r ON r.request_id = i.request_id
-                                              ORDER BY i.message_id DESC LIMIT 50""")]
+                                              ORDER BY i.message_id DESC LIMIT 50""", (INBOX_KEEP_DAYS,))]
             counts = {r["status"]: r["n"] for r in conn.execute(
                 """SELECT status, count(*) AS n FROM his_inbox WHERE received_at > NOW() - INTERVAL '7 days' GROUP BY status""")}
         return {"ready": True, "scopes": SCOPES, "kinds": KINDS, "keys": keys, "mappings": mappings,

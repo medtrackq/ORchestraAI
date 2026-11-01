@@ -129,6 +129,33 @@ def test_identifiers_are_masked():
     assert masked == "HN [HN] [ชื่อ] ผ่าตัดไส้ติ่ง บ่ายสอง นพ.สมชาย 12/11/69 09:30"
 
 
+def test_more_ways_of_writing_identifiers_are_masked():
+    for text, gone in [
+        ("hn:12345 ผ่าเข่า", ["12345"]), ("HN#AB-1234", ["1234"]), ("เลข HN 77881", ["77881"]),
+        ("โทร +66 81 234 5678", ["234 5678"]), ("นส.มาลี ดีใจ", ["มาลี"]), ("ชื่อ-สกุล: สมศรี ใจงาม", ["สมศรี", "ใจงาม"]),
+        ("Mrs.Jane Doe", ["Jane"]), ("นายJohn Smith", ["John"]),
+        ("{'patient_name': 'Somchai K', 'patient_hn': '991'}", ["Somchai", "991"]),
+        ('patient_name="สมชาย ใจดี"', ["สมชาย"]),
+    ]:
+        masked, _ = mask_identifiers(text)
+        assert not any(g in masked for g in gone), (text, masked)
+    # strict (problem reports): also after คุณ / ผู้ป่วย, but not inside ordinary words
+    assert "สมชาย" not in mask_identifiers("คุณสมชาย โทรมา", strict=True)[0]
+    assert "สมศรี" not in mask_identifiers("ผู้ป่วยสมศรี มาสาย", strict=True)[0]
+    for keep in ("ขอบคุณครับ", "คุณภาพของระบบ", "ผู้ป่วยนอกรอนาน", "คุณหมอสมชาย", "ผู้ป่วยรายนี้"):
+        assert mask_identifiers(keep, strict=True)[0] == keep
+    assert mask_identifiers("คุณสมชาย")[0] == "คุณสมชาย"  # the booking assistant keeps the default
+
+
+def test_masking_takes_linear_time():
+    import time
+
+    for text in ("ชื่อ" + " " * 4000, "ชื่อ -" * 700, "นาย " * 1000, "HN:" * 1300, "Mr. " * 1000, "คุณ ก " * 700):
+        started = time.perf_counter()
+        mask_identifiers(text, strict=True)
+        assert time.perf_counter() - started < 0.2, text[:10]
+
+
 # ------------------------------------------------------------ web app
 
 OWNER = ("orchestra", "owner-secret-123")

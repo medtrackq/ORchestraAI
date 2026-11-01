@@ -49,6 +49,17 @@ def test_page_keeps_path_day_and_tab_only():
     assert fb.clean_page("/admin?hn=123&date=bad#io") == "/admin#io"
     assert fb.clean_page("/reports#<script>") == "/reports"
     assert fb.clean_page(None) is None
+    for outside in ("////evil.example/login", "//evil.example", "https://x//evil.example/a"):
+        assert not fb.clean_page(outside).startswith("//"), outside  # never a link off the site
+
+
+def test_errors_keep_the_first_line_only():
+    class Row(Exception):
+        pass
+
+    exc = Row('duplicate key\nDETAIL: Key (patient_hn)=(6612345) already exists.')
+    assert fb.describe(exc) == "Row: duplicate key"
+    assert fb.scrub("ขอบคุณครับ แก้แล้วใช้ได้", 200) == "ขอบคุณครับ แก้แล้วใช้ได้"
 
 
 def test_the_same_error_counts_once():
@@ -64,7 +75,9 @@ def test_notifications_carry_no_text_people_typed():
     assert (m.user_id, m.kind, m.title, m.url) == ("u-a1", "feedback", "มีผู้ใช้ข้อเสนอแนะใหม่", "/status#feedback")
     assert m.lines[0] == "จากวิสัญญี / พยาบาล · หน้า /"
     [e] = build_messages({"type": "system_error", "source": "browser", "where": "/:12"}, users)
-    assert e.user_id == "u-a1" and e.lines[0] == "หน้าเว็บ: /:12"
+    assert e.user_id == "u-a1" and e.lines[0] == "หน้าเว็บ"  # the page sent that text: not in the push
+    [s] = build_messages({"type": "system_error", "source": "server", "where": "GET /api/state"}, users)
+    assert s.lines[0] == "เซิร์ฟเวอร์: GET /api/state"
 
 
 # ------------------------------------------------------------------ in memory (demo mode)
@@ -130,6 +143,9 @@ def test_everyone_can_report_and_only_admins_read(owner):
     assert nurse.post("/api/client-errors", json={"message": "TypeError: boom", "where": "/:1", "page": "/"}).json() == {"recorded": True}
     assert nurse.get("/api/feedback").status_code == 403
     assert nurse.patch("/api/feedback/report/1", json={"status": "DONE"}).status_code == 403
+    big = nurse.post("/api/client-errors", content=b'{"message": "' + b"x" * 70000 + b'"}',
+                     headers={"Content-Type": "application/json"})
+    assert big.status_code == 413  # small forms have small limits (before the body is read)
 
     view = owner.get("/api/feedback").json()
     [report] = view["reports"]
@@ -193,6 +209,23 @@ def test_reports_and_errors_in_the_database(store, db_url):
     [back] = f.overview()["errors"]
     assert back["reopened"] and back["occurrences"] == 4 and sent[-1]["type"] == "system_error"
     assert _rows(db_url, "SELECT handled_by, admin_note FROM app_feedback") == [("Admin", "ขอบคุณครับ")]
+
+
+@needs_db
+def test_old_reports_and_errors_are_removed_and_the_list_is_capped(store, db_url, monkeypatch):
+    f = fb.Feedback(store)
+    f.submit(NURSE, "PROBLEM", "ปุ่มบันทึกไม่ทำงาน")
+    f.submit(ADMIN, "IDEA", "อยากให้มีรายงานรายเดือน")
+    monkeypatch.setattr(fb, "ERRORS_KEPT", 3)
+    for i in range(5):
+        f.record_error("job", "job-" + "abcde"[i], "failed " + "abcde"[i])  # digits are ignored in the fingerprint
+    assert _rows(db_url, "SELECT count(*) FROM app_errors") == [(3,)]  # a flood of new kinds cannot fill the table
+    with psycopg.connect(db_url, autocommit=True) as conn:
+        conn.execute("UPDATE app_feedback SET created_at = NOW() - INTERVAL '400 days' WHERE kind = 'PROBLEM'")
+        conn.execute("UPDATE app_errors SET last_seen = NOW() - INTERVAL '200 days' WHERE where_at = 'job-e'")
+    with store._transaction(write=True) as conn:
+        assert fb.purge(conn) == {"reports": 1, "errors": 1}
+    assert _rows(db_url, "SELECT kind FROM app_feedback") == [("IDEA",)]
 
 
 @needs_db

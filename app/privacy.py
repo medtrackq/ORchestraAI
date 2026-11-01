@@ -26,6 +26,7 @@ from zoneinfo import ZoneInfo
 
 import psycopg
 
+from . import feedback, his
 from .store import StoreError
 
 log = logging.getLogger("orchestra.privacy")
@@ -308,6 +309,18 @@ def apply(store, *, actor: dict | None = None) -> dict:
                         """UPDATE orchestra_activity
                            SET notifications = replace(notifications::text, %s, '(HN ลบแล้ว)')::jsonb
                            WHERE strpos(notifications::text, %s) > 0""", (f"(HN {hn})", f"(HN {hn})")).rowcount
+        if _column(conn, "surgery_requests", "his_ref"):
+            # The HIS order number leads back to the patient in the HIS: of a case without identity only a
+            # one-way hash stays (the same order sent again still finds the case and is refused, his.anon_ref).
+            # Every run, so cases made anonymous before this existed are covered too.
+            if _table(conn, "his_inbox"):
+                conn.execute(f"""UPDATE his_inbox SET payload = NULL, his_ref = {his.ANON_REF_SQL}
+                                 WHERE his_ref IS NOT NULL AND left(his_ref, 5) <> %s AND request_id IN (
+                                     SELECT request_id FROM surgery_requests WHERE anonymized_at IS NOT NULL)""",
+                             (his.ANON_PREFIX,))  # noqa: S608 (fixed SQL)
+            conn.execute(f"""UPDATE surgery_requests SET his_ref = {his.ANON_REF_SQL}
+                             WHERE anonymized_at IS NOT NULL AND his_ref IS NOT NULL AND left(his_ref, 5) <> %s""",
+                         (his.ANON_PREFIX,))  # noqa: S608
         if patient_days and _table(conn, "orchestra_activity"):
             # Old days: change notices (they name HNs) and cancellation notes (free text) go; the
             # schedule changes themselves stay.
@@ -321,6 +334,9 @@ def apply(store, *, actor: dict | None = None) -> dict:
         if _table(conn, "patient_access_log"):
             pruned = conn.execute("DELETE FROM patient_access_log WHERE accessed_at < now() - make_interval(days => %s)",
                                   (access_days,)).rowcount
+        # Fixed periods, whatever the setting: HIS messages that never applied, and old problem reports / errors.
+        inbox = his.purge_inbox(conn) if _table(conn, "his_inbox") else 0
+        purged = feedback.purge(conn)
         conn.execute("""INSERT INTO app_settings (key, value) VALUES ('retention_last_run', %s)
                         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value""",
                      (datetime.now(store.db.tz).isoformat(timespec="minutes"),))
@@ -330,6 +346,7 @@ def apply(store, *, actor: dict | None = None) -> dict:
                   f"ล้างข้อความแจ้งเปลี่ยนแปลงในบันทึกกิจกรรม {cleared} วัน",
                   f"ลบบันทึกการเข้าถึงที่เก่ากว่า {access_days} วัน {pruned} รายการ"], actor)
     return {"cases": len(ids), "activity_cleared": cleared, "notices_scrubbed": scrubbed, "access_pruned": pruned,
+            "his_inbox_cleared": inbox, "feedback_removed": purged["reports"], "errors_removed": purged["errors"],
             "patient_days": patient_days, "access_days": access_days}
 
 

@@ -17,7 +17,9 @@ import statistics
 import uuid
 from datetime import date, datetime, time, timedelta
 
-from .hospital_io import MAX_BYTES, _blank, _csv_grid, _text, _xlsx_grids, as_text, current
+from orchestra_engine.intake import mask_identifiers
+
+from .hospital_io import MAX_BYTES, MAX_ROWS, _blank, _csv_grid, _text, _xlsx_grids, as_text, current
 from .store import StoreError
 
 SHEET = "ประวัติผ่าตัด"
@@ -43,17 +45,19 @@ COLUMNS = [
 PATIENT = re.compile(r"^(hn|cid)$|ผู้ป่วย|patient|เลขบัตร|นามสกุล|ชื่อสกุล|อายุ|^age$")
 URGENCY = {"elective": "ELECTIVE", "นัดล่วงหน้า": "ELECTIVE", "นัด": "ELECTIVE", "urgent": "URGENT", "ด่วน": "URGENT",
            "emergency": "EMERGENCY", "ฉุกเฉิน": "EMERGENCY"}
+MAX_TOTAL_ROWS = 20000  # all sheets together (each sheet: MAX_ROWS)
+BRACKETS = re.compile(r"\([^()]*\)")  # linear: "(.*?)" is slow on a cell full of "("
 TITLES = re.compile(r"^(ศ\.|รศ\.|ผศ\.|นพ\.|พญ\.|ทพ\.|ทญ\.|dr\.?|prof\.?)+", re.IGNORECASE)
 
 
 def _norm(text) -> str:
     """A header or name to compare: no bracketed text, spaces, punctuation or case."""
-    text = re.sub(r"\(.*?\)", "", str(text or ""))
+    text = BRACKETS.sub("", str(text or "")[:200])
     return re.sub(r"[\s\-_.:/]", "", text).lower()
 
 
 def _person(text) -> str:
-    text = re.sub(r"\(.*?\)", "", str(text or "")).strip()
+    text = BRACKETS.sub("", str(text or "")[:200]).strip()
     return re.sub(r"[\s.]", "", TITLES.sub("", text.replace(" ", ""))).lower()
 
 
@@ -152,6 +156,8 @@ def read_rows(filename: str, content: bytes) -> tuple[list[tuple[int, dict]], li
     for sheet, grid in sheets:
         if sheet in (GUIDE, LISTS):
             continue
+        if len(grid) > MAX_ROWS + 10:
+            raise StoreError(f"แผ่น {str(sheet)[:40]} มีเกิน {MAX_ROWS} แถว กรุณาแบ่งเป็นหลายไฟล์")
         found = _table(grid)
         if found is None:
             continue
@@ -163,6 +169,8 @@ def read_rows(filename: str, content: bytes) -> tuple[list[tuple[int, dict]], li
             if all(_blank(v) for v in cells.values()):
                 continue
             rows.append((i, cells))
+        if len(rows) > MAX_TOTAL_ROWS:
+            raise StoreError(f"ไฟล์มีเกิน {MAX_TOTAL_ROWS} แถว กรุณาแบ่งเป็นหลายไฟล์")
     if not rows and not any(_table(g) for _, g in sheets):
         raise StoreError("ไม่พบหัวตาราง (ต้องมีคอลัมน์ วันที่ผ่าตัด, ศัลยแพทย์ และหัตถการ) · ใช้แบบฟอร์มที่ดาวน์โหลดจากหน้านี้")
     return rows, warnings
@@ -265,6 +273,7 @@ def _key(g: dict) -> tuple:
 def import_history(admin, filename: str, content: bytes, *, commit: bool, actor: dict | None = None) -> dict:
     """Check an uploaded file; with ``commit`` save its right rows (the wrong ones are listed, not saved)."""
     rows, warnings = read_rows(filename, content)
+    filename = mask_identifiers(str(filename or "")[:200])[0]  # shown in the list and the activity log
     today = admin.db.today()
     result = check(admin, rows, today)
     good = result["good"]
