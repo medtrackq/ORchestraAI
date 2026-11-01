@@ -111,7 +111,7 @@
   .io-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 10px 0; }
   table.io { border-collapse: collapse; width: 100%; font-size: .84rem; margin: 8px 0; }
   .io th, .io td { border-bottom: 1px solid var(--border); padding: 6px 8px; text-align: right; }
-  .io th:first-child, .io td:first-child { text-align: left; }
+  .io th:first-child, .io td:first-child, .io .text { text-align: left; }
   .io td.bad { color: var(--bad); font-weight: 600; }
   .io-errors { margin: 6px 0 0; padding-left: 18px; color: var(--bad); font-size: .84rem; }
   .io-errors li { margin-bottom: 3px; }
@@ -385,6 +385,17 @@
     </div>
     <p class="hint">ระบบตรวจทุกแถวและแสดงผลก่อน <b>ยังไม่บันทึกอะไร</b> จนกว่าจะกด "ยืนยันนำเข้า" · ถ้ามีแถวที่ผิดแม้แถวเดียว จะยังนำเข้าไม่ได้</p>
     <div id="io-result"></div>
+
+    <h3>ประวัติผ่าตัดย้อนหลัง (ให้ระบบประเมินเวลาผ่าตัดได้แม่นตั้งแต่วันแรก)</h3>
+    <p class="hint">เคสที่ผ่าตัดไปแล้ว (ย้อนหลังไม่เกิน 2 ปี): วันที่ ศัลยแพทย์ หัตถการ และเวลาเข้า-ออกห้อง (หรือระยะเวลาจริง) · <b>ไม่ต้องใส่ HN หรือชื่อผู้ป่วย</b> ระบบไม่เก็บ
+      · ระบบข้ามเคสที่เวลาผิดปกติมาก (น่าจะพิมพ์ผิด) และเคสที่เคยนำเข้าแล้วให้เอง</p>
+    <div class="io-actions">
+      <button class="btn" type="button" id="hist-template">ดาวน์โหลดแบบฟอร์มประวัติผ่าตัด (.xlsx)</button>
+      <label style="flex:0 1 360px">ไฟล์ประวัติ .xlsx หรือ .csv ไม่เกิน 5 MB<input type="file" id="hist-file" accept=".xlsx,.csv"></label>
+      <button class="btn primary" type="button" id="hist-check" disabled>ตรวจไฟล์ประวัติ</button>
+    </div>
+    <div id="hist-result"></div>
+    <div id="hist-overview"></div>
 
     <div id="io-demo" hidden>
       <h3>3. เริ่มใช้งานจริง: ลบข้อมูลตัวอย่าง</h3>
@@ -1264,8 +1275,74 @@
 
   async function loadIo() {
     $('#io-demo').hidden = !can('seed');
+    await loadHistory();
     if (can('seed')) await loadDemoData();
   }
+
+  // ---------------------------------------------- past surgeries (duration forecast)
+  let HIST_FILE = null;
+  const thaiDay = iso => iso ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${Number(iso.slice(0, 4)) + 543}` : '–';
+  async function loadHistory() {
+    const h = await api('/api/admin/history');
+    if (!h.ready) {
+      $('#hist-overview').innerHTML = '<p class="readonly">ต้องรัน SQL ไฟล์ 014 ก่อน (หน้า ⚙ สถานะระบบ → รัน SQL ที่ยังขาด)</p>';
+      $('#hist-check').disabled = true;
+      return;
+    }
+    $('#hist-overview').innerHTML = h.cases ? `<div class="row-item">
+        <div class="title"><b>ประวัติที่นำเข้าแล้ว ${h.cases.toLocaleString('th-TH')} เคส</b>
+          <span class="hint">ศัลยแพทย์ ${h.surgeons} คน · หัตถการ ${h.procedures} · ${thaiDay(h.first)} – ${thaiDay(h.last)}</span></div>
+        <ul class="io-rows">${h.batches.map(b => `<li>${esc(b.filename || '-')} · ${b.rows} เคส · ${esc(new Date(b.at).toLocaleString('th-TH'))}${b.by ? ' · ' + esc(b.by) : ''}
+          <button class="btn small danger" type="button" data-hist-delete="${esc(b.id)}" data-name="${esc(b.filename || '')}">ลบชุดนี้</button></li>`).join('')}</ul>
+      </div>` : '<p class="hint">ยังไม่มีประวัติที่นำเข้า</p>';
+    $('#hist-overview').querySelectorAll('[data-hist-delete]').forEach(b => b.addEventListener('click', () => {
+      if (!confirm(`ลบประวัติที่นำเข้าจาก ${b.dataset.name} ทั้งชุด?`)) return;
+      busy(b, async () => { await api('/api/admin/history/' + encodeURIComponent(b.dataset.histDelete), {}, 'DELETE'); await loadHistory(); });
+    }));
+  }
+  $('#hist-template').addEventListener('click', e => download('/api/admin/history.xlsx', e.target));
+  $('#hist-file').addEventListener('change', e => {
+    HIST_FILE = e.target.files[0] || null;
+    $('#hist-check').disabled = !HIST_FILE;
+    $('#hist-result').innerHTML = '';
+  });
+  async function sendHistory(commit) {
+    if (HIST_FILE.size > 5 * 1024 * 1024) throw new Error('ไฟล์ใหญ่เกิน 5 MB');
+    return api('/api/admin/history/import', { filename: HIST_FILE.name, content: await fileBase64(HIST_FILE), commit });
+  }
+  function renderHistory(r) {
+    const skipped = [
+      r.error_count ? `แถวที่ผิด ${r.error_count}` : '', r.old ? `เก่ากว่า ${r.max_years} ปี ${r.old}` : '',
+      r.outlier_count ? `เวลาผิดปกติ ${r.outlier_count}` : '', r.duplicates ? `ซ้ำในไฟล์ ${r.duplicates}` : '',
+      r.already ? `นำเข้าแล้วก่อนหน้า ${r.already}` : ''].filter(Boolean);
+    const errors = r.errors.map(x => `<li>แถว ${x.row}: ${esc(x.message)}</li>`).join('')
+      + (r.error_count > r.errors.length ? `<li>… อีก ${r.error_count - r.errors.length} แถว</li>` : '');
+    const outliers = r.outliers.map(x => `<li>แถว ${x.row}: ${esc(x.text)}</li>`).join('');
+    const pairs = r.pairs.map(x => `<tr><td>${esc(x.surgeon)}</td><td class="text">${esc(x.procedure)}</td><td>${x.n}</td><td>${x.median}</td></tr>`).join('');
+    let verdict;
+    if (r.committed) verdict = `<div class="affected"><span class="ok">✓ นำเข้าแล้ว ${r.imported} เคส · การประเมินเวลาผ่าตัดใช้ข้อมูลนี้ทันที</span></div>`;
+    else if (!r.ready) verdict = '<p class="readonly">ไม่มีเคสที่นำเข้าได้ในไฟล์นี้</p>';
+    else verdict = `<div class="io-actions"><button class="btn primary" type="button" id="hist-commit">นำเข้า ${r.ready} เคสที่ถูกต้อง</button>
+        <span class="hint">${skipped.length ? 'แถวที่ข้าม (' + skipped.join(' · ') + ') จะไม่ถูกบันทึก แก้ในไฟล์แล้วนำเข้าเพิ่มได้ภายหลัง' : 'ตรวจแล้วไม่มีแถวที่ผิด'}</span></div>`;
+    $('#hist-result').innerHTML = `<div class="row-item">
+        <div class="title"><b>${esc(r.filename)}</b><span>${r.committed ? '<span class="badge ok">บันทึกแล้ว</span>' : '<span class="badge">ผลการตรวจ ยังไม่บันทึก</span>'}</span></div>
+        <div>อ่าน ${r.rows} แถว · พร้อมนำเข้า <b>${r.ready}</b> เคส${r.first ? ` (${thaiDay(r.first)} – ${thaiDay(r.last)})` : ''}${skipped.length ? ' · ข้าม: ' + skipped.join(' · ') : ''}</div>
+        ${r.warnings.length ? `<ul class="io-rows">${r.warnings.map(w => `<li>${esc(w)}</li>`).join('')}</ul>` : ''}
+        ${errors ? `<b>แถวที่ผิด</b><ul class="io-errors">${errors}</ul>` : ''}
+        ${outliers ? `<details><summary>เวลาผิดปกติ (ข้าม) ${r.outlier_count} แถว</summary><ul class="io-rows">${outliers}</ul></details>` : ''}
+        ${pairs ? `<details${r.committed ? '' : ' open'}><summary>สิ่งที่ระบบจะเรียนรู้ (${r.pair_count} คู่แพทย์-หัตถการ)</summary>
+          <table class="io"><thead><tr><th>ศัลยแพทย์</th><th class="text">หัตถการ</th><th>เคส</th><th>มัธยฐาน (นาที)</th></tr></thead><tbody>${pairs}</tbody></table></details>` : ''}
+        ${verdict}
+      </div>`;
+    $('#hist-commit')?.addEventListener('click', e => busy(e.target, async () => {
+      renderHistory(await sendHistory(true));
+      await loadHistory();
+    }));
+  }
+  $('#hist-check').addEventListener('click', e => busy(e.target, async () => {
+    $('#hist-result').innerHTML = '';
+    renderHistory(await sendHistory(false));
+  }));
 
   async function download(url, button) {
     await busy(button, async () => {
