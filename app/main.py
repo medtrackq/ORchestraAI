@@ -36,7 +36,7 @@ from pydantic import BaseModel, Field
 
 from .auth import (COOKIE, ROLES, SESSION_HOURS, Accounts, AuthError, DbUserStore, MemoryUserStore,
                    ServiceUnavailable, TooManyAttempts, User, can)
-from . import hospital_io
+from . import hospital_io, roster_io
 from .admin_store import require_supabase
 from .intake_service import IntakeService
 from .notify import DbNotifyStore, MemoryNotifyStore, Notifier, NotifyUnavailable
@@ -1076,3 +1076,32 @@ def admin_wipe(body: WipeIn, request: Request) -> dict:
     """Delete all hospital data and bookings to start over (user accounts stay)."""
     user, admin = _admin(request, "seed")
     return _run(hospital_io.wipe_hospital, admin, body.confirm, actor=_actor(user))
+
+
+# ------------------------------------------------------------ roster in Excel
+
+class RosterImportIn(ImportIn):
+    month: str | None = Field(default=None, max_length=20)  # for day-number headers when the file does not say
+
+
+@app.get("/api/admin/roster.xlsx")
+def admin_roster_export(request: Request, month: str | None = None, role: str | None = None) -> Response:
+    """One month's shifts, on-call and leave as an Excel roster (people x days, shift codes)."""
+    _, admin = _admin(request, "roster")
+    data = _run(roster_io.build_roster, admin, month, role or None)
+    name = f"orchestra-roster-{(month or admin.db.today().strftime('%Y-%m'))[:7]}.xlsx"
+    return Response(data, media_type=XLSX,
+                    headers={"Content-Disposition": f'attachment; filename="{name}"', "Cache-Control": "no-store"})
+
+
+@app.post("/api/admin/roster/import")
+def admin_roster_import(body: RosterImportIn, request: Request) -> dict:
+    """Check an uploaded roster (and save it when ``commit`` and it has no errors)."""
+    user, admin = _admin(request, "roster")
+    text = body.content.split(",", 1)[1] if body.content.startswith("data:") else body.content
+    try:
+        content = base64.b64decode(text, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="อ่านไฟล์ไม่ได้ (ข้อมูลไฟล์ไม่ถูกต้อง)") from exc
+    return _run(roster_io.import_roster, admin, body.filename, content, commit=body.commit, month=body.month,
+                actor=_actor(user))

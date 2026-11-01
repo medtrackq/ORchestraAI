@@ -346,3 +346,17 @@ def test_excel_import_and_clean_up_are_for_the_admin_in_supabase_mode(owner):
     assert scheduler.post("/api/admin/wipe", json={"confirm": "ล้างข้อมูล"}).status_code == 403
     assert scheduler.post("/api/admin/demo-data/delete-cases", json={}).status_code == 403
     assert owner.post("/api/admin/import", json={**body, "content": ""}).status_code == 422
+
+
+def test_roster_excel_is_for_schedulers_and_admins(owner):
+    import base64
+
+    body = {"filename": "r.csv", "content": base64.b64encode("ชื่อ,1\nนก,ช\n".encode()).decode(), "month": "2026-11"}
+    scheduler = make_user(owner, "sched8", "scheduler")
+    assert scheduler.get("/api/admin/roster.xlsx").status_code == 400  # allowed, but needs Supabase
+    assert scheduler.post("/api/admin/roster/import", json=body).status_code == 400
+    nurse = make_user(owner, "nurse7", "staff", "SCR-2")
+    assert nurse.get("/api/admin/roster.xlsx").status_code == 403
+    assert nurse.post("/api/admin/roster/import", json=body).status_code == 403
+    cssd = make_user(owner, "cssd7", "cssd")
+    assert cssd.post("/api/admin/roster/import", json=body).status_code == 403

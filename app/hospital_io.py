@@ -141,7 +141,7 @@ STAFF = Sheet("staff", "บุคลากร", (
     Col("max_hours_per_day", "ชั่วโมงสูงสุดต่อวัน", "float", keep_blank=True, example="10", width=14),
     Col("min_rest_hours", "พักหลังเคสดึก (ชม.)", "float", keep_blank=True, example="8", width=14),
     Col("active", "ใช้งาน", "bool", keep_blank=True, help="ไม่ = ปิดใช้งาน (แทนการลบ)", example="ใช่", width=10),
-), "หนึ่งแถวต่อหนึ่งคน · จับคู่ด้วยรหัสพนักงาน · เวรและวันลาใส่ที่แท็บเวรและวันลา")
+), "หนึ่งแถวต่อหนึ่งคน · จับคู่ด้วยรหัสพนักงาน · ตารางเวรใช้ไฟล์ Excel แยก (แท็บเวรและวันลา)")
 
 SUPPLIES = Sheet("supplies", "วัสดุและรากเทียม", (
     Col("code", "รหัสวัสดุ", required=True, help="1-50 ตัว (A-Z 0-9 - _ .)", example="KNEE-IMP-5", width=16),
