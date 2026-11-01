@@ -3,56 +3,246 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#c4dce1">
 <title>เข้าสู่ระบบ ORchestraAI</title>
-<link href="https://fonts.googleapis.com/css2?family=Prompt:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <style>
-  :root { --bg: #f4f6fb; --surface: #fff; --text: #0f172a; --muted: #64748b; --border: #e2e8f0; --accent: #0e7490; --bad: #b91c1c; --bad-soft: #fee2e2; }
-  @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) { --bg: #0b1220; --surface: #111a2e; --text: #e2e8f0; --muted: #94a3b8; --border: #1f2a44; --accent: #22d3ee; --bad: #f87171; --bad-soft: rgba(239,68,68,.15); }
+  /* Light clinical theme: pale aqua to mist (the colours of an operating suite wall) */
+  :root {
+    color-scheme: light;
+    --aqua: #c4dce1; --mist: #d6e5e7;
+    --ink: #0f2a3a; --ink-2: #2f4a59; --ink-3: #3f5967;
+    --line: rgba(15, 70, 90, .07);
+    --edge: rgba(255, 255, 255, .85); --field: rgba(255, 255, 255, .88); --field-edge: rgba(15, 70, 90, .2);
+    --accent: #0e7490; --indigo: #4f46e5; --violet: #7c3aed;
+    --elective: #2563eb; --urgent: #b45309; --emergency: #dc2626; --ok: #047857;
+    --bad: #991b1b; --bad-soft: #fee2e2;
   }
-  :root[data-theme="dark"] { --bg: #0b1220; --surface: #111a2e; --text: #e2e8f0; --muted: #94a3b8; --border: #1f2a44; --accent: #22d3ee; --bad: #f87171; --bad-soft: rgba(239,68,68,.15); }
   * { box-sizing: border-box; }
-  body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 16px; background: var(--bg); color: var(--text);
-    font: 15px/1.5 'Prompt', 'Noto Sans Thai', system-ui, sans-serif; }
-  .card { width: 100%; max-width: 380px; background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 28px; }
-  .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
-  .orb { width: 14px; height: 14px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 12px var(--accent); }
-  h1 { margin: 0; font-size: 1.25rem; }
-  p { margin: 0 0 18px; color: var(--muted); font-size: .88rem; }
-  form { display: grid; gap: 12px; }
-  label { display: grid; gap: 4px; font-size: .82rem; color: var(--muted); }
-  input { width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: transparent; color: var(--text); font: inherit; }
-  button { padding: 11px; border: 0; border-radius: 8px; background: var(--accent); color: #fff; font: inherit; font-weight: 600; cursor: pointer; }
-  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) button { color: #04121a; } }
-  button:disabled { opacity: .6; cursor: progress; }
-  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-  .error { background: var(--bad-soft); color: var(--bad); border-radius: 8px; padding: 8px 10px; font-size: .85rem; }
-  .help-link { margin: 14px 0 0; text-align: center; font-size: .85rem; }
-  .help-link a { color: var(--muted, #64748b); }
+  html, body { margin: 0; }
+  body {
+    min-height: 100vh; display: flex; flex-direction: column; overflow-x: hidden; color: var(--ink);
+    font: 15px/1.55 'Prompt', 'Noto Sans Thai', system-ui, sans-serif;
+    background:
+      radial-gradient(900px 600px at 78% 22%, rgba(255, 255, 255, .55), transparent 65%),
+      radial-gradient(700px 500px at 10% 90%, rgba(255, 255, 255, .28), transparent 65%),
+      linear-gradient(105deg, var(--aqua) 0%, #c8dfe4 48%, var(--mist) 100%);
+    background-color: var(--mist);
+  }
+  body::before {  /* faint planning grid */
+    content: ""; position: fixed; inset: 0; pointer-events: none; opacity: .9;
+    background-image: linear-gradient(var(--line) 1px, transparent 1px), linear-gradient(90deg, var(--line) 1px, transparent 1px);
+    background-size: 56px 56px;
+    -webkit-mask-image: radial-gradient(ellipse at 50% 38%, #000 25%, transparent 78%);
+    mask-image: radial-gradient(ellipse at 50% 38%, #000 25%, transparent 78%);
+  }
   [hidden] { display: none !important; }
+  svg { display: block; }
+  .ico { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+
+  /* ---------------------------------------------------------------- header */
+  .top { position: relative; z-index: 2; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px clamp(16px, 4vw, 44px); }
+  .logo { display: flex; align-items: center; gap: 14px; text-decoration: none; color: inherit; }
+  .logo svg { width: 46px; height: 46px; filter: drop-shadow(0 6px 16px rgba(14, 116, 144, .28)); }
+  .logo b { display: block; font-size: 1.15rem; font-weight: 600; letter-spacing: .02em; }
+  .logo small { display: block; font-size: .68rem; letter-spacing: .22em; color: var(--ink-3); text-transform: uppercase; }
+  .clock { text-align: right; font-variant-numeric: tabular-nums; }
+  .clock .t { font-size: clamp(1.3rem, 2.4vw, 1.9rem); font-weight: 500; letter-spacing: .08em; color: var(--ink); }
+  .clock .d { font-size: .78rem; color: var(--ink-3); }
+
+  /* ---------------------------------------------------------------- stage */
+  main { position: relative; z-index: 1; flex: 1; width: 100%; max-width: 1320px; margin: 0 auto;
+         display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(320px, 470px); gap: clamp(28px, 5vw, 72px);
+         align-items: center; padding: clamp(8px, 2vw, 20px) clamp(16px, 4vw, 44px) 24px; }
+  .eyebrow { margin: 0 0 14px; font-size: .74rem; font-weight: 500; letter-spacing: .26em; text-transform: uppercase; color: var(--ink-3); }
+  .hero h1 { margin: 0 0 18px; font-size: clamp(2rem, 4.3vw, 3.4rem); line-height: 1.22; font-weight: 600; letter-spacing: -.01em; color: var(--ink); }
+  .hero h1 .grad { color: var(--accent); background: linear-gradient(90deg, #0e7490, #4f46e5 55%, #7c3aed); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+  .nw { white-space: nowrap; }
+  .lead { margin: 0 0 26px; max-width: 640px; color: var(--ink-2); font-size: 1.02rem; font-weight: 400; }
+  .steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; max-width: 760px; }
+  .steps li { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 14px; border: 1px solid rgba(15, 70, 90, .12);
+              background: rgba(255, 255, 255, .45); color: var(--ink);
+              transition: border-color .4s, background .4s, box-shadow .4s, transform .4s; }
+  .steps li.on { border-color: rgba(14, 116, 144, .55); background: rgba(255, 255, 255, .85); box-shadow: 0 10px 26px rgba(14, 116, 144, .16); transform: translateY(-2px); }
+  .steps .ic { width: 38px; height: 38px; border-radius: 10px; display: grid; place-items: center; color: var(--c); flex: none;
+               background: rgba(255, 255, 255, .7); border: 1px solid rgba(15, 70, 90, .15);
+               background: color-mix(in srgb, var(--c) 12%, white); border-color: color-mix(in srgb, var(--c) 30%, transparent); }
+  .steps .name { flex: 1; font-size: .9rem; line-height: 1.3; }
+  .steps .num { font-size: .78rem; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+
+  /* ---------------------------------------------------------------- card */
+  .card { position: relative; padding: clamp(26px, 3.2vw, 40px); border-radius: 24px; border: 1px solid var(--edge);
+          background: linear-gradient(155deg, rgba(255, 255, 255, .78), rgba(240, 248, 250, .62) 55%, rgba(232, 236, 252, .66));
+          -webkit-backdrop-filter: blur(18px) saturate(140%); backdrop-filter: blur(18px) saturate(140%);
+          box-shadow: 0 30px 70px rgba(15, 70, 90, .18), inset 0 1px 0 rgba(255, 255, 255, .9); }
+  .card h2 { margin: 0; font-size: 2rem; font-weight: 600; color: var(--ink); }
+  .card .sub { margin: 4px 0 26px; color: var(--ink-2); font-size: .95rem; }
+  form { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; }
+  .field { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .field > label { font-size: .88rem; font-weight: 500; color: var(--ink); }
+  .input { position: relative; display: flex; align-items: center; height: 54px; border-radius: 14px; border: 1px solid var(--field-edge);
+           background: var(--field); transition: border-color .2s, box-shadow .2s; }
+  .input:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(14, 116, 144, .18); }
+  .input > .ico { margin-left: 16px; color: var(--ink-3); }
+  .input input { flex: 1; min-width: 0; width: 100%; height: 100%; border: 0; outline: 0; background: transparent; color: var(--ink); font: inherit; font-size: 1rem; padding: 0 14px; }
+  .input input::placeholder { color: #587080; }
+  .peek { height: 100%; padding: 0 16px; border: 0; background: transparent; color: var(--ink-3); cursor: pointer; border-radius: 0 14px 14px 0; }
+  .peek:hover { color: var(--ink); }
+  .primary { position: relative; overflow: hidden; display: flex; align-items: center; justify-content: center; gap: 10px; height: 56px; margin-top: 6px;
+             border: 0; border-radius: 14px; cursor: pointer; color: #fff; font: inherit; font-size: 1.05rem; font-weight: 600;
+             background: linear-gradient(90deg, #0e7490, #2563eb 55%, #4f46e5); box-shadow: 0 12px 26px rgba(37, 99, 235, .28), inset 0 1px 0 rgba(255, 255, 255, .25);
+             transition: transform .15s, box-shadow .15s, filter .15s; }
+  .primary::after { content: ""; position: absolute; inset: 0; background: linear-gradient(110deg, transparent 30%, rgba(255, 255, 255, .25) 50%, transparent 70%); transform: translateX(-100%); transition: transform .7s; }
+  .primary:hover { transform: translateY(-1px); filter: brightness(1.06); }
+  .primary:hover::after { transform: translateX(100%); }
+  .primary:disabled { opacity: .65; cursor: progress; transform: none; }
+  .primary .ico { width: 20px; height: 20px; }
+  .error { background: var(--bad-soft); color: var(--bad); border: 1px solid #fca5a5; border-radius: 12px; padding: 10px 12px; font-size: .88rem; }
+  .card-foot { margin: 22px 0 0; display: grid; gap: 8px; justify-items: center; text-align: center; font-size: .84rem; color: var(--ink-3); }
+  .card-foot .safe { display: flex; align-items: center; gap: 8px; }
+  .card-foot .safe .ico { width: 17px; height: 17px; color: var(--ok); }
+  .card-foot a { color: var(--accent); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .input :focus-visible { outline: none; }
+
+  /* ---------------------------------------------------------------- OR timeline */
+  .lanes-wrap { position: relative; z-index: 1; padding: 0 clamp(16px, 4vw, 44px) 14px; }
+  .lanes { position: relative; display: grid; gap: 7px; padding: 14px 0 6px; cursor: pointer; user-select: none; -webkit-user-select: none; }
+  .lane { display: grid; grid-template-columns: 54px minmax(0, 1fr); align-items: center; }
+  .lane-name { font-size: .72rem; letter-spacing: .12em; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+  .track { position: relative; height: 26px; overflow: hidden; border-radius: 8px; background: rgba(255, 255, 255, .42);
+           -webkit-mask-image: linear-gradient(90deg, transparent, #000 6%, #000 94%, transparent); mask-image: linear-gradient(90deg, transparent, #000 6%, #000 94%, transparent); }
+  .strip { position: absolute; inset: 0; will-change: transform; }
+  .blk { position: absolute; top: 3px; bottom: 3px; display: flex; transition: left .7s cubic-bezier(.2, .8, .2, 1); }
+  .blk.fresh { transition: none; }
+  .blk .case { display: flex; align-items: center; gap: 6px; padding: 0 8px; border-radius: 6px; overflow: hidden; white-space: nowrap;
+               font-size: .68rem; color: #fff; background: var(--c);
+               background: linear-gradient(90deg, var(--c), color-mix(in srgb, var(--c) 75%, #1e1b4b));
+               box-shadow: inset 0 1px 0 rgba(255, 255, 255, .22), 0 2px 6px rgba(15, 70, 90, .15); }
+  .blk .case b { font-weight: 600; letter-spacing: .03em; }
+  .blk .clean { border-radius: 0 6px 6px 0; background: repeating-linear-gradient(135deg, rgba(71, 85, 105, .3) 0 3px, transparent 3px 6px); }
+  .blk.E .case { box-shadow: 0 0 0 1px rgba(255, 255, 255, .7), 0 0 16px rgba(220, 38, 38, .55); animation: pulse 1.6s ease-in-out 3; }
+  @keyframes pulse { 50% { box-shadow: 0 0 0 1px rgba(255, 255, 255, .9), 0 0 24px rgba(220, 38, 38, .8); } }
+  .now { position: absolute; top: 4px; bottom: 0; width: 2px; background: linear-gradient(var(--accent), rgba(14, 116, 144, .15)); box-shadow: 0 0 10px rgba(14, 116, 144, .5); pointer-events: none; }
+  .now span { position: absolute; top: -4px; left: 8px; font-size: .68rem; color: var(--accent); font-weight: 500; white-space: nowrap; letter-spacing: .06em; }
+  .lanes-foot { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-top: 6px; font-size: .78rem; color: var(--ink-3); }
+  .lanes-foot .legend { display: flex; gap: 14px; flex-wrap: wrap; }
+  .lanes-foot .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+  .news { color: #b91c1c; min-height: 1.2em; }
+
+  /* ---------------------------------------------------------------- smaller screens */
+  @media (max-width: 980px) {
+    main { grid-template-columns: minmax(0, 1fr); }
+    .panel { order: -1; width: 100%; max-width: 480px; margin: 0 auto; }
+    .hero { text-align: left; }
+  }
+  @media (max-width: 600px) {
+    .logo small, .clock .d { display: none; }
+    .hero h1 { font-size: clamp(1.6rem, 7.4vw, 2rem); }
+    .steps { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+    .steps li { padding: 10px; gap: 10px; }
+    .steps .ic { width: 32px; height: 32px; }
+    .lane:nth-child(n+4) { display: none; }
+    .lanes-foot .legend { display: none; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+  }
+  @media (forced-colors: active) {
+    .card, .input, .steps li { border: 1px solid CanvasText; }
+    .hero h1 .grad { -webkit-text-fill-color: CanvasText; }
+  }
 </style>
 </head>
 <body>
-<main class="card">
-  <div class="brand"><span class="orb" aria-hidden="true"></span><h1>ORchestraAI</h1></div>
-  <p id="subtitle">ระบบนัดผ่าตัดอัจฉริยะ · เข้าสู่ระบบ</p>
+<header class="top">
+  <div class="logo">
+    <svg viewBox="0 0 48 48" aria-hidden="true">
+      <defs>
+        <linearGradient id="lg-edge" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#67e8f9"/><stop offset="1" stop-color="#8b5cf6"/></linearGradient>
+        <radialGradient id="lg-core"><stop offset="0" stop-color="#e0f7ff"/><stop offset="1" stop-color="#22d3ee"/></radialGradient>
+      </defs>
+      <rect x="1.5" y="1.5" width="45" height="45" rx="13" fill="#0d1a3a" stroke="url(#lg-edge)" stroke-width="1.5"/>
+      <ellipse cx="24" cy="24" rx="15" ry="7.5" fill="none" stroke="#3b82f6" stroke-opacity=".55" stroke-width="1.4" transform="rotate(-28 24 24)"/>
+      <ellipse cx="24" cy="24" rx="15" ry="7.5" fill="none" stroke="#a78bfa" stroke-opacity=".55" stroke-width="1.4" transform="rotate(32 24 24)"/>
+      <circle cx="24" cy="24" r="4.6" fill="url(#lg-core)"/>
+      <circle cx="11.6" cy="31" r="2.3" fill="#22d3ee"/><circle cx="36.4" cy="16.6" r="2.3" fill="#f59e0b"/><circle cx="34.6" cy="32.4" r="2.3" fill="#a78bfa"/>
+    </svg>
+    <div><b>ORchestraAI</b><small>Smart OR scheduling · multi-agent</small></div>
+  </div>
+  <div class="clock" aria-hidden="true"><div class="t" id="clock-time">--:--:--</div><div class="d" id="clock-date"></div></div>
+</header>
 
-  <form id="login">
-    <label>ชื่อผู้ใช้<input name="username" autocomplete="username" required autofocus></label>
-    <label>รหัสผ่าน<input name="password" type="password" autocomplete="current-password" required></label>
-    <div class="error" id="login-error" role="alert" hidden></div>
-    <button type="submit">เข้าสู่ระบบ</button>
-  </form>
+<main>
+  <section class="hero" aria-labelledby="hero-title">
+    <p class="eyebrow">ORchestra · Smart OR scheduling</p>
+    <h1 id="hero-title"><span class="nw">ทุกห้อง</span> <span class="nw">ทุกทีม</span> <span class="nw">ทุกเครื่องมือ</span><br><span class="grad nw">ประสานกันในตารางเดียว</span></h1>
+    <p class="lead">Agent แต่ละด้านตรวจบุคลากร เครื่องมือ CSSD และห้องผ่าตัดพร้อมกัน แล้วหาเวลาที่ทุกฝ่ายพร้อม จองได้ในไม่กี่วินาที และไม่มีตารางชนกัน</p>
+    <ol class="steps" id="steps" aria-label="ขั้นตอนการจัดตาราง">
+      <li style="--c:#0e7490"><span class="ic"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="4" width="12" height="17" rx="2"/><path d="M9.5 4h5v3h-5zM9 11.5h6M9 15.5h4"/></svg></span><span class="name">รับคำขอผ่าตัด</span><span class="num">01</span></li>
+      <li style="--c:#7c3aed"><span class="ic"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><circle cx="17" cy="9" r="2.4"/><path d="M15.6 14.2c2.9.3 5.4 2.6 5.4 5.8"/></svg></span><span class="name">ทีมและเวร</span><span class="num">02</span></li>
+      <li style="--c:#b45309"><span class="ic"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="7" r="2.5"/><circle cx="6" cy="17" r="2.5"/><path d="M8.2 8.4 20 18M8.2 15.6 20 6"/></svg></span><span class="name">เครื่องมือและ CSSD</span><span class="num">03</span></li>
+      <li style="--c:#047857"><span class="ic"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 18V7M3 14h18v4M21 14v-1.5A3.5 3.5 0 0 0 17.5 9H11v5"/><circle cx="7" cy="11" r="2"/></svg></span><span class="name">ห้องและเตียง</span><span class="num">04</span></li>
+      <li style="--c:#4f46e5"><span class="ic"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="2.6"/><path d="M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M5.6 18.4l2.8-2.8M15.6 8.4l2.8-2.8"/></svg></span><span class="name">หาเวลาที่ลงตัว</span><span class="num">05</span></li>
+      <li style="--c:#be185d"><span class="ic"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 10a6 6 0 0 1 12 0c0 5 2 6.5 2 6.5H4S6 15 6 10"/><path d="M10 20a2 2 0 0 0 4 0"/></svg></span><span class="name">ล็อกตารางและแจ้งทีม</span><span class="num">06</span></li>
+    </ol>
+  </section>
 
-  <form id="change" hidden>
-    <label>รหัสผ่านใหม่ (อย่างน้อย 10 ตัวอักษร)<input name="new_password" type="password" autocomplete="new-password" minlength="10" required></label>
-    <label>ยืนยันรหัสผ่านใหม่<input name="confirm" type="password" autocomplete="new-password" minlength="10" required></label>
-    <div class="error" id="change-error" role="alert" hidden></div>
-    <button type="submit">ตั้งรหัสผ่านและเข้าใช้งาน</button>
-  </form>
-  <p class="help-link"><a href="/help">❓ วิธีใช้งาน / ลืมรหัสผ่าน</a></p>
+  <section class="panel" aria-labelledby="login-title">
+    <div class="card">
+      <p class="eyebrow">ORchestra · OR scheduling</p>
+      <h2 id="login-title">เข้าสู่ระบบ</h2>
+      <p class="sub" id="subtitle">ระบบนัดผ่าตัดอัจฉริยะ</p>
+
+      <form id="login">
+        <div class="field">
+          <label for="username">ชื่อผู้ใช้</label>
+          <div class="input"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-8 8-8s8 3.6 8 8"/></svg>
+            <input id="username" name="username" autocomplete="username" required autofocus placeholder="กรอกชื่อผู้ใช้" autocapitalize="none" spellcheck="false"></div>
+        </div>
+        <div class="field">
+          <label for="password">รหัสผ่าน</label>
+          <div class="input"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+            <input id="password" name="password" type="password" autocomplete="current-password" required placeholder="กรอกรหัสผ่าน">
+            <button class="peek" type="button" data-peek="password" aria-label="แสดงรหัสผ่าน" aria-pressed="false"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/><path class="slash" d="M3 3l18 18" hidden/></svg></button></div>
+        </div>
+        <div class="error" id="login-error" role="alert" hidden></div>
+        <button class="primary" type="submit"><span>เข้าสู่ระบบ</span><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
+      </form>
+
+      <form id="change" hidden>
+        <div class="field">
+          <label for="new-password">รหัสผ่านใหม่ (อย่างน้อย 10 ตัวอักษร)</label>
+          <div class="input"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+            <input id="new-password" name="new_password" type="password" autocomplete="new-password" minlength="10" required></div>
+        </div>
+        <div class="field">
+          <label for="confirm-password">ยืนยันรหัสผ่านใหม่</label>
+          <div class="input"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+            <input id="confirm-password" name="confirm" type="password" autocomplete="new-password" minlength="10" required></div>
+        </div>
+        <div class="error" id="change-error" role="alert" hidden></div>
+        <button class="primary" type="submit"><span>ตั้งรหัสผ่านและเข้าใช้งาน</span><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
+      </form>
+
+      <div class="card-foot">
+        <span class="safe"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.4 8.4-8 9-4.6-.6-8-4.5-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg>ข้อมูลผู้ป่วยได้รับการคุ้มครองตาม PDPA</span>
+        <a href="/help">วิธีใช้งาน / ลืมรหัสผ่าน</a>
+      </div>
+    </div>
+  </section>
 </main>
+
+<div class="lanes-wrap" aria-hidden="true">
+  <div class="lanes" id="lanes" title="แตะเพื่อลองแทรกเคสฉุกเฉิน"></div>
+  <div class="lanes-foot">
+    <span class="news" id="news">แตะที่ตารางเพื่อลองแทรกเคสฉุกเฉิน</span>
+    <span class="legend"><span><i style="background:var(--elective)"></i>นัดล่วงหน้า</span><span><i style="background:var(--urgent)"></i>ด่วน</span><span><i style="background:var(--emergency)"></i>ฉุกเฉิน</span><span><i style="background:repeating-linear-gradient(135deg,rgba(71,85,105,.55) 0 2px,transparent 2px 4px)"></i>ทำความสะอาดห้อง</span></span>
+  </div>
+</div>
+
 <script>
+  // ------------------------------------------------------------------ sign in (unchanged behaviour)
   let temporaryPassword = '';
   async function post(path, body) {
     const res = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -64,7 +254,7 @@
 
   document.getElementById('login').addEventListener('submit', async e => {
     e.preventDefault();
-    const f = new FormData(e.target), button = e.target.querySelector('button');
+    const f = new FormData(e.target), button = e.target.querySelector('button[type="submit"]');
     button.disabled = true; show('login-error', '');
     try {
       const data = await post('/api/login', { username: f.get('username'), password: f.get('password') });
@@ -72,7 +262,9 @@
         temporaryPassword = f.get('password');
         e.target.hidden = true;
         document.getElementById('change').hidden = false;
+        document.getElementById('login-title').textContent = 'ตั้งรหัสผ่านใหม่';
         document.getElementById('subtitle').textContent = 'สวัสดี ' + data.user.display_name + ' · กรุณาตั้งรหัสผ่านใหม่แทนรหัสชั่วคราว';
+        document.getElementById('new-password').focus();
       } else {
         location.href = '/';
       }
@@ -81,7 +273,7 @@
 
   document.getElementById('change').addEventListener('submit', async e => {
     e.preventDefault();
-    const f = new FormData(e.target), button = e.target.querySelector('button');
+    const f = new FormData(e.target), button = e.target.querySelector('button[type="submit"]');
     if (f.get('new_password') !== f.get('confirm')) { show('change-error', 'รหัสผ่านทั้งสองช่องไม่ตรงกัน'); return; }
     button.disabled = true; show('change-error', '');
     try {
@@ -89,6 +281,138 @@
       location.href = '/';
     } catch (err) { show('change-error', err.message); } finally { button.disabled = false; }
   });
+
+  document.querySelectorAll('[data-peek]').forEach(b => b.addEventListener('click', () => {
+    const input = document.getElementById(b.dataset.peek), showing = input.type === 'password';
+    input.type = showing ? 'text' : 'password';
+    b.setAttribute('aria-pressed', String(showing));
+    b.setAttribute('aria-label', showing ? 'ซ่อนรหัสผ่าน' : 'แสดงรหัสผ่าน');
+    b.querySelector('.slash').hidden = !showing;
+    input.focus();
+  }));
+
+  // ------------------------------------------------------------------ clock
+  function tick() {
+    const d = new Date();
+    document.getElementById('clock-time').textContent = d.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+    document.getElementById('clock-date').textContent = d.toLocaleDateString('th-TH', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+  }
+  tick(); setInterval(tick, 1000);
+
+  // ------------------------------------------------------------------ the look of the schedule (decoration only)
+  const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const steps = [...document.querySelectorAll('#steps li')];
+  let stepAt = 0, stepTimer = null;
+  function lightStep(i) { steps.forEach((s, n) => s.classList.toggle('on', n === i)); }
+  function cycleSteps(every = 2200) {
+    clearInterval(stepTimer);
+    if (still) return;
+    stepTimer = setInterval(() => { stepAt = (stepAt + 1) % steps.length; lightStep(stepAt); }, every);
+  }
+  lightStep(0); cycleSteps();
+
+  const ROOMS = ['OR-1', 'OR-2', 'OR-3', 'OR-4'];
+  const PROCS = ['Lap chole', 'TKA', 'C-section', 'Appendectomy', 'THA', 'ORIF femur', 'Hernia repair', 'Thyroidectomy',
+                 'TURP', 'Mastectomy', 'Craniotomy', 'Septoplasty', 'Lap colectomy', 'Cataract'];
+  const PX = innerWidth < 600 ? 1.5 : 2.1;           // px per minute
+  const SPEED = 7;                                    // schedule minutes per real second
+  const pick = list => list[Math.floor(Math.random() * list.length)];
+  const code = p => p + '-' + Math.floor(Math.random() * 0xffff).toString(16).toUpperCase().padStart(4, '0');
+  const lanesEl = document.getElementById('lanes');
+  let t = 0;                                          // schedule minutes since the page opened
+  const lanes = ROOMS.map(room => {
+    const row = document.createElement('div');
+    row.className = 'lane';
+    row.innerHTML = `<span class="lane-name">${room}</span><div class="track"><div class="strip"></div></div>`;
+    lanesEl.appendChild(row);
+    return { room, row, track: row.querySelector('.track'), strip: row.querySelector('.strip'), blocks: [], end: 0 };
+  });
+  const nowLine = document.createElement('div');
+  nowLine.className = 'now';
+  nowLine.innerHTML = '<span>ตอนนี้</span>';
+  lanesEl.appendChild(nowLine);
+
+  function viewMinutes(lane) { return lane.track.clientWidth / PX; }
+  function nowOffset(lane) { return viewMinutes(lane) * 0.3; }      // the "now" line sits at 30% of the track
+
+  function makeBlock(lane, start, kind) {
+    const urgency = kind || (Math.random() < 0.2 ? 'U' : 'R');
+    const dur = urgency === 'E' ? 75 + Math.round(Math.random() * 30) : 45 + Math.round(Math.random() * 120);
+    const clean = urgency === 'E' ? 25 : 15 + Math.round(Math.random() * 15);
+    const el = document.createElement('div');
+    el.className = 'blk fresh ' + urgency;
+    const color = { R: 'var(--elective)', U: 'var(--urgent)', E: 'var(--emergency)' }[urgency];
+    el.innerHTML = `<span class="case" style="--c:${color};width:${dur * PX}px"><b>${code(urgency)}</b>${urgency === 'E' ? 'ฉุกเฉิน' : pick(PROCS)}</span>`
+      + `<span class="clean" style="width:${clean * PX}px"></span>`;
+    lane.strip.appendChild(el);
+    const b = { el, start, dur, clean, urgency };
+    place(b);
+    requestAnimationFrame(() => el.classList.remove('fresh'));
+    return b;
+  }
+  function place(b) { b.el.style.left = (b.start * PX) + 'px'; }
+
+  function fill(lane) {
+    const until = t + viewMinutes(lane) * 1.3;
+    while (lane.end < until) {
+      const gap = Math.random() < 0.25 ? 20 + Math.round(Math.random() * 60) : 0;
+      const b = makeBlock(lane, lane.end + gap);
+      lane.blocks.push(b);
+      lane.end = b.start + b.dur + b.clean;
+    }
+    const gone = t - viewMinutes(lane) * 0.1;
+    while (lane.blocks.length && lane.blocks[0].start + lane.blocks[0].dur + lane.blocks[0].clean < gone) {
+      lane.blocks.shift().el.remove();
+    }
+  }
+
+  function start() {
+    lanes.forEach(lane => { lane.end = -viewMinutes(lane) * 0.4 + Math.random() * 60; fill(lane); });
+    positionNow();
+    render();
+  }
+  function positionNow() {
+    const lane = lanes[0];
+    nowLine.style.left = (lane.track.offsetLeft + lane.track.clientWidth * 0.3) + 'px';
+  }
+  function render() {
+    lanes.forEach(lane => { lane.strip.style.transform = `translateX(${-(t - 0) * PX}px)`; });
+  }
+
+  let last = performance.now();
+  function frame(now) {
+    t += Math.min(now - last, 100) / 1000 * SPEED;
+    last = now;
+    lanes.forEach(fill);
+    render();
+    requestAnimationFrame(frame);
+  }
+
+  // Tap the schedule: an emergency goes into the room right after the case in progress,
+  // and the cases after it move later (what the Master Orchestrator does in the app).
+  function emergency(ev) {
+    const row = ev.target.closest('.lane');
+    const lane = row ? lanes.find(l => l.row === row) : pick(lanes.filter(l => l.row.offsetParent));
+    const now = t + nowOffset(lane);
+    const running = lane.blocks.find(b => b.start <= now && b.start + b.dur + b.clean > now);
+    const at = running ? running.start + running.dur + running.clean : now + 5;
+    const later = lane.blocks.filter(b => b.start >= at - 0.01);
+    const e = makeBlock(lane, at, 'E');
+    const push = e.dur + e.clean;
+    later.forEach(b => { b.start += push; place(b); });
+    lane.blocks.push(e);
+    lane.blocks.sort((a, b) => a.start - b.start);
+    lane.end += push;
+    document.getElementById('news').textContent =
+      `แทรกเคสฉุกเฉินใน ${lane.room} · เลื่อน ${later.filter(b => b.start - push < now + viewMinutes(lane)).length} เคสถัดไปโดยไม่ชนกัน`;
+    steps.forEach((s, n) => setTimeout(() => lightStep(n), n * 180));      // the agents check it in turn
+    setTimeout(() => { stepAt = steps.length - 1; cycleSteps(); }, steps.length * 180);
+  }
+  lanesEl.addEventListener('click', emergency);
+  addEventListener('resize', positionNow);
+
+  start();
+  if (!still) requestAnimationFrame(frame);
 </script>
 </body>
 </html>
