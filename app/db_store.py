@@ -49,6 +49,11 @@ class DatabaseStore:
 
     @contextmanager
     def _transaction(self, *, write: bool):
+        shared = getattr(self._outbox, "shared", None)
+        if shared is not None:  # inside batch(): join its transaction, in a savepoint of our own
+            with shared.transaction():
+                yield shared
+            return
         outer = not getattr(self._outbox, "depth", 0)
         if outer:
             self._outbox.events = []
@@ -76,6 +81,20 @@ class DatabaseStore:
                 if committed and self.listener is not None:
                     for event in events:
                         self.listener(event)
+
+    @contextmanager
+    def batch(self):
+        """One write transaction that every ``_transaction`` on this thread joins until it ends.
+
+        Each joined call runs in its own savepoint, so one failing step is undone
+        on its own while the rest carry on; raising out of the block undoes it all.
+        """
+        with self._transaction(write=True) as conn:
+            self._outbox.shared = conn
+            try:
+                yield conn
+            finally:
+                self._outbox.shared = None
 
     def _day(self, text: str | None) -> date:
         if not text:

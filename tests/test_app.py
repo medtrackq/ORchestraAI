@@ -331,3 +331,18 @@ def test_preference_cards_need_supabase_and_the_cards_permission(owner):
     assert cssd.post("/api/admin/cards", json={"duration": 60}).status_code == 403
     assert cssd.request("DELETE", "/api/admin/cards/x", json={}).status_code == 403
     assert owner.post("/api/admin/cards", json={"duration": 5}).status_code == 422  # out of range
+
+
+def test_excel_import_and_clean_up_are_for_the_admin_in_supabase_mode(owner):
+    import base64
+
+    body = {"filename": "x.csv", "content": base64.b64encode(b"a,b\n").decode()}
+    assert owner.get("/api/admin/export.xlsx").status_code == 400  # demo data cannot be exported or replaced
+    assert owner.post("/api/admin/import", json=body).status_code == 400
+    assert owner.get("/api/admin/demo-data").status_code == 400
+    scheduler = make_user(owner, "sched7", "scheduler")
+    assert scheduler.get("/api/admin/export.xlsx").status_code == 403
+    assert scheduler.post("/api/admin/import", json=body).status_code == 403
+    assert scheduler.post("/api/admin/wipe", json={"confirm": "ล้างข้อมูล"}).status_code == 403
+    assert scheduler.post("/api/admin/demo-data/delete-cases", json={}).status_code == 403
+    assert owner.post("/api/admin/import", json={**body, "content": ""}).status_code == 422

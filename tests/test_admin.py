@@ -251,8 +251,12 @@ def test_ended_cases_use_up_stock_and_counts_are_set(admin, store, db_url):
                          "WHERE i.code = 'VASC-GRAFT'") == [("USED",)]
     assert _stock(store.state(), "VASC-GRAFT")["left"] == before["left"]  # what is free did not change
 
-    result = admin.count_stock("KNEE-IMP", {"on_hand": 1, "note": "นับสต็อกสิ้นเดือน"})
-    assert result["on_hand"] == 1 and result["affected"]  # two knee cases today hold two
+    day = _tomorrow(store)  # a knee case that has not started whatever the time of day
+    knee = _request(store.state(day), "Dr.Somchai", "Total knee arthroplasty (L)", "HN-KNEE-T",
+                    required_supplies={"KNEE-IMP": 1, "BONE-CEM": 2})
+    assert store.slot_check(knee, "09:00", commit=True, day=day)["booked"]
+    result = admin.count_stock("KNEE-IMP", {"on_hand": 0, "note": "นับสต็อกสิ้นเดือน"})
+    assert result["on_hand"] == 0 and day in [a["date"] for a in result["affected"]]  # it no longer has its implant
     admin.set_procedure_supplies(next(p["id"] for p in admin.inventory()["procedures"]
                                       if p["name"] == "Open inguinal hernia repair"), {"supplies": {"MESH-15": 2}})
     hernia = next(p for p in store.state()["options"]["procedures"] if p["name"] == "Open inguinal hernia repair")
