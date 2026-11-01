@@ -100,6 +100,14 @@ def room_options(hospital: Hospital) -> list[dict]:
     ]
 
 
+def with_roles(schedule: dict, hospital: Hospital) -> dict:
+    """Each team member's role on the bookings (for printed lists and the WHO checklist)."""
+    roles = {s.staff_id: s.role for s in hospital.staff}
+    for b in schedule["bookings"]:
+        b["team"] = [{**t, "role": roles.get(t["staff_id"])} for t in b["team"]]
+    return schedule
+
+
 def facility_view(hospital: Hospital, result: ScheduleResult) -> dict:
     """Equipment & CSSD work queue and recovery beds for this day."""
     return {
@@ -293,7 +301,7 @@ class ScheduleStore:
         }
 
     def state(self, day: str | None = None) -> dict:
-        schedule = self.result.to_dict()
+        schedule = with_roles(self.result.to_dict(), self.hospital)
         bookings = schedule["bookings"]
         for b in bookings:
             start, end = self.actuals.get(b["case_id"], [None, None])

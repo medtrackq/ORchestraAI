@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>พิมพ์ตารางผ่าตัด · ORchestraAI</title>
+<link href="https://fonts.googleapis.com/css2?family=Prompt:wght@400;500;600&family=Sarabun:wght@400;600;700&display=swap" rel="stylesheet">
+<style>@page { size: A4 landscape; margin: 9mm; }</style>
+<style>
+  :root {
+    --bg: #e2e8f0; --surface: #ffffff; --text: #0f172a; --muted: #64748b; --border: #cbd5e1; --accent: #0e7490;
+    --ink: #111827; --line: #9ca3af; --soft: #f3f4f6; --bad: #b91c1c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { --bg: #0b1220; --surface: #111a2e; --text: #e2e8f0; --muted: #94a3b8; --border: #1f2a44; --accent: #22d3ee; }
+  }
+  :root[data-theme="dark"] { --bg: #0b1220; --surface: #111a2e; --text: #e2e8f0; --muted: #94a3b8; --border: #1f2a44; --accent: #22d3ee; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 'Prompt', 'Noto Sans Thai', system-ui, sans-serif; }
+  button, input, select { font: inherit; color: inherit; }
+
+  /* toolbar (screen only) */
+  .bar { position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; gap: 10px; align-items: end; padding: 12px 16px;
+    background: var(--surface); border-bottom: 1px solid var(--border); }
+  .bar label { display: grid; gap: 2px; font-size: .78rem; color: var(--muted); }
+  .bar label.check { display: flex; align-items: center; gap: 6px; color: var(--text); font-size: .86rem; padding-bottom: 8px; }
+  .bar select { padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+  .btn { border: 1px solid var(--border); background: var(--surface); padding: 8px 14px; border-radius: 8px; cursor: pointer;
+    text-decoration: none; color: var(--text); font-size: .88rem; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  :root[data-theme="dark"] .btn.primary { color: #04121a; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .btn.primary { color: #04121a; } }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .bar .grow { flex: 1 1 auto; }
+  .bar .note { font-size: .78rem; color: var(--muted); flex: 1 1 260px; }
+  #msg { padding: 24px 16px; }
+
+  /* paper */
+  #sheets { padding: 16px; display: grid; gap: 16px; justify-items: center; overflow-x: auto; }
+  .sheet { width: 279mm; min-height: 192mm; background: #fff; color: var(--ink); padding: 9mm; box-shadow: 0 2px 12px rgba(0,0,0,.18);
+    font: 10.5pt/1.35 'Sarabun', 'Noto Sans Thai', 'Prompt', sans-serif; display: flex; flex-direction: column; gap: 3mm; }
+  .doc-head { display: flex; justify-content: space-between; gap: 8mm; border-bottom: 1.5pt solid var(--ink); padding-bottom: 2mm; }
+  .doc-head h1 { margin: 0; font-size: 15pt; line-height: 1.2; }
+  .doc-head p { margin: 1mm 0 0; font-size: 10.5pt; }
+  .doc-head .meta { text-align: right; font-size: 8.5pt; color: #374151; white-space: nowrap; }
+  .doc-head .meta b { color: var(--bad); }
+  table.list { width: 100%; border-collapse: collapse; table-layout: fixed; }
+  .list th, .list td { border: .6pt solid var(--line); padding: 1.2mm 1.6mm; vertical-align: top; text-align: left; overflow-wrap: anywhere; }
+  .list th { background: var(--soft); font-size: 9pt; }
+  .list td { font-size: 9.5pt; }
+  .list tr { break-inside: avoid; }
+  .list small, .who small { display: block; font-size: 8pt; color: #4b5563; }
+  .tag { display: inline-block; border: .6pt solid var(--ink); border-radius: 2mm; padding: 0 1.4mm; font-size: 7.5pt; margin: .4mm .6mm 0 0; }
+  .tag.em { background: var(--ink); color: #fff; }
+  .tag.warn { border-style: dashed; }
+  .ok { font-weight: 600; }
+  .prob { color: var(--bad); font-weight: 700; }
+  .doc-foot { margin-top: auto; font-size: 8pt; color: #4b5563; display: flex; justify-content: space-between; gap: 6mm; }
+
+  /* WHO checklist */
+  .case-box { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: .8pt solid var(--ink); }
+  .case-box div { padding: 1mm 2mm; border-right: .6pt solid var(--line); border-bottom: .6pt solid var(--line); font-size: 9.2pt; min-width: 0; line-height: 1.25; }
+  .case-box div:nth-child(4n) { border-right: 0; }
+  .case-box span { display: block; font-size: 7.5pt; color: #4b5563; }
+  .case-box .wide { grid-column: span 2; }
+  .phases { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 3mm; flex: 1; }
+  .phase { border: .8pt solid var(--ink); display: flex; flex-direction: column; }
+  .phase h2 { margin: 0; padding: 1.5mm 2mm; background: var(--ink); color: #fff; font-size: 11pt; line-height: 1.25; }
+  .phase h2 small { color: #e5e7eb; font-size: 8pt; font-weight: 400; }
+  .phase ul { list-style: none; margin: 0; padding: 1.2mm 2mm; display: grid; gap: 1.1mm; font-size: 9pt; line-height: 1.28; }
+  .phase li { display: grid; grid-template-columns: 4.2mm minmax(0, 1fr); gap: 1mm; }
+  .phase li.sub { font-weight: 700; display: block; margin-top: .6mm; }
+  .phase li .box::before { content: "☐"; font-size: 11pt; line-height: 1; }
+  .phase .ref { font-size: 7.6pt; color: #374151; }
+  .phase .ref.prob { color: var(--bad); }
+  .sign { margin-top: auto; padding: 1.5mm 2mm; border-top: .6pt solid var(--line); font-size: 8.6pt; }
+  .times { display: flex; flex-wrap: wrap; gap: 2mm 8mm; font-size: 9.2pt; }
+  .who .doc-head h1 { font-size: 13pt; }
+  .who { gap: 2.2mm; }
+  .blank { display: inline-block; min-width: 22mm; border-bottom: .6pt dotted var(--ink); }
+
+  @media print {
+    body { background: #fff; }
+    .bar, #msg { display: none !important; }
+    #sheets { padding: 0; display: block; overflow: visible; }
+    .sheet { width: auto; min-height: 0; height: 190mm; box-shadow: none; padding: 0; break-after: page; }
+    .sheet:last-child { break-after: auto; }
+    .list thead { display: table-header-group; }
+    .sheet.long { height: auto; }
+  }
+  @media screen and (max-width: 700px) {
+    .bar { position: static; }
+    #sheets { justify-items: start; }
+  }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<div class="bar" role="toolbar" aria-label="ตัวเลือกการพิมพ์">
+  <label>สิ่งที่จะพิมพ์<select id="kind">
+    <option value="list">ใบรายการผ่าตัด (แยกตามห้อง)</option>
+    <option value="who">WHO Surgical Safety Checklist (ต่อเคส)</option>
+  </select></label>
+  <label>ห้อง<select id="room"></select></label>
+  <label id="case-box">เคส<select id="case"></select></label>
+  <label class="check"><input type="checkbox" id="anon">ไม่แสดงชื่อและ HN (ฉบับติดหน้าห้อง)</label>
+  <span class="note" id="note"></span>
+  <a class="btn" id="back" href="/">← ตารางผ่าตัด</a>
+  <button class="btn primary" type="button" id="print">พิมพ์ / บันทึก PDF</button>
+</div>
+<div id="msg">กำลังโหลด…</div>
+<main id="sheets" aria-live="polite"></main>
+
+<script>
+  const $ = s => document.querySelector(s);
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const params = new URLSearchParams(location.search);
+  let S = null;
+
+  const ROLE = { SURGEON: 'ศัลยแพทย์', ANESTHESIOLOGIST: 'วิสัญญีแพทย์', SCRUB_NURSE: 'พยาบาลส่งเครื่องมือ', CIRCULATING_NURSE: 'พยาบาลรอบนอก' };
+  const URGENCY = { ELECTIVE: 'Elective', URGENT: 'Urgent', EMERGENCY: 'ฉุกเฉิน' };
+  const INFECTION = { CONTAMINATED: 'ปนเปื้อน', DIRTY: 'ติดเชื้อ' };
+  const ITEMS = { consent: 'ใบยินยอม', anesthesia: 'ประเมินวิสัญญี', labs: 'แล็บ', npo: 'NPO', blood: 'จองเลือด', site: 'ตำแหน่งผ่าตัด' };
+  const hhmm = t => String(Math.floor(t / 60) % 24).padStart(2, '0') + ':' + String(t % 60).padStart(2, '0');
+  const localDay = () => { const d = new Date(); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10); };
+
+  async function load() {
+    const day = /^\d{4}-\d{2}-\d{2}$/.test(params.get('date') || '') ? params.get('date') : null;
+    const res = await fetch('/api/state' + (day ? '?date=' + day : ''));
+    if (res.status === 401) { location.href = '/login'; return; }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.detail || 'HTTP ' + res.status);
+    S = data;
+    $('#back').href = '/' + (S.date ? '?date=' + S.date : '');
+    const seesPatients = S.schedule.bookings.every(b => b.patient_hn !== '•••');
+    $('#anon').checked = params.get('anon') === '1' || !seesPatients;
+    $('#anon').disabled = !seesPatients;
+    $('#kind').value = params.get('kind') === 'who' ? 'who' : 'list';
+    const rooms = [...new Set(S.schedule.bookings.map(b => b.or_id))].sort();
+    $('#room').innerHTML = '<option value="">ทุกห้อง</option>' + rooms.map(r => `<option>${esc(r)}</option>`).join('');
+    $('#room').value = rooms.includes(params.get('room')) ? params.get('room') : '';
+    fillCases();
+    $('#case').value = params.get('case') && [...$('#case').options].some(o => o.value === params.get('case')) ? params.get('case') : '';
+    $('#msg').hidden = true;
+    render();
+  }
+
+  function bookings() {
+    return [...S.schedule.bookings].filter(b => !$('#room').value || b.or_id === $('#room').value)
+      .sort((a, b) => a.or_id.localeCompare(b.or_id) || a.start_min - b.start_min);
+  }
+  function fillCases() {
+    const keep = $('#case').value;
+    $('#case').innerHTML = '<option value="">ทุกเคส (เคสละหน้า)</option>' + bookings().map(b =>
+      `<option value="${esc(b.case_id)}">${esc(b.case_id)} · ${esc(b.or_id)} ${esc(b.start)} · ${esc(b.procedure)}</option>`).join('');
+    if ([...$('#case').options].some(o => o.value === keep)) $('#case').value = keep;
+  }
+
+  function dayText() {
+    const d = S.date ? new Date(S.date + 'T00:00:00') : new Date();
+    return d.toLocaleDateString('th-TH', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  }
+  function printedText() {
+    return 'พิมพ์ ' + new Date().toLocaleString('th-TH', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+      + ' · ' + (S.me.display_name || '');
+  }
+  const supplyName = code => ((S.options.supplies || []).find(s => s.id === code) || {}).name || code;
+  const bedOf = id => (S.beds || []).find(b => b.id === id);
+  const surgeon = b => (b.team[0] || {}).name || '-';
+  const people = (b, role) => b.team.slice(1).filter(t => t.role === role).map(t => t.name);
+  function teamLines(b) {
+    const rows = [['ศัลยแพทย์', [surgeon(b), ...people(b, 'SURGEON').map(n => n + ' (ผู้ช่วย)')]],
+      ['วิสัญญี', people(b, 'ANESTHESIOLOGIST')], ['ส่งเครื่องมือ', people(b, 'SCRUB_NURSE')], ['รอบนอก', people(b, 'CIRCULATING_NURSE')]];
+    const other = b.team.slice(1).filter(t => !ROLE[t.role]).map(t => t.name);
+    if (other.length) rows.push(['อื่น ๆ', other]);
+    return rows.filter(([, n]) => n.length).map(([r, n]) => `<small><b>${r}</b> ${esc(n.join(', '))}</small>`).join('');
+  }
+  function teamInline(b) {
+    const parts = [['ศัลยแพทย์', [surgeon(b), ...people(b, 'SURGEON').map(n => n + ' (ผู้ช่วย)')]],
+      ['วิสัญญี', people(b, 'ANESTHESIOLOGIST')], ['ส่งเครื่องมือ', people(b, 'SCRUB_NURSE')], ['รอบนอก', people(b, 'CIRCULATING_NURSE')]];
+    return parts.filter(([, n]) => n.length).map(([r, n]) => `<b>${r}</b> ${esc(n.join(', '))}`).join(' · ');
+  }
+  function tags(b) {
+    const out = [];
+    if (b.urgency !== 'ELECTIVE') out.push(`<span class="tag ${b.urgency === 'EMERGENCY' ? 'em' : ''}">${URGENCY[b.urgency]}</span>`);
+    if (b.airborne) out.push('<span class="tag em">ติดเชื้อทางอากาศ · ห้องความดันลบ</span>');
+    if (INFECTION[b.infection_risk]) out.push(`<span class="tag warn">${INFECTION[b.infection_risk]} (${esc(b.infection_risk)})</span>`);
+    if (b.frozen) out.push('<span class="tag">เริ่มแล้ว</span>');
+    return out.join('');
+  }
+  function readiness(b, anon) {
+    const r = (S.readiness || {})[b.case_id];
+    if (!r) return '-';
+    if (r.status === 'ready') return '<span class="ok">✓ พร้อม</span>';
+    const out = [];
+    if (r.problems.length) out.push(`<span class="prob">! ${r.problems.map(k => ITEMS[k]).join(', ')}</span>`
+      + (anon ? '' : r.problems.map(k => r.items[k].note ? `<small>${esc(r.items[k].note)}</small>` : '').join('')));
+    if (r.pending.length) out.push(`<small>ยังไม่ได้: ${r.pending.map(k => ITEMS[k]).join(', ')}</small>`);
+    return out.join('');
+  }
+  function postOp(b) {
+    if (!b.bed_id) return '-';
+    const bed = bedOf(b.bed_id);
+    return `${esc(b.bed_id)}${bed ? ` <small>${bed.type === 'ICU_SURGICAL' ? 'ICU' : 'PACU'} ${hhmm(b.recovery_start_min)}–${hhmm(b.recovery_end_min)}</small>` : ''}`;
+  }
+  function kit(b) {
+    const eq = b.equipment.map(e => e.unit_id);
+    const sup = Object.entries(b.supplies || {}).map(([c, q]) => `${supplyName(c)} × ${q}`);
+    return (eq.length ? esc(eq.join(', ')) : '-') + (sup.length ? `<small>${esc(sup.join(', '))}</small>` : '');
+  }
+  function head(title, sub, anon) {
+    return `<header class="doc-head"><div><h1>${title}</h1><p>${sub}</p></div>
+      <div class="meta">${esc(printedText())}<br>${anon ? 'ฉบับติดหน้าห้อง: ไม่มีชื่อ/HN ผู้ป่วย' : '<b>มีข้อมูลผู้ป่วย: ใช้ภายในทีมเท่านั้น</b>'}</div></header>`;
+  }
+  const hospital = () => S.hospital_name ? esc(S.hospital_name) + ' · ' : '';
+
+  function listSheets(anon) {
+    const byRoom = {};
+    bookings().forEach(b => (byRoom[b.or_id] ||= []).push(b));
+    return Object.entries(byRoom).map(([room, list]) => `<section class="sheet${list.length > 8 ? ' long' : ''}">
+      ${head(`ใบรายการผ่าตัด · ห้อง ${esc(room)}`, `${hospital()}${esc(dayText())}`, anon)}
+      <table class="list"><colgroup><col style="width:24mm"><col style="width:19mm">${anon ? '' : '<col style="width:32mm">'}
+        <col style="width:${anon ? 52 : 42}mm"><col style="width:${anon ? 54 : 48}mm"><col style="width:38mm"><col style="width:22mm"><col style="width:${anon ? 34 : 30}mm"><col></colgroup>
+        <thead><tr><th>เวลา</th><th>เคส</th>${anon ? '' : '<th>ผู้ป่วย</th>'}<th>หัตถการ</th><th>ทีม</th><th>เครื่องมือ / วัสดุ</th>
+          <th>หลังผ่าตัด</th><th>ความพร้อม</th><th>หมายเหตุ</th></tr></thead>
+        <tbody>${list.map(b => `<tr>
+          <td><b>${esc(b.start)}–${esc(b.end)}</b><small>ห้องพร้อม ${esc(b.cleanup_end)}</small></td>
+          <td><b>${esc(b.case_id)}</b></td>
+          ${anon ? '' : `<td>${esc(b.patient_hn)}${b.patient_name ? `<small>${esc(b.patient_name)}</small>` : ''}</td>`}
+          <td>${esc(b.procedure)}<br>${tags(b)}</td>
+          <td>${teamLines(b)}</td>
+          <td>${kit(b)}</td>
+          <td>${postOp(b)}</td>
+          <td>${readiness(b, anon)}</td>
+          <td></td></tr>`).join('')}</tbody></table>
+      <footer class="doc-foot"><span>รวม ${list.length} เคส · ${esc(list[0].start)}–${esc(list[list.length - 1].cleanup_end)}</span>
+        <span>จาก ORchestraAI ณ เวลาที่พิมพ์ · ตารางอาจเปลี่ยน ตรวจในระบบก่อนเริ่มเคส</span></footer>
+    </section>`).join('');
+  }
+
+  // Adapted from the WHO Surgical Safety Checklist (2009), which WHO encourages teams to adapt.
+  function whoSheet(b, anon) {
+    const r = (S.readiness || {})[b.case_id];
+    const ref = key => {
+      if (!r) return '';
+      const it = r.items[key];
+      const label = { PENDING: '○ ยังไม่ทำ', DONE: '✓ เรียบร้อย', NA: '– ไม่ต้องใช้', PROBLEM: '! มีปัญหา' }[it.status];
+      const [d, t] = (it.at || ' ').split(' '), [, m, dd] = (d || '').split('-').map(Number);
+      const when = d === (S.date || localDay()) ? t : `${dd}/${m} ${t}`;
+      const who = it.by ? ` (${esc(it.by.replace(/ \([a-z]+\)$/, ''))} ${esc(when)})` : it.auto ? ' (หัตถการนี้ไม่ต้องจองเลือด)' : '';
+      const note = it.note && !anon ? `: ${esc(it.note)}` : '';
+      return `<span class="ref${it.status === 'PROBLEM' || it.status === 'PENDING' ? ' prob' : ''}">ในระบบ: ${label}${note}${who}</span>`;
+    };
+    const item = (text, refs = '') => `<li><span class="box" aria-hidden="true"></span><span>${text}${refs ? '<br>' + refs : ''}</span></li>`;
+    const sub = text => `<li class="sub">${text}</li>`;
+    const sign = who => `<div class="sign">ลงชื่อ${who} <span class="blank" style="min-width:38mm"></span> เวลา <span class="blank" style="min-width:14mm"></span></div>`;
+    const bed = b.bed_id ? `${esc(b.bed_id)} (${(bedOf(b.bed_id) || {}).type === 'ICU_SURGICAL' ? 'ICU' : 'PACU'})` : 'ไม่ได้จองเตียง';
+    const minutes = b.end_min - b.start_min;
+    const patient = anon
+      ? `<div><span>HN</span><span class="blank" style="min-width:40mm"></span></div><div><span>ชื่อ-นามสกุล</span><span class="blank" style="min-width:40mm"></span></div>`
+      : `<div><span>HN</span><b>${esc(b.patient_hn)}</b></div><div><span>ชื่อ-นามสกุล</span>${esc(b.patient_name || '-')}</div>`;
+    return `<section class="sheet who">
+      ${head('รายการตรวจสอบความปลอดภัยการผ่าตัด', `WHO Surgical Safety Checklist · ${hospital()}${esc(dayText())}`, anon)}
+      <div class="case-box">
+        ${patient}
+        <div><span>เคส · ห้อง · เวลา</span><b>${esc(b.case_id)}</b> · ${esc(b.or_id)} · ${esc(b.start)}–${esc(b.end)}</div>
+        <div><span>ความเร่งด่วน</span>${URGENCY[b.urgency]}${b.airborne ? ' · ติดเชื้อทางอากาศ' : ''}${INFECTION[b.infection_risk] ? ' · ' + INFECTION[b.infection_risk] : ''}</div>
+        <div class="wide"><span>หัตถการ</span><b>${esc(b.procedure)}</b></div>
+        <div class="wide"><span>ทีม</span>${teamInline(b)}</div>
+        <div class="wide"><span>เครื่องมือ / วัสดุ-รากเทียม</span>${kit(b)}</div>
+        <div><span>คาดใช้เวลา</span>${minutes} นาที</div>
+        <div><span>หลังผ่าตัด</span>${bed}</div>
+      </div>
+      <div class="phases">
+        <div class="phase"><h2>Sign In <small>ก่อนให้ยาระงับความรู้สึก</small></h2><ul>
+          ${item('ผู้ป่วยยืนยันตัวตน ตำแหน่งผ่าตัด หัตถการ และลงนามยินยอมแล้ว', ref('consent'))}
+          ${item('ทำเครื่องหมายตำแหน่งผ่าตัดแล้ว / ไม่จำเป็น', ref('site'))}
+          ${item('ตรวจเครื่องและยาระงับความรู้สึกครบแล้ว', ref('anesthesia'))}
+          ${item('ติดเครื่องวัดออกซิเจนปลายนิ้วและทำงานปกติ')}
+          ${item('งดน้ำงดอาหารตามกำหนด', ref('npo'))}
+          ${sub('ผู้ป่วยมี:')}
+          ${item('ประวัติแพ้ &nbsp; ☐ ไม่มี &nbsp; ☐ มี <span class="blank"></span>')}
+          ${item('ทางเดินหายใจยาก / เสี่ยงสำลัก &nbsp; ☐ ไม่มี &nbsp; ☐ มี และเตรียมอุปกรณ์/ผู้ช่วยแล้ว')}
+          ${item('เสี่ยงเสียเลือด &gt; 500 มล. (เด็ก 7 มล./กก.) &nbsp; ☐ ไม่มี &nbsp; ☐ มี และเตรียมสารน้ำ/เลือดแล้ว', ref('blood'))}
+          ${item('ผลแล็บ/ผลตรวจก่อนผ่าตัดครบ', ref('labs'))}
+        </ul>${sign('')}</div>
+        <div class="phase"><h2>Time Out <small>ก่อนลงมีด</small></h2><ul>
+          ${item('ทุกคนในทีมแนะนำชื่อและหน้าที่แล้ว')}
+          ${item('ศัลยแพทย์ วิสัญญี และพยาบาล ยืนยันชื่อผู้ป่วย ตำแหน่ง และหัตถการ')}
+          ${sub('เหตุการณ์สำคัญที่คาดไว้:')}
+          ${item(`ศัลยแพทย์: ขั้นตอนวิกฤต/ไม่ปกติ เวลาที่ใช้ (คาด ${minutes} นาที) และการเสียเลือดที่คาดไว้`)}
+          ${item('วิสัญญี: ข้อกังวลเฉพาะของผู้ป่วย')}
+          ${item('พยาบาล: ยืนยันความปราศจากเชื้อ (รวมตัวชี้วัด) และปัญหาเครื่องมือ')}
+          ${item('ให้ยาปฏิชีวนะป้องกันภายใน 60 นาทีที่ผ่านมา &nbsp; ☐ ให้แล้ว &nbsp; ☐ ไม่จำเป็น')}
+          ${item('แสดงภาพถ่ายทางรังสีที่จำเป็น &nbsp; ☐ แสดงแล้ว &nbsp; ☐ ไม่จำเป็น')}
+        </ul>${sign('')}</div>
+        <div class="phase"><h2>Sign Out <small>ก่อนผู้ป่วยออกจากห้องผ่าตัด</small></h2><ul>
+          ${sub('พยาบาลยืนยันกับทีม:')}
+          ${item('ชื่อหัตถการที่ทำ (บันทึกแล้ว)')}
+          ${item('นับเครื่องมือ ผ้าซับ และเข็ม ครบถูกต้อง / ไม่จำเป็น')}
+          ${item('ติดฉลากชิ้นเนื้อ (อ่านออกเสียง รวมชื่อผู้ป่วย) / ไม่มีชิ้นเนื้อ')}
+          ${item('มีปัญหาเครื่องมือที่ต้องแจ้งแก้ไข &nbsp; ☐ ไม่มี &nbsp; ☐ มี <span class="blank"></span>')}
+          ${item(`ศัลยแพทย์ วิสัญญี และพยาบาล ทบทวนข้อสำคัญในการดูแลระยะพักฟื้น (หลังผ่าตัด: ${bed})`)}
+        </ul>${sign('')}</div>
+      </div>
+      <div class="times">เวลาเข้าห้อง <span class="blank"></span> ลงมีด <span class="blank"></span> เย็บแผลเสร็จ <span class="blank"></span>
+        ออกจากห้อง <span class="blank"></span></div>
+      <footer class="doc-foot"><span>ดัดแปลงจาก WHO Surgical Safety Checklist (2009) · "ในระบบ" คือสถานะที่บันทึกใน ORchestraAI ณ เวลาที่พิมพ์</span>
+        <span>${esc(b.case_id)}</span></footer>
+    </section>`;
+  }
+
+  function render() {
+    const kind = $('#kind').value, anon = $('#anon').checked;
+    $('#case-box').hidden = kind !== 'who';
+    const q = new URLSearchParams();
+    if (S.date) q.set('date', S.date);
+    if (kind === 'who') q.set('kind', 'who');
+    if ($('#room').value) q.set('room', $('#room').value);
+    if (kind === 'who' && $('#case').value) q.set('case', $('#case').value);
+    if (anon && !$('#anon').disabled) q.set('anon', '1');
+    history.replaceState(null, '', '/print' + (q.toString() ? '?' + q : ''));
+    const list = bookings();
+    $('#note').textContent = kind === 'list'
+      ? `${new Set(list.map(b => b.or_id)).size} ห้อง (ห้องละหน้า) · A4 แนวนอน`
+      : `${$('#case').value ? 1 : list.length} เคส (เคสละหน้า) · A4 แนวนอน`;
+    if (!list.length) {
+      $('#sheets').innerHTML = `<section class="sheet">${head('ไม่มีเคสในวันนี้', esc(dayText()), true)}</section>`;
+      return;
+    }
+    $('#sheets').innerHTML = kind === 'list' ? listSheets(anon)
+      : list.filter(b => !$('#case').value || b.case_id === $('#case').value).map(b => whoSheet(b, anon)).join('');
+    document.title = (kind === 'list' ? 'ใบรายการผ่าตัด ' : 'WHO checklist ') + (S.date || '') + ' · ORchestraAI';
+  }
+
+  $('#kind').addEventListener('change', render);
+  $('#room').addEventListener('change', () => { fillCases(); render(); });
+  $('#case').addEventListener('change', render);
+  $('#anon').addEventListener('change', render);
+  $('#print').addEventListener('click', () => window.print());
+  load().catch(e => { $('#msg').textContent = 'โหลดข้อมูลไม่สำเร็จ: ' + e.message; });
+</script>
+</body>
+</html>

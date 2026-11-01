@@ -197,7 +197,9 @@ def _shape(state: dict, user: User) -> dict:
 
 
 def _state(user: User, day: str | None) -> dict:
-    return _shape(_run(store.state, day), user)
+    state = _shape(_run(store.state, day), user)
+    state["hospital_name"] = (os.environ.get("HOSPITAL_NAME") or "").strip()[:120] or None  # printed headers
+    return state
 
 
 # ---------------------------------------------------------------- pages
@@ -238,6 +240,12 @@ def icon(name: str) -> FileResponse:
 @app.get("/reports", include_in_schema=False)
 def reports_page() -> FileResponse:
     return FileResponse(ROOT / "static" / "reports.html")
+
+
+@app.get("/print", include_in_schema=False)
+def print_page() -> FileResponse:
+    """Printable daily OR list (per room) and WHO Surgical Safety Checklist (per case)."""
+    return FileResponse(ROOT / "static" / "print.html")
 
 
 @app.get("/flow", include_in_schema=False)
