@@ -136,6 +136,15 @@
       <section class="card"><h2>ความแม่นของเวลาที่จอง แยกหัตถการ</h2>
         <p class="sub">หัตถการที่คลาดเคลื่อนมากควรปรับเวลามาตรฐานหรือ preference card</p><div class="table-scroll" id="table-procedure"></div></section>
     </div>
+    <div class="grid2" style="margin-top:16px">
+      <section class="card"><h2>การงดผ่าตัด แยกตามเหตุผล</h2>
+        <p class="sub">นับตามวันที่นัดผ่าตัด · เคสที่ถูกเลื่อนหลายครั้งนับทุกครั้ง · เหตุจากโรงพยาบาลคือส่วนที่ป้องกันได้</p>
+        <div class="legend"><span><i style="background:var(--series-1)"></i>ผู้ป่วย</span><span><i style="background:var(--series-2)"></i>โรงพยาบาล</span><span><i style="background:var(--neutral-mark)"></i>อื่น ๆ</span></div>
+        <div id="chart-cancel"></div></section>
+      <section class="card"><h2>การงดผ่าตัดล่าสุด</h2>
+        <p class="sub">สูงสุด 15 รายการ · งดในวันผ่าตัด = งดวันเดียวกับที่นัด</p>
+        <div class="table-scroll" id="table-cancel"></div></section>
+    </div>
     <section class="card" style="margin-top:16px"><h2>สรุปรายห้อง</h2><div class="table-scroll" id="table-rooms"></div></section>
   </div>
 </main>
@@ -314,8 +323,10 @@
         r.previous ? `<span class="delta flat">ช่วงก่อนหน้า ${fmt(p.cases)} เคส</span>` : ''),
       tile('เวลาทำความสะอาดห้องจริง', `${fmt(k.turnover_avg, 0)}<small> นาที</small>`,
         `ตามแผน ${fmt(k.turnover_planned, 0)} นาที · วัดได้ ${fmt(k.turnovers_measured)} ครั้ง`),
-      tile('รอจัดวันใหม่ตอนนี้', fmt(r.waiting), `ยกเลิกในช่วงนี้ ${fmt(r.cancelled)} · แทรกฉุกเฉิน ${fmt(r.emergencies_inserted)} · จัดตารางใหม่ ${fmt(r.replans)} · เกินเกณฑ์ความเหนื่อยล้า ${fmt(r.fatigue_overrides)} ครั้ง`),
+      cancelTile(r),
+      tile('รอจัดวันใหม่ตอนนี้', fmt(r.waiting), `ยกเลิกจากรายการรอในช่วงนี้ ${fmt((r.cancellations || {}).waiting_given_up ?? r.cancelled)} · แทรกฉุกเฉิน ${fmt(r.emergencies_inserted)} · จัดตารางใหม่ ${fmt(r.replans)} · เกินเกณฑ์ความเหนื่อยล้า ${fmt(r.fatigue_overrides)} ครั้ง`),
     ].join('');
+    renderCancellations(r);
 
     const days = r.per_day.map(d => ({ ...d, label: d.date, tick: shortDate(d.date) }));
     columns('#chart-util', days.filter(d => d.utilization !== null), { parts: [{ key: 'utilization', name: 'อัตราการใช้ห้อง', color: 'var(--series-1)' }], max: 100, percent: true });
@@ -335,6 +346,36 @@
     table('#table-rooms', [['ห้อง'], ['เวลา elective'], ['เคส', 1], ['ชม.ที่มี', 1], ['ชม.ที่ใช้', 1], ['อัตราใช้ห้อง', 1], ['เฉพาะเวลาผ่าตัด', 1], ['นอกเวลา (ชม.)', 1]],
       r.rooms.map(x => [x.room, x.hours + (x.hours_set ? '' : ' (ค่าตั้งต้น)'), x.cases, fmt(x.available_hours, 1), fmt(x.used_hours, 1),
         fmt(x.utilization, 1) + '%', fmt(x.case_utilization, 1) + '%', fmt(x.after_hours, 1)]));
+  }
+
+  // ------------------------------------------------------------- cancellations
+  const GROUP_COLOR = { patient: 'var(--series-1)', hospital: 'var(--series-2)', other: 'var(--neutral-mark)' };
+  const GROUP_TH = { patient: 'ผู้ป่วย', hospital: 'โรงพยาบาล', other: 'อื่น ๆ' };
+  function cancelTile(r) {
+    const c = r.cancellations;
+    if (!c) return tile('งดผ่าตัด', '–', r.cancellations_ready === false
+      ? 'ต้องรัน supabase/migrations/20261109000000_case_cancellations.sql ก่อน ระบบจึงเก็บเหตุผล' : 'ยังไม่มีข้อมูล');
+    const before = (r.previous || {}).cancellations;
+    return tile('งดผ่าตัด', `${fmt(c.rate, 1)}<small>%</small>`,
+      `${fmt(c.total)} จาก ${fmt(c.scheduled)} เคสที่นัด · ในวันผ่าตัด ${fmt(c.same_day)} · เหตุจากโรงพยาบาล ${fmt(c.hospital)}${c.total ? ` (${fmt(c.hospital_pct, 0)}%)` : ''}`,
+      delta(c.rate, before ? before.rate : null, { higherIsGood: false, unit: ' จุด' }));
+  }
+  function renderCancellations(r) {
+    const c = r.cancellations;
+    if (!c) {
+      $('#chart-cancel').innerHTML = $('#table-cancel').innerHTML = `<p class="empty">${r.cancellations_ready === false
+        ? 'ต้องรัน migration 010 ใน Supabase ก่อน' : 'ไม่มีข้อมูลในช่วงนี้'}</p>`;
+      return;
+    }
+    hbars('#chart-cancel', c.by_reason.map(x => ({ label: x.label.replace(/\s*\(.*\)$/, ''), value: x.count,
+      color: GROUP_COLOR[x.group], note: `${GROUP_TH[x.group]} · ${x.label}` })), { suffix: ' ครั้ง' });
+    const box = $('#table-cancel');
+    if (!c.recent.length) { box.innerHTML = '<p class="empty">ไม่มีการงดผ่าตัดในช่วงนี้</p>'; return; }
+    box.innerHTML = `<table><thead><tr><th>วันที่นัด</th><th>เคส</th><th>หัตถการ</th><th>เหตุผล</th><th>ผล</th></tr></thead><tbody>${
+      c.recent.map(x => `<tr><td>${esc(shortDate(x.planned))}${x.same_day ? ' <span class="delta bad">วันผ่าตัด</span>' : ''}</td>
+        <td>${esc(x.case_code || '')}</td><td>${esc(x.procedure || '')}${x.surgeon ? `<br><small>${esc(x.surgeon)}</small>` : ''}</td>
+        <td>${esc(x.label)}${x.note ? `<br><small>${esc(x.note)}</small>` : ''}</td>
+        <td>${x.outcome === 'POSTPONED' ? 'เลื่อน' : 'ยกเลิก'}</td></tr>`).join('')}</tbody></table>`;
   }
 
   // Histogram: one column per bin, each in its arm's colour (diverging around "on time"); count on the cap.

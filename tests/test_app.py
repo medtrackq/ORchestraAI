@@ -393,3 +393,24 @@ def test_print_page_and_the_data_it_uses(owner, monkeypatch):
         "SURGEON", "ANESTHESIOLOGIST", "SCRUB_NURSE", "CIRCULATING_NURSE"}
     monkeypatch.delenv("HOSPITAL_NAME")
     assert owner.get("/api/state").json()["hospital_name"] is None
+
+
+def test_calling_off_a_case_over_the_api(owner):
+    state = owner.get("/api/state").json()
+    assert {"key": "NPO", "label": "ผู้ป่วยไม่ได้งดน้ำงดอาหาร", "group": "patient"} in state["cancel_reasons"]
+    knee = next(b for b in state["schedule"]["bookings"] if b["procedure"].startswith("Total knee"))
+    url = f"/api/cases/{knee['case_id']}/cancel"
+    nurse = make_user(owner, "nurse5", "staff", "SCR-2")
+    assert nurse.post(url, json={"reason": "NPO"}).status_code == 403  # booking roles only
+    other = make_user(owner, "kittipong2", "surgeon", "SUR-URO")
+    assert other.post(url, json={"reason": "NPO"}).status_code == 403
+    assert owner.post(url, json={"reason": "OTHER"}).status_code == 400  # say what "other" is
+    assert owner.post(url, json={"reason": "NPO", "outcome": "LATER"}).status_code == 422
+    own = make_user(owner, "somchai2", "surgeon", "SUR-ORTHO")
+    r = own.post(url, json={"reason": "NPO", "outcome": "POSTPONED"})
+    assert r.status_code == 200 and knee["case_id"] in [p["code"] for p in r.json()["state"]["pending"]]
+    pending = next(p["id"] for p in r.json()["state"]["pending"] if p["code"] == knee["case_id"])
+    r = owner.post(f"/api/pending/{pending}/cancel", json={"reason": "DECLINED"})
+    assert r.status_code == 200 and r.json()["result"]["reason"] == "DECLINED"
+    report = owner.get("/api/reports").json()["cancellations"]
+    assert report["total"] == 1 and report["waiting_given_up"] == 1
