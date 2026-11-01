@@ -1,0 +1,5 @@
+# Everything the web service needs, plus the test tools (GitHub Actions and local runs).
+-r requirements.txt
+pytest>=8
+httpx>=0.27
+pyflakes>=3

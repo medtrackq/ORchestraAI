@@ -342,6 +342,22 @@ python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
 .venv/bin/python -m pytest -q
 ```
 
+เทสต์ที่ใช้ฐานข้อมูล (โหมด Supabase) ต้องมี PostgreSQL 16 และตั้ง `TEST_DATABASE_URL` เป็นบัญชีที่สร้างฐานข้อมูลได้ (แต่ละเทสต์สร้างฐานข้อมูลของตัวเองแล้วลบทิ้ง) ถ้าไม่ตั้ง เทสต์ส่วนนั้นจะถูกข้าม:
+
+```bash
+TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/postgres .venv/bin/python -m pytest -q
+```
+
+### ทดสอบอัตโนมัติบน GitHub (`.github/workflows/tests.yml`)
+
+ทุก pull request และทุกครั้งที่ merge เข้า `main` GitHub Actions จะ:
+1. ติดตั้ง Python 3.12 (เวอร์ชันเดียวกับ Render) และ `requirements-dev.txt` (= `requirements.txt` + pytest, httpx, pyflakes)
+2. ตรวจโค้ดด้วย pyflakes (ชื่อที่ไม่ได้ประกาศ / import ที่ไม่ได้ใช้ ใน `app/` และ `orchestra_engine/`)
+3. รันเทสต์ทั้งหมด รวมโหมด Supabase กับ PostgreSQL 16 จริง (service container)
+
+ผลขึ้นในหน้า PR (✓ เขียว = ผ่าน, ✕ แดง = มีเทสต์ไม่ผ่าน กดดูรายละเอียดได้) · push ใหม่ใน PR เดิมจะยกเลิกรอบเก่าให้ · กดรันเองได้ที่แท็บ Actions → tests → Run workflow
+แนะนำ: GitHub → Settings → Branches → เพิ่มกฎให้ `main` ต้องผ่าน check **pytest (Python 3.12, PostgreSQL 16)** ก่อน merge
+
 Demo มี 4 สถานการณ์: (1) วันผ่าตัดปกติ 10 เคส 4 ห้อง (2) ชุดเข่ามีชุดเดียวและยังอบอยู่ที่ CSSD (3) เคส EMERGENCY เข้ามาตอน 10:30 (4) เคสหุ่นยนต์ผ่าตัดยืดเยื้อ 60 นาที แต่ละผลถูกตรวจซ้ำด้วย `validate_schedule`
 
 ## การใช้งาน
