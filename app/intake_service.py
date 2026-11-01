@@ -84,6 +84,7 @@ class IntakeService:
             fields["procedure"] = proc["name"]
             fields["required_capabilities"] = list(proc.get("caps") or [])
             fields["required_staff_skills"] = dict(proc.get("skills") or {})
+            fields["required_supplies"] = dict(proc.get("supplies") or {})
             fields["requires_icu_post_op"] = bool(fields.get("requires_icu_post_op")) or bool(proc.get("icu"))
             if _INFECTION.get(proc.get("infection") or "CLEAN", 0) > _INFECTION.get(fields.get("infection_risk"), 0):
                 fields["infection_risk"] = proc["infection"]

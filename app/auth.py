@@ -45,6 +45,8 @@ PERMISSIONS = {
     "hospital_view": {"admin", "scheduler"},  # hospital data pages (read)
     "hospital_data": {"admin"},  # rooms, staff records, equipment types and units
     "roster": {"admin", "scheduler"},  # shifts, leave, room closures, re-plan a day
+    "inventory_view": {"admin", "scheduler", "cssd"},  # supplies and implants stock
+    "inventory": {"admin", "cssd"},  # receive, count, order supplies; what procedures use
     "users": {"admin"},
     "seed": {"admin"},
     "reset": {"admin"},

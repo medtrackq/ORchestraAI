@@ -277,3 +277,27 @@ def test_displaced_case_waits_and_can_be_cancelled(owner):
     assert r.status_code == 200 and r.json()["state"]["pending"] == []
     assert owner.post("/api/pending/C05/cancel", json={}).status_code == 400
     assert owner.post("/api/replan", json={}).status_code == 200
+
+
+def test_supplies_are_checked_when_booking(owner):
+    state = owner.get("/api/state").json()
+    drape = next(s for s in state["options"]["supplies"] if s["id"] == "ROBO-DRAPE")
+    assert (drape["available"], drape["booked"], drape["left"], drape["low"]) == (2, 2, 0, True)
+    knee = next(p for p in state["options"]["procedures"] if p["name"] == "Total knee arthroplasty (L)")
+    assert knee["supplies"] == {"KNEE-IMP": 1, "BONE-CEM": 2}
+
+    body = {"case": _case(surgeon_id="SUR-ONCALL", required_supplies={"ROBO-DRAPE": 1}), "start": "17:00"}
+    r = owner.post("/api/slot-check", json=body).json()
+    equipment = next(v for v in r["verdicts"] if v["agent"] == "Equipment & CSSD Agent")
+    assert not equipment["ok"] and "need 1, only 0" in equipment["items"][-1]["note"]
+    assert "Robotic drape kit" in r["result"]["unscheduled"][-1]["reasons"][0]
+
+    body = {"case": _case(surgeon_id="SUR-ONCALL", required_supplies={"MESH-15": 1}), "start": "17:00"}
+    r = owner.post("/api/bookings", json=body).json()
+    assert r["result"]["booked"]
+    booked = next(b for b in r["state"]["schedule"]["bookings"] if b["case_id"] == r["result"]["case_id"])
+    assert booked["supplies"] == {"MESH-15": 1}
+    assert next(s for s in r["state"]["options"]["supplies"] if s["id"] == "MESH-15")["left"] == 2
+
+    bad = {"case": _case(required_supplies={"GOLD-BAR": 1}), "start": "10:00"}
+    assert owner.post("/api/slot-check", json=bad).status_code == 400

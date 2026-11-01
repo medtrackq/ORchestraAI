@@ -36,7 +36,7 @@ from .agents import EQUIPMENT as EQUIPMENT_AGENT
 from .agents import FACILITY, Busy, SlotCheck, scan_slot
 from .agents import STAFFING as STAFFING_AGENT
 from .fatigue import day_minutes, fatigue_issues, late_windows, load_percent
-from .models import EquipmentUnit, OperatingRoom, RecoveryBed, StaffMember, SurgeryCase, Urgency
+from .models import EquipmentUnit, OperatingRoom, RecoveryBed, StaffMember, SupplyItem, SurgeryCase, Urgency
 from .results import Assignment, Notification, ScheduleChange, ScheduleResult
 from .timeutil import MINUTES_PER_DAY, fmt
 
@@ -82,6 +82,7 @@ class _Plan:
     units: dict[str, tuple[int, list[EquipmentUnit]]]  # type -> (count, candidates)
     beds: list[RecoveryBed]
     frozen: bool = False
+    existing: bool = False  # already booked (being re-planned), not a new request
 
     @property
     def duration(self) -> int:
@@ -147,6 +148,7 @@ class ORchestraOptimizer:
         num_workers: int = 8,
         enable_setup_grouping: bool = True,
         random_seed: int = 0,
+        supplies: Iterable[SupplyItem] = (),
     ) -> None:
         if horizon_mins <= 0:
             raise ValueError("horizon_mins must be positive")
@@ -165,6 +167,8 @@ class ORchestraOptimizer:
         self._unit_by_id = _index(self.equipments, "unit_id")
         self._staff_by_id = _index(self.staff, "staff_id")
         self._bed_by_id = _index(self.beds, "bed_id")
+        self.supplies = list(supplies)
+        self._supply_by_id = _index(self.supplies, "item_id")
 
     # ------------------------------------------------------------------ API
 
@@ -283,7 +287,7 @@ class ORchestraOptimizer:
         if case.case_id in current.assignments:
             raise ValueError(f"{case.case_id} is already booked")
         dur, end = case.duration_mins, start_min + case.duration_mins
-        verdicts = scan_slot(self, case, start_min, Busy.from_assignments(current.assignments))
+        verdicts = scan_slot(self, case, start_min, Busy.from_assignments(current.assignments, current.cases))
         ok = all(v.ok for v in verdicts)
         name = self._staff_by_id[case.surgeon_id].name if case.surgeon_id in self._staff_by_id else case.surgeon_id
         log = [
@@ -359,7 +363,9 @@ class ORchestraOptimizer:
 
     # --------------------------------------------------------------- agents
 
-    def _plan_case(self, case: SurgeryCase, now_min: int) -> tuple[_Plan | None, list[str]]:
+    def _plan_case(
+        self, case: SurgeryCase, now_min: int, *, existing: bool = False
+    ) -> tuple[_Plan | None, list[str]]:
         """Resource agents' scan: candidates per resource, or why there are none."""
         horizon = self.horizon_mins
         dur = case.duration_mins
@@ -476,6 +482,19 @@ class ORchestraOptimizer:
                 )
             units[eq_type] = (count, candidates)
 
+        # Equipment & Inventory agent: single-use supplies and implants in stock.
+        emergency_stock = case.urgency is Urgency.EMERGENCY  # may take what later bookings hold
+        for code, qty in sorted(case.required_supplies.items()):
+            item = self._supply_by_id.get(code)
+            if item is None:
+                reasons.append(f"Inventory: {code} is not a stocked item")
+            elif (item.for_booked if existing or emergency_stock else item.available) < qty:
+                have = item.for_booked if existing or emergency_stock else item.available
+                reasons.append(
+                    f"Inventory: need {qty} x {item.name} ({code}), only {have} available"
+                    + (f"; {item.note}" if item.note else "")
+                )
+
         # OR Facility agent: recovery bed (PACU / ICU) right after surgery.
         beds: list[RecoveryBed] = []
         if self.beds:
@@ -488,7 +507,8 @@ class ORchestraOptimizer:
 
         if reasons:
             return None, reasons
-        return _Plan(case, earliest, latest_start, rooms, case.surgeon_id, team, windows, units, beds), []
+        return _Plan(case, earliest, latest_start, rooms, case.surgeon_id, team, windows, units, beds,
+                     existing=existing), []
 
     def _frozen_plan(self, case: SurgeryCase, a: Assignment, now_min: int, lock_bed: bool = False) -> _Plan:
         """A case already in progress: same room, start, team and equipment."""
@@ -523,6 +543,7 @@ class ORchestraOptimizer:
             units={t: (len(u), u) for t, u in units.items()},
             beds=beds,
             frozen=True,
+            existing=True,
         )
 
     # ---------------------------------------------------------------- solve
@@ -551,7 +572,7 @@ class ORchestraOptimizer:
             if cid in frozen:
                 plans[cid] = self._frozen_plan(case, frozen[cid], now_min, lock_bed=lock_beds)
                 continue
-            plan, reasons = self._plan_case(case, now_min)
+            plan, reasons = self._plan_case(case, now_min, existing=cid in previous)
             if plan is None:
                 unscheduled[cid] = reasons
             else:
@@ -582,8 +603,11 @@ class ORchestraOptimizer:
                     v = builder.vars[cid]
                     if solver.boolean_value(v.scheduled):
                         assignments[cid] = self._extract(solver, plan, v)
-                    else:
-                        unscheduled[cid] = [self._capacity_reason(plan)]
+                for cid, plan in plans.items():
+                    if cid not in assignments:
+                        unscheduled[cid] = self._supply_shortage(plan, assignments, case_by_id) or [
+                            self._capacity_reason(plan)
+                        ]
                 assignments = self._explain(assignments, plans)
             else:
                 why = " (locked in-progress cases cannot all fit)" if frozen else ""
@@ -632,6 +656,21 @@ class ORchestraOptimizer:
             recovery_end_min=end + case.recovery_duration if bed else None,
             frozen=plan.frozen,
         )
+
+    def _supply_shortage(self, plan: _Plan, assignments: Mapping[str, Assignment],
+                         cases: Mapping[str, SurgeryCase]) -> list[str]:
+        """Stock the scheduled cases used up, leaving too little for this one."""
+        out = []
+        for code, qty in sorted(plan.case.required_supplies.items()):
+            item = self._supply_by_id[code]
+            have = item.for_booked if plan.existing or plan.case.urgency is Urgency.EMERGENCY else item.available
+            used = sum(cases[cid].required_supplies.get(code, 0) for cid in assignments)
+            if used + qty > have:
+                out.append(
+                    f"Inventory: {item.name} ({code}) runs out: {used} of {have} go to other cases "
+                    f"today, need {qty}" + (f"; {item.note}" if item.note else "")
+                )
+        return out
 
     def _capacity_reason(self, plan: _Plan) -> str:
         window = f"between {fmt(plan.earliest)} and {fmt(plan.latest_start)}"
@@ -791,6 +830,8 @@ class _ModelBuilder:
         self.bed_ivs: dict[str, list] = defaultdict(list)
         self.room_members: dict[str, list] = defaultdict(list)
         self.frozen_rooms: dict[str, list[tuple[int, int]]] = defaultdict(list)  # cases already running
+        self.supply_load: dict[str, list[tuple[int, cp_model.IntVar, bool]]] = defaultdict(list)  # (qty, lit, new)
+        self.frozen_supply: dict[str, int] = defaultdict(int)
         # Fatigue: (minutes, assigned literal, emergency override literal or None) per person.
         self.week_load: dict[str, list[tuple[int, cp_model.IntVar, cp_model.IntVar | None]]] = defaultdict(list)
         self.day_load: dict[str, list[tuple[int, cp_model.IntVar, cp_model.IntVar | None]]] = defaultdict(list)
@@ -889,6 +930,13 @@ class _ModelBuilder:
                 if not p.frozen and unit.available_at > p.earliest:
                     m.add(start >= unit.available_at).only_enforce_if(z)
             m.add(sum(lits) == count * scheduled)
+
+        # Supplies and implants: shared stock for the whole horizon.
+        for code, qty in case.required_supplies.items():
+            if p.frozen:
+                self.frozen_supply[code] += qty
+            else:  # "new" = a new normal request; emergencies may take stock later bookings hold
+                self.supply_load[code].append((qty, scheduled, not p.existing and case.urgency is not Urgency.EMERGENCY))
 
         # Recovery bed from the end of surgery.
         beds = {}
@@ -1066,6 +1114,23 @@ class _ModelBuilder:
             if rests:
                 k = len(rests)
                 m.add_cumulative(work + rests, [k] * len(work) + [1] * k, k)
+
+        for code, items in self.supply_load.items():
+            item = opt._supply_by_id.get(code)
+            if item is None:
+                continue  # such cases are never planned (see _plan_case)
+            frozen = self.frozen_supply[code]
+            total = sum(q for q, _, _ in items)
+            room = max(0, item.for_booked - frozen)  # what is on the shelf for this day
+            if total > room:
+                m.add(sum(q * lit for q, lit, _ in items) <= room)
+            new = [(q, lit) for q, lit, is_new in items if is_new]
+            if new and frozen + total > item.available:
+                # New normal cases must not take what later bookings hold: either none of them uses
+                # this item, or everything booked today fits in what is free for new cases.
+                used = m.new_bool_var(f"new_uses[{code}]")
+                m.add(sum(q * lit for q, lit in new) <= sum(q for q, _ in new) * used)
+                m.add(frozen + sum(q * lit for q, lit, _ in items) <= item.available + (frozen + total) * (1 - used))
 
     def _cap(self, name: str, items, cap: int) -> None:
         """Sum of assigned minutes <= cap; emergency overrides may go over, at a cost."""

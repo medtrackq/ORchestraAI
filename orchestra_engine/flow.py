@@ -19,7 +19,6 @@ from .demo import Hospital, build_hospital, elective_day
 from .models import EquipmentUnit, OperatingRoom, StaffMember, StaffRole, SurgeryCase, Urgency
 from .results import ScheduleResult
 from .timeutil import fmt, hm
-from .validation import validate_schedule
 
 PAGE = Path(__file__).resolve().parent.parent / "web" / "orchestra-flow.html"
 _DATA_BLOCK = re.compile(r'(<script id="flow-data" type="application/json">)(.*?)(</script>)', re.S)
@@ -172,7 +171,7 @@ def build_flow(verbose: bool = False) -> dict:
     )
 
     for name, result in (("booked", booked), ("locked", locked), ("emergency", after)):
-        errors = validate_schedule(result, result.cases.values(), h.rooms, h.equipments, h.staff, h.beds)
+        errors = h.validate(result)
         if errors:
             raise RuntimeError(f"{name} schedule failed validation: {errors}")
 

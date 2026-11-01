@@ -307,6 +307,7 @@ class CaseIn(BaseModel):
     required_staff_skills: dict[str, list[str]] | None = None
     airborne: bool = False
     pending_id: str | None = Field(default=None, max_length=64)  # rebook a request waiting for a slot
+    required_supplies: dict[str, int] = Field(default={}, max_length=30)  # supply code -> quantity
 
 
 class SlotIn(BaseModel):
@@ -641,3 +642,86 @@ def cancel_pending(pending_id: str, request: Request, date: str | None = None) -
     user = _user(request, "book")
     result = _run(store.cancel_pending, pending_id, actor=_actor(user))
     return {"result": result, "state": _state(user, date)}
+
+
+# ------------------------------------------------------------- supplies and implants
+
+class SupplyItemIn(BaseModel):
+    code: str | None = Field(default=None, max_length=50)
+    name: str = Field(max_length=200)
+    category: Literal["IMPLANT", "CONSUMABLE"] = "CONSUMABLE"
+    unit: str = Field(default="ชิ้น", max_length=30)
+    on_hand: int = Field(default=0, ge=0)
+    reorder_level: int = Field(default=0, ge=0)
+    active: bool = True
+
+
+class StockCountIn(BaseModel):
+    on_hand: int = Field(ge=0)
+    note: str | None = Field(default=None, max_length=200)
+
+
+class ReceiveIn(BaseModel):
+    quantity: int | None = Field(default=None, ge=1)
+    delivery_id: str | None = None
+    note: str | None = Field(default=None, max_length=200)
+
+
+class DeliveryIn(BaseModel):
+    quantity: int = Field(ge=1)
+    expected_date: str
+    note: str | None = Field(default=None, max_length=200)
+
+
+class ProcedureSuppliesIn(BaseModel):
+    supplies: dict[str, int] = Field(default={}, max_length=30)
+
+
+@app.get("/api/admin/supplies")
+def admin_supplies(request: Request) -> dict:
+    _, admin = _admin(request, "inventory_view")
+    return _run(admin.inventory)
+
+
+@app.post("/api/admin/supplies")
+def admin_add_supply(body: SupplyItemIn, request: Request) -> dict:
+    user, admin = _admin(request, "inventory")
+    return _run(admin.save_item, body.model_dump(), actor=_actor(user))
+
+
+@app.patch("/api/admin/supplies/{code}")
+def admin_edit_supply(code: str, body: SupplyItemIn, request: Request) -> dict:
+    user, admin = _admin(request, "inventory")
+    return _run(admin.save_item, body.model_dump(), code=code, actor=_actor(user))
+
+
+@app.post("/api/admin/supplies/{code}/count")
+def admin_count_supply(code: str, body: StockCountIn, request: Request) -> dict:
+    """Stock take: set the counted quantity."""
+    user, admin = _admin(request, "inventory")
+    return _run(admin.count_stock, code, body.model_dump(), actor=_actor(user))
+
+
+@app.post("/api/admin/supplies/{code}/receive")
+def admin_receive_supply(code: str, body: ReceiveIn, request: Request) -> dict:
+    user, admin = _admin(request, "inventory")
+    return _run(admin.receive, code, body.model_dump(), actor=_actor(user))
+
+
+@app.post("/api/admin/supplies/{code}/deliveries")
+def admin_expect_supply(code: str, body: DeliveryIn, request: Request) -> dict:
+    """An order on its way: counted for cases from the expected date."""
+    user, admin = _admin(request, "inventory")
+    return _run(admin.expect_delivery, code, body.model_dump(), actor=_actor(user))
+
+
+@app.delete("/api/admin/deliveries/{delivery_id}")
+def admin_cancel_delivery(delivery_id: str, request: Request) -> dict:
+    user, admin = _admin(request, "inventory")
+    return _run(admin.cancel_delivery, delivery_id, actor=_actor(user))
+
+
+@app.put("/api/admin/procedures/{procedure_id}/supplies")
+def admin_procedure_supplies(procedure_id: str, body: ProcedureSuppliesIn, request: Request) -> dict:
+    user, admin = _admin(request, "inventory")
+    return _run(admin.set_procedure_supplies, procedure_id, body.model_dump(), actor=_actor(user))

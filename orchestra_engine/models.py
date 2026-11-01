@@ -195,6 +195,32 @@ class EquipmentUnit:
 
 
 @dataclass
+class SupplyItem:
+    """A single-use supply or implant (``supply_items``) as seen by one planning day.
+
+    ``available`` is how many NEW cases of this horizon may use: stock on hand
+    plus deliveries due by then, minus what bookings on other days hold, taken
+    at the tightest point from this day on (later bookings keep theirs).
+    ``for_booked`` is what the cases already booked on this day may use: the
+    same but counting only bookings on earlier days (earlier cases are served
+    first). Defaults to ``available``.
+    """
+
+    item_id: str  # code, e.g. "KNEE-IMP-5"
+    name: str
+    available: int
+    unit: str = "ชิ้น"
+    category: str = "CONSUMABLE"  # IMPLANT / CONSUMABLE
+    note: str | None = None  # e.g. next delivery, shown when stock is short
+    reorder_level: int = 0  # warn when this few are left
+    for_booked: int | None = None
+
+    def __post_init__(self) -> None:
+        self.available = max(0, int(self.available))
+        self.for_booked = self.available if self.for_booked is None else max(self.available, int(self.for_booked))
+
+
+@dataclass
 class RecoveryBed:
     """Row of ``recovery_beds``."""
 
@@ -236,6 +262,7 @@ class SurgeryCase:
     deadline_min: int | None = None  # latest allowed start
     patient_name: str | None = None
     airborne: bool = False
+    required_supplies: dict[str, int] = field(default_factory=dict)  # supply code -> quantity
 
     def __post_init__(self) -> None:
         if self.duration_mins <= 0:
@@ -252,6 +279,7 @@ class SurgeryCase:
         for role, count in self.required_staff_roles.items():
             if count < 0:
                 raise ValueError(f"{self.case_id}: negative staff count for {role}")
+        self.required_supplies = {str(k): int(v) for k, v in self.required_supplies.items() if int(v) > 0}
 
     @property
     def equipment_counts(self) -> Counter[str]:

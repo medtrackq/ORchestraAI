@@ -18,6 +18,7 @@ from psycopg.types.json import Jsonb
 
 from orchestra_engine import StaffRole
 
+from .db import supply_available
 from .db_store import DatabaseStore
 from .store import StoreError
 
@@ -29,6 +30,8 @@ CAPABILITIES = ("LAMINAR_FLOW", "LEAD_LINED_XRAY", "NEGATIVE_PRESSURE", "ROBOTIC
 ROLES = (StaffRole.SURGEON, StaffRole.ANESTHESIOLOGIST, StaffRole.SCRUB_NURSE, StaffRole.CIRCULATING_NURSE)
 SHIFT_TYPES = ("REGULAR", "ON_CALL", "LEAVE")
 EQUIPMENT_CATEGORIES = ("HEAVY_MACHINE", "INSTRUMENT_TRAY", "OTHER")
+SUPPLY_CATEGORIES = ("IMPLANT", "CONSUMABLE")
+SUPPLY_CODE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,49}$")
 MAX_DAYS = 120  # one shift / leave request
 CHECK_DAYS = 31  # days ahead checked for bookings that no longer fit
 
@@ -476,7 +479,192 @@ class HospitalAdmin:
         return {"serial": serial, "affected": affected}
 
 
-def require_supabase(store) -> HospitalAdmin:
+class Inventory(HospitalAdmin):
+    """Equipment & Inventory Agent data: single-use supplies and implants."""
+
+    def _ready(self, conn) -> None:
+        if ("supply_items", "item_id") not in self._columns(conn):
+            raise StoreError("ฐานข้อมูลยังไม่ได้รัน migration supabase/migrations/20261105000000_supply_inventory.sql")
+
+    def _item(self, conn, code: str) -> dict:
+        row = conn.execute("SELECT * FROM supply_items WHERE code = %s", (code,)).fetchone()
+        if row is None:
+            raise StoreError(f"ไม่พบวัสดุ {code}")
+        return row
+
+    def inventory(self) -> dict:
+        today = self.db.today()
+        with self.store._transaction(write=True) as conn:  # write: settles cases that have ended
+            if ("supply_items", "item_id") not in self._columns(conn):
+                return {"ready": False, "items": [], "procedures": [], "categories": list(SUPPLY_CATEGORIES)}
+            deliveries: dict = {}
+            for r in conn.execute(
+                """SELECT d.*, i.code FROM supply_deliveries d JOIN supply_items i USING (item_id)
+                   WHERE d.status = 'EXPECTED' ORDER BY d.expected_date"""
+            ):
+                deliveries.setdefault(r["item_id"], []).append(r)
+            held: dict = {}
+            for r in conn.execute(
+                """SELECT r.item_id, r.quantity, (s.start_time AT TIME ZONE %s)::date AS day
+                   FROM supply_reservations r
+                   JOIN scheduled_surgeries s ON s.request_id = r.request_id AND s.status IS DISTINCT FROM 'CANCELLED'
+                   WHERE r.status = 'RESERVED'""", (str(self.db.tz),),
+            ):
+                held.setdefault(r["item_id"], []).append((r["day"], r["quantity"]))
+            items = []
+            for r in conn.execute("SELECT * FROM supply_items ORDER BY is_active DESC, category, name"):
+                due = deliveries.get(r["item_id"], [])
+                on_order = [(d["expected_date"], d["quantity"]) for d in due if d["expected_date"] >= today]
+                free = supply_available(r["on_hand"], on_order, held.get(r["item_id"], []), today)
+                reserved = held.get(r["item_id"], [])
+                next_use = min((d for d, _ in reserved), default=None)
+                items.append({
+                    "code": r["code"], "name": r["name"], "category": r["category"], "unit": r["unit"],
+                    "on_hand": r["on_hand"], "reorder_level": r["reorder_level"], "active": r["is_active"],
+                    "reserved": sum(q for _, q in reserved), "reserved_cases": len(reserved),
+                    "next_use": next_use.isoformat() if next_use else None,
+                    "free": free, "low": r["is_active"] and free <= r["reorder_level"],
+                    "free_later": r["on_hand"] + sum(q for _, q in on_order) - sum(q for _, q in reserved),
+                    "deliveries": [{"id": str(d["delivery_id"]), "quantity": d["quantity"],
+                                    "date": d["expected_date"].isoformat(), "late": d["expected_date"] < today,
+                                    "note": d["note"]} for d in due],
+                })
+            needs: dict = {}
+            for r in conn.execute(
+                "SELECT ps.procedure_id, i.code, ps.quantity FROM procedure_supplies ps JOIN supply_items i USING (item_id)"
+            ):
+                needs.setdefault(str(r["procedure_id"]), {})[r["code"]] = r["quantity"]
+            procedures = [{"id": str(r["procedure_id"]), "name": r["name"], "supplies": needs.get(str(r["procedure_id"]), {})}
+                          for r in conn.execute("SELECT procedure_id, name FROM procedures ORDER BY name")]
+        return {"ready": True, "items": items, "procedures": procedures, "categories": list(SUPPLY_CATEGORIES)}
+
+    def save_item(self, data: dict, *, code: str | None = None, actor: dict | None = None) -> dict:
+        new = code is None
+        code = (data.get("code") if new else code) or ""
+        if not SUPPLY_CODE.match(code):
+            raise StoreError("รหัสวัสดุใช้ได้ 1-50 ตัว (A-Z 0-9 - _ .) เช่น KNEE-IMP-5")
+        name = (data.get("name") or "").strip()
+        if not name or len(name) > 200:
+            raise StoreError("กรุณาใส่ชื่อวัสดุ (ไม่เกิน 200 ตัวอักษร)")
+        category = data.get("category") or "CONSUMABLE"
+        if category not in SUPPLY_CATEGORIES:
+            raise StoreError(f"หมวดไม่ถูกต้อง: {category}")
+        unit = (data.get("unit") or "ชิ้น").strip()[:30] or "ชิ้น"
+        reorder = int(_number(data.get("reorder_level", 0), 0, 100000, "จุดสั่งซื้อ"))
+        active = bool(data.get("active", True))
+        with self.store._transaction(write=True) as conn:
+            self._ready(conn)
+            if new:
+                stock = int(_number(data.get("on_hand", 0), 0, 100000, "จำนวนคงคลังเริ่มต้น"))
+                try:
+                    conn.execute(
+                        """INSERT INTO supply_items (code, name, category, unit, on_hand, reorder_level, is_active)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s)""", (code, name, category, unit, stock, reorder, active))
+                except psycopg.errors.UniqueViolation as exc:
+                    raise StoreError(f"มีวัสดุรหัส {code} อยู่แล้ว") from exc
+                self._log(conn, f"เพิ่มวัสดุ {code} {name}", [f"คงคลัง {stock} {unit}, จุดสั่งซื้อ {reorder}"], actor)
+                return {"code": code, "affected": []}
+            cur = conn.execute(
+                """UPDATE supply_items SET name = %s, category = %s, unit = %s, reorder_level = %s, is_active = %s
+                   WHERE code = %s""", (name, category, unit, reorder, active, code))
+            if cur.rowcount != 1:
+                raise StoreError(f"ไม่พบวัสดุ {code}")
+            self._log(conn, f"แก้ไขวัสดุ {code} {name}", ["ใช้งาน" if active else "ปิดใช้งาน"], actor)
+            affected = self._affected(conn, self.db.today(), self.db.today() + timedelta(days=CHECK_DAYS))
+        return {"code": code, "affected": affected}
+
+    def count_stock(self, code: str, data: dict, *, actor: dict | None = None) -> dict:
+        """Stock take: set what is really on the shelf."""
+        stock = int(_number(data.get("on_hand"), 0, 100000, "จำนวนที่นับได้"))
+        reason = (data.get("note") or "").strip()[:200]
+        with self.store._transaction(write=True) as conn:
+            self._ready(conn)
+            item = self._item(conn, code)
+            conn.execute("UPDATE supply_items SET on_hand = %s WHERE code = %s", (stock, code))
+            self._log(conn, f"นับสต็อก {code}: {item['on_hand']} -> {stock} {item['unit']}", [reason], actor)
+            affected = (self._affected(conn, self.db.today(), self.db.today() + timedelta(days=CHECK_DAYS))
+                        if stock < item["on_hand"] else [])
+        return {"code": code, "on_hand": stock, "affected": affected}
+
+    def receive(self, code: str, data: dict, *, actor: dict | None = None) -> dict:
+        """Goods in: add to stock, closing the matching expected delivery if one is given."""
+        delivery = data.get("delivery_id")
+        with self.store._transaction(write=True) as conn:
+            self._ready(conn)
+            item = self._item(conn, code)
+            if delivery:
+                row = conn.execute(
+                    """UPDATE supply_deliveries SET status = 'RECEIVED', received_at = NOW()
+                       WHERE delivery_id = %s AND item_id = %s AND status = 'EXPECTED' RETURNING quantity""",
+                    (_uuid(delivery, "การส่งของ"), item["item_id"]),
+                ).fetchone()
+                if row is None:
+                    raise StoreError("ไม่พบรายการสั่งของนี้ (อาจรับไปแล้ว)")
+                quantity = int(data.get("quantity") or row["quantity"])
+            else:
+                quantity = int(_number(data.get("quantity"), 1, 100000, "จำนวนที่รับ"))
+            conn.execute("UPDATE supply_items SET on_hand = on_hand + %s WHERE code = %s", (quantity, code))
+            self._log(conn, f"รับของ {code} +{quantity} {item['unit']}", [(data.get("note") or "").strip()[:200]], actor)
+        return {"code": code, "received": quantity}
+
+    def expect_delivery(self, code: str, data: dict, *, actor: dict | None = None) -> dict:
+        quantity = int(_number(data.get("quantity"), 1, 100000, "จำนวนที่สั่ง"))
+        when = _date(data.get("expected_date"), "วันที่คาดว่าของจะมา")
+        if when < self.db.today():
+            raise StoreError("วันที่คาดว่าของจะมาต้องไม่ใช่วันที่ผ่านไปแล้ว")
+        actor_text = None if actor is None else f"{actor.get('name')} ({actor.get('role')})"
+        with self.store._transaction(write=True) as conn:
+            self._ready(conn)
+            item = self._item(conn, code)
+            delivery = conn.execute(
+                """INSERT INTO supply_deliveries (item_id, quantity, expected_date, note, created_by)
+                   VALUES (%s, %s, %s, %s, %s) RETURNING delivery_id""",
+                (item["item_id"], quantity, when, (data.get("note") or "").strip()[:200] or None, actor_text),
+            ).fetchone()["delivery_id"]
+            self._log(conn, f"สั่งของ {code} +{quantity} {item['unit']} คาดว่ามา {when.isoformat()}", [], actor)
+        return {"id": str(delivery)}
+
+    def cancel_delivery(self, delivery_id: str, *, actor: dict | None = None) -> dict:
+        with self.store._transaction(write=True) as conn:
+            self._ready(conn)
+            row = conn.execute(
+                """UPDATE supply_deliveries d SET status = 'CANCELLED' FROM supply_items i
+                   WHERE d.delivery_id = %s AND d.status = 'EXPECTED' AND i.item_id = d.item_id
+                   RETURNING i.code, d.quantity, d.expected_date""",
+                (_uuid(delivery_id, "การส่งของ"),),
+            ).fetchone()
+            if row is None:
+                raise StoreError("ไม่พบรายการสั่งของนี้")
+            self._log(conn, f"ยกเลิกการสั่ง {row['code']} +{row['quantity']} ({row['expected_date'].isoformat()})", [],
+                      actor)
+            affected = self._affected(conn, self.db.today(), self.db.today() + timedelta(days=CHECK_DAYS))
+        return {"cancelled": delivery_id, "affected": affected}
+
+    def set_procedure_supplies(self, procedure_id: str, data: dict, *, actor: dict | None = None) -> dict:
+        needs = {str(k): int(_number(v, 0, 50, f"จำนวน {k}")) for k, v in (data.get("supplies") or {}).items()}
+        with self.store._transaction(write=True) as conn:
+            self._ready(conn)
+            proc = conn.execute("SELECT name FROM procedures WHERE procedure_id = %s",
+                                (_uuid(procedure_id, "หัตถการ"),)).fetchone()
+            if proc is None:
+                raise StoreError("ไม่พบหัตถการนี้")
+            ids = {r["code"]: r["item_id"] for r in conn.execute(
+                "SELECT code, item_id FROM supply_items WHERE code = ANY(%s)", (list(needs),))}
+            unknown = [c for c in needs if c not in ids]
+            if unknown:
+                raise StoreError(f"ไม่พบวัสดุ: {', '.join(unknown)}")
+            conn.execute("DELETE FROM procedure_supplies WHERE procedure_id = %s", (_uuid(procedure_id, "หัตถการ"),))
+            rows = [(_uuid(procedure_id, "หัตถการ"), ids[c], q) for c, q in needs.items() if q > 0]
+            if rows:
+                with conn.cursor() as cur:
+                    cur.executemany(
+                        "INSERT INTO procedure_supplies (procedure_id, item_id, quantity) VALUES (%s, %s, %s)", rows)
+            self._log(conn, f"วัสดุที่ใช้กับ {proc['name']}",
+                      [", ".join(f"{c} x{q}" for c, q in needs.items() if q > 0) or "ไม่ใช้วัสดุ"], actor)
+        return {"procedure_id": procedure_id, "supplies": {c: q for c, q in needs.items() if q > 0}}
+
+
+def require_supabase(store) -> Inventory:
     if getattr(store, "mode", None) != "supabase":
         raise StoreError("หน้าข้อมูลโรงพยาบาลใช้ได้เมื่อเชื่อม Supabase เท่านั้น (โหมดข้อมูลจำลองแก้ข้อมูลไม่ได้)")
-    return HospitalAdmin(store)
+    return Inventory(store)

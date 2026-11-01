@@ -123,6 +123,12 @@
   .activity-item .kind { font-size: .7rem; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); }
   .unsched { margin-top: 14px; }
   .unsched li { font-size: .82rem; margin-bottom: 4px; }
+  .supply-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: .82rem; color: var(--text); padding: 3px 0; }
+  .supply-row span { flex: 1 1 160px; min-width: 0; }
+  .supply-row input { width: 64px !important; flex: 0 0 64px; }
+  .supply-row small { color: var(--muted); }
+  .supply-row small.short { color: var(--bad); font-weight: 600; }
+  .supply-add { display: flex; gap: 8px; margin-top: 6px; }
   .pending-hint { background: var(--warn-soft); color: var(--warn); border-radius: 8px; padding: 6px 10px; }
   .pending-hint button { margin-left: 6px; }
   #toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); background: var(--bad); color: #fff; padding: 10px 16px; border-radius: 10px; font-size: .88rem; max-width: calc(100% - 32px); display: none; z-index: 50; }
@@ -360,6 +366,7 @@
 
   const can = perm => !!(STATE && STATE.me && STATE.me.permissions.includes(perm));
   const hours = m => (m / 60).toFixed(1).replace(/\.0$/, '');
+  const supplyName = code => ((STATE.options.supplies || []).find(x => x.id === code) || { name: code }).name;
   const timeText = m => hhmm(m) + (m >= 24 * 60 ? ' (พรุ่งนี้)' : m < 0 ? ' (เมื่อวาน)' : '');
 
   // Staffing Agent fatigue issue -> Thai sentence.
@@ -449,6 +456,7 @@
       <fieldset><legend>ห้องต้องมี</legend><div class="checks">${caps}</div></fieldset>
       <fieldset><legend>เครื่องมือ (ชุดละ 1)</legend><div class="checks">${eq}</div></fieldset>
       <fieldset data-role="skills" hidden></fieldset>
+      <fieldset data-role="supplies" hidden></fieldset>
       <div class="row2">
         <label>ความเสี่ยงติดเชื้อ
           <select name="infection_risk"><option>CLEAN</option><option>CONTAMINATED</option><option ${kind === 'er' ? 'selected' : ''}>DIRTY</option></select>
@@ -483,6 +491,43 @@
     }).join('');
   }
 
+  // Equipment & Inventory Agent: single-use supplies and implants for the case (from the procedure; editable).
+  function renderSupplies(form, need) {
+    const box = form.querySelector('[data-role="supplies"]');
+    const stock = STATE.options.supplies || [];
+    box.hidden = !stock.length;
+    if (!stock.length) { box.innerHTML = ''; return; }
+    const byId = Object.fromEntries(stock.map(x => [x.id, x]));
+    const row = (code, qty) => {
+      const x = byId[code] || { id: code, name: code, unit: '', left: 0 };
+      const short = qty > x.left;
+      return `<div class="supply-row" data-code="${esc(code)}"><span>${esc(x.name)} <small>(${esc(code)})</small></span>
+        <input type="number" min="0" max="50" value="${qty}" aria-label="จำนวน ${esc(x.name)}">
+        <small class="${short ? 'short' : ''}">${esc(x.unit)} · เหลือวันนี้ ${x.left}${short && x.note ? ' · ' + esc(x.note) : ''}</small>
+        <button class="btn" type="button" aria-label="ไม่ใช้" title="ไม่ใช้">×</button></div>`;
+    };
+    box.innerHTML = '<legend>วัสดุสิ้นเปลือง / รากเทียมที่ต้องใช้</legend>'
+      + Object.entries(need).filter(([, q]) => q > 0).map(([c, q]) => row(c, q)).join('')
+      + `<div class="supply-add"><select aria-label="เพิ่มวัสดุ"><option value="">+ เพิ่มวัสดุ / รากเทียม</option>${stock
+          .filter(x => !(x.id in need)).map(x => `<option value="${esc(x.id)}">${esc(x.name)} (เหลือ ${x.left} ${esc(x.unit)})</option>`).join('')}</select></div>`;
+    box.querySelectorAll('.supply-row button').forEach(b => b.addEventListener('click', () => {
+      const current = readSupplies(form); delete current[b.closest('.supply-row').dataset.code]; renderSupplies(form, current);
+    }));
+    box.querySelectorAll('.supply-row input').forEach(i => i.addEventListener('change', () => renderSupplies(form, readSupplies(form))));
+    box.querySelector('.supply-add select').addEventListener('change', e => {
+      if (e.target.value) renderSupplies(form, { ...readSupplies(form), [e.target.value]: 1 });
+    });
+  }
+
+  function readSupplies(form) {
+    const out = {};
+    form.querySelectorAll('[data-role="supplies"] .supply-row').forEach(r => {
+      const q = Number(r.querySelector('input').value);
+      if (q > 0) out[r.dataset.code] = Math.min(50, Math.round(q));
+    });
+    return out;
+  }
+
   // Intake defaults: procedure (room, ICU, infection, skills) + surgeon preference card (time, team, equipment).
   function applyDefaults(form) {
     const o = STATE.options;
@@ -499,6 +544,7 @@
     form.elements['icu'].checked = p.icu;
     form.elements['infection_risk'].value = p.infection;
     renderSkills(form, p.skills || {});
+    renderSupplies(form, p.supplies || {});
     if (card) form.dataset.roles = JSON.stringify(card.roles);
     delete form.dataset.durationTouched;
     updatePrediction(form);
@@ -544,6 +590,7 @@
       infection_risk: f.get('infection_risk'),
       required_staff_skills: skills,
       airborne: f.get('airborne') === 'on',
+      required_supplies: readSupplies(form),
       pending_id: REBOOK && form.dataset.pending === REBOOK.id ? REBOOK.id : null,
       patient_name: (f.get('patient_name') || '').trim() || null,
       procedure_id: f.get('procedure_id') || null,
@@ -559,7 +606,7 @@
     $('#date').hidden = !db;
     if (db) $('#date').value = STATE.date;
     $('#reset').hidden = db || !can('reset');
-    $('#admin-link').hidden = !db || !can('hospital_view');
+    $('#admin-link').hidden = !db || !(can('hospital_view') || can('inventory_view'));
     $('#who').innerHTML = `<span>${esc(STATE.me.display_name)}</span><small>${esc(STATE.me.role_label)}</small>`;
     $('#change-pass').hidden = STATE.me.user_id === 'env-admin' || STATE.me.user_id === 'dev';
     applyTabs();
@@ -629,6 +676,7 @@
         <dt>ห้อง / เวลา</dt><dd>${esc(b.or_id)} ${esc(b.start)}-${esc(b.end)} (ห้องพร้อมใหม่ ${esc(b.cleanup_end)})</dd>
         <dt>ทีม</dt><dd>${teamText(b.team)}</dd>
         <dt>เครื่องมือ</dt><dd>${b.equipment.map(e => esc(e.unit_id) + ' (กลับจาก CSSD ' + hhmm(e.back_from_cssd_min) + ')').join(', ') || '-'}</dd>
+        <dt>วัสดุ/รากเทียม</dt><dd>${Object.entries(b.supplies || {}).map(([c, q]) => esc(supplyName(c)) + ' × ' + q).join(', ') || '-'}</dd>
         <dt>เตียงพักฟื้น</dt><dd>${b.bed_id ? esc(b.bed_id) + ' ' + hhmm(b.recovery_start_min) + '-' + hhmm(b.recovery_end_min) : '-'}</dd>
       </dl>
       ${b.reasoning.length ? '<ul class="why">' + b.reasoning.map(r => '<li>' + esc(r) + '</li>').join('') + '</ul>' : ''}
@@ -693,6 +741,12 @@
       parts.push(`<div class="banner bad"><b>ยังไม่ได้เปิด Row Level Security</b> บนตาราง ${esc(STATE.rls_off.join(', '))}
         ข้อมูลผู้ป่วยอาจถูกอ่านผ่าน Supabase API ด้วย anon key ได้ ให้รันไฟล์ supabase/migrations/20261101000000_security_and_integrity.sql ใน SQL Editor</div>`);
     }
+    const low = (STATE.options.supplies || []).filter(x => x.low);
+    if (low.length && can('inventory_view')) {
+      parts.push(`<div class="banner warn"><b>วัสดุ/รากเทียมใกล้หมดสำหรับวันนี้ ${low.length} รายการ</b>
+        <ul>${low.slice(0, 5).map(x => `<li>${esc(x.name)} (${esc(x.id)}): เหลือให้เคสใหม่ ${x.left} ${esc(x.unit)}${x.note ? ' · ' + esc(x.note) : ''}</li>`).join('')}</ul>
+        ${STATE.mode === 'supabase' ? '<a class="btn" href="/admin#inventory">ไปที่คลังวัสดุ</a>' : ''}</div>`);
+    }
     if (STATE.warnings && STATE.warnings.length) {
       parts.push(`<div class="banner warn"><b>ตารางวันนี้มีจุดขัดกัน ${STATE.warnings.length} รายการ</b> (เช่น มีคนลา ปิดห้อง หรือเครื่องมือเสีย หลังจองแล้ว · ระบบจะไม่เพิ่มจุดขัดกันใหม่)
         <ul>${STATE.warnings.slice(0, 5).map(w => '<li>' + esc(w) + '</li>').join('')}</ul>
@@ -751,7 +805,7 @@
     const form = emergency ? $('#form-er') : $('#form-book');
     if (focus) selectTab(emergency ? 'er' : 'book');
     fillForm(form, { surgeon_id: p.surgeon_id, procedure_id: p.procedure_id, procedure: p.procedure, patient_hn: p.patient_hn,
-      duration_mins: p.duration_mins, duration_source: 'ระบุในคำขอ', airborne: p.airborne });
+      duration_mins: p.duration_mins, duration_source: 'ระบุในคำขอ', airborne: p.airborne, required_supplies: p.supplies || {} });
     form.elements['patient_name'].value = p.patient_name || '';
     if (!emergency) form.elements['urgency'].value = p.urgency === 'URGENT' ? 'URGENT' : 'ELECTIVE';
     form.dataset.pending = p.id;
@@ -897,7 +951,7 @@
     $('[data-case="book"]').innerHTML = caseFields('book');
     $('[data-case="er"]').innerHTML = caseFields('er');
     const book = $('#form-book'), er = $('#form-er');
-    [book, er].forEach(form => renderSkills(form, {}));
+    [book, er].forEach(form => { renderSkills(form, {}); renderSupplies(form, {}); });
     const oncall = STATE.options.surgeons.find(s => /on-call|เวร/i.test(s.name));
     if (oncall && STATE.me.role !== 'surgeon') er.elements['surgeon_id'].value = oncall.id;
     const procs = STATE.options.procedures || [];
@@ -1113,6 +1167,7 @@
     if (f.required_equipment_types) form.querySelectorAll('input[name="eq"]').forEach(x => { x.checked = f.required_equipment_types.includes(x.value); });
     if (f.required_staff_roles) form.dataset.roles = JSON.stringify(f.required_staff_roles);
     if (f.required_staff_skills) renderSkills(form, f.required_staff_skills);
+    if (f.required_supplies) renderSupplies(form, f.required_supplies);
     form.elements['icu'].checked = !!f.requires_icu_post_op;
     form.elements['airborne'].checked = !!f.airborne;
     pick('infection_risk', f.infection_risk);

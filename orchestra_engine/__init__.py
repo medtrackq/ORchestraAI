@@ -9,6 +9,7 @@ from .models import (
     RecoveryBed,
     StaffMember,
     StaffRole,
+    SupplyItem,
     SurgeryCase,
     Urgency,
 )
@@ -32,6 +33,7 @@ __all__ = [
     "ScheduleResult",
     "StaffMember",
     "StaffRole",
+    "SupplyItem",
     "SurgeryCase",
     "Urgency",
     "Weights",

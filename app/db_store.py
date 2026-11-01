@@ -16,14 +16,15 @@ import psycopg
 
 from datetime import timedelta
 
-from orchestra_engine import ORchestraOptimizer, ScheduleResult, fmt, hm, validate_schedule
+from orchestra_engine import ORchestraOptimizer, ScheduleResult, fmt, hm
 from orchestra_engine.demo import elective_day
 
 from . import seed
 from .db import ConflictError, Database, DatabaseUnavailable, World, case_code
 from .intake_service import IntakeContext
 from .store import (Activity, StoreError, actor_name, build_case, check_own_case, check_team, equipment_rows,
-                    fatigue_log, fatigue_view, parse_time, ready_minute, room_options, staff_skills)
+                    fatigue_log, fatigue_view, parse_time, ready_minute, room_options, staff_skills,
+                    supply_options)
 
 
 class DatabaseStore:
@@ -43,6 +44,7 @@ class DatabaseStore:
             with self.db.connect() as conn:
                 if write:
                     self.db.lock(conn)
+                    self.db.settle_supplies(conn)  # cases that ended used what they held
                 yield conn
         except DatabaseUnavailable as exc:
             raise StoreError(f"เชื่อมต่อฐานข้อมูลไม่ได้: {exc}") from exc
@@ -64,14 +66,14 @@ class DatabaseStore:
     def _optimizer(self, world: World) -> ORchestraOptimizer:
         h = world.hospital
         return ORchestraOptimizer(
-            h.rooms, h.equipments, h.staff, h.beds, team_synergy=h.team_synergy,
+            h.rooms, h.equipments, h.staff, h.beds, team_synergy=h.team_synergy, supplies=h.supplies,
             time_limit_s=self.time_limit_s, num_workers=self.workers,
         )
 
     @staticmethod
     def _problems(world: World, result: ScheduleResult) -> list[str]:
         h = world.hospital
-        return validate_schedule(result, result.cases.values(), h.rooms, h.equipments, h.staff, h.beds)
+        return h.validate(result)
 
     def _guard(self, world: World, after: ScheduleResult) -> None:
         """Reject a result that adds any conflict the stored schedule did not already have."""
@@ -162,6 +164,7 @@ class DatabaseStore:
                 "procedures": world.procedures,
                 "cards": world.cards,
                 "skills": staff_skills(h),
+                "supplies": supply_options(h, world.result),
             },
             "activity": activity,
             **fatigue_view(h, world.result),
@@ -382,8 +385,9 @@ class DatabaseStore:
             for number, c in enumerate(elective_day(), start=1):
                 request_id = uuid.uuid4()
                 code = case_code(request_id, c.urgency.value, {x.case_id for x in cases})
+                stocked = {k: v for k, v in c.required_supplies.items() if k in world.supply_ids}
                 cases.append(replace(c, case_id=code, surgeon_id=str(ids["staff"][c.surgeon_id]),
-                                     patient_name=f"ผู้ป่วยตัวอย่าง {number}"))
+                                     patient_name=f"ผู้ป่วยตัวอย่าง {number}", required_supplies=stocked))
                 requests[code] = {"request_id": request_id, "patient_name": f"ผู้ป่วยตัวอย่าง {number}",
                                   "procedure_id": ids["procedures"][c.procedure], "raw_text": c.procedure}
             result = self._optimizer(world).solve_schedule(cases, "Demo day", verbose=False)
