@@ -62,8 +62,9 @@
   ol.steps > li::before { content: counter(s); width: 30px; height: 30px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; font-weight: 600; font-size: .9rem; }
   ol.steps h3 { margin: 3px 0 2px; font-size: .95rem; }
   .qr-row { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
-  .qr { background: #fff; border: 1px solid var(--border); border-radius: 12px; padding: 6px; line-height: 0; flex: none; }
-  .qr svg { width: 196px; height: 196px; }
+  .qr { background: #fff; border: 1px solid var(--border); border-radius: 12px; padding: 4px; line-height: 0; flex: none; }
+  .qr svg { display: block; width: 232px; height: 232px; }
+  .manual { margin: 8px 0 0; padding-left: 18px; font-size: .84rem; display: grid; gap: 2px; }
   .key { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .95rem; letter-spacing: .04em; background: var(--surface-2); border: 1px dashed var(--border); border-radius: 8px; padding: 8px 10px; overflow-wrap: anywhere; margin: 6px 0; }
   .form-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: end; margin-top: 10px; }
   label { display: grid; gap: 4px; font-size: .82rem; color: var(--muted); }
@@ -78,7 +79,7 @@
   [hidden] { display: none !important; }
   @media (max-width: 640px) {
     .top, main { padding-left: 16px; padding-right: 16px; }
-    .qr svg { width: 168px; height: 168px; }
+    .qr svg { width: 220px; height: 220px; }
   }
   @media print {
     body { background: #fff; }
@@ -124,10 +125,17 @@
         <div id="qr-box" hidden>
           <div class="qr-row">
             <div class="qr" id="qr" role="img" aria-label="QR code สำหรับเพิ่มบัญชีในแอปยืนยันตัวตน"></div>
-            <div style="min-width:0;flex:1 1 220px">
-              <p class="hint">สแกนไม่ได้? เลือก “กรอกรหัสเอง” ในแอป แล้วใส่</p>
-              <div class="key" id="key"></div>
-              <p class="hint">ชื่อบัญชี: <span id="account"></span> · ชนิด: ตามเวลา</p>
+            <div style="min-width:0;flex:1 1 240px">
+              <p class="hint"><b>เปิดหน้านี้บนมือถือเครื่องที่มีแอป?</b> สแกนจอตัวเองไม่ได้ กดปุ่มนี้แทน</p>
+              <div class="actions" style="margin-top:6px"><a class="btn" id="open-app" href="#">เปิดในแอปยืนยันตัวตน</a>
+                <button class="btn" type="button" id="copy-key">คัดลอกรหัส</button></div>
+              <p class="hint" style="margin-top:10px"><b>สแกนไม่ได้?</b> ใส่รหัสเองในแอป Google Authenticator:</p>
+              <ol class="manual">
+                <li>กด “+” แล้วเลือก “ป้อนคีย์การตั้งค่า” (Enter a setup key)</li>
+                <li>บัญชี: <b id="account"></b></li>
+                <li>คีย์: <span class="key" id="key"></span></li>
+                <li>ประเภทคีย์: อิงตามเวลา (Time based) แล้วกด “เพิ่ม”</li>
+              </ol>
             </div>
           </div>
         </div></div></li>
@@ -246,7 +254,8 @@
       SETUP.replacing = replacing || SETUP.replacing;
       $('#qr').innerHTML = SETUP.qr;  // drawn on our server
       $('#key').textContent = SETUP.secret.match(/.{1,4}/g).join(' ');
-      $('#account').textContent = 'ORchestraAI: ' + ME.username;
+      $('#account').textContent = 'ORchestraAI (' + ME.username + ')';
+      $('#open-app').href = SETUP.uri;  // otpauth:// opens the authenticator app on the same phone
       $('#qr-box').hidden = false;
       $('#start-row').hidden = true;
       $('#enable-btn').disabled = false;
@@ -306,6 +315,10 @@
     catch { $('#copy-codes').textContent = 'คัดลอกไม่ได้ ให้จดหรือพิมพ์แทน'; }
   });
   $('#print-codes').addEventListener('click', () => window.print());
+  $('#copy-key').addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(SETUP.secret); $('#copy-key').textContent = 'คัดลอกแล้ว'; }
+    catch { $('#copy-key').textContent = 'คัดลอกไม่ได้ ให้พิมพ์ตามที่เห็น'; }
+  });
   $('#copy-secret').addEventListener('click', async () => {
     try { await navigator.clipboard.writeText($('#owner-secret').textContent); $('#copy-secret').textContent = 'คัดลอกแล้ว'; }
     catch { $('#copy-secret').textContent = 'คัดลอกไม่ได้ ให้เลือกข้อความแล้วคัดลอกเอง'; }
