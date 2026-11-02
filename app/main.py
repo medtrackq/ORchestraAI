@@ -43,7 +43,7 @@ from pydantic import BaseModel, Field
 
 from .auth import (COOKIE, ENV_ADMIN_ID, PENDING_S, ROLES, SESSION_HOURS, Accounts, AuthError, CodeNeeded, DbUserStore,
                    MemoryUserStore, ServiceUnavailable, TooManyAttempts, User, can, env_totp_secret, required_roles)
-from . import backup, feedback as fb, his as his_mod, history_io, hospital_io, privacy, roster_io, system_status
+from . import autobackup, backup, feedback as fb, his as his_mod, history_io, hospital_io, privacy, roster_io, system_status
 from .admin_store import require_supabase
 from .intake_service import IntakeService
 from .notify import DbNotifyStore, MemoryNotifyStore, Notifier, NotifyUnavailable
@@ -81,11 +81,13 @@ logging.getLogger("orchestra").addHandler(fb.ErrorLogHandler(feedback))  # error
 
 @asynccontextmanager
 async def _lifespan(_app):
-    """Background jobs: the daily reminder of the next day's not-ready cases; the PDPA retention run."""
+    """Background jobs: the daily reminder of the next day's not-ready cases; the PDPA retention run; the
+    nightly encrypted backup (once it is set up)."""
     hour = digest_hour()
     timers = [DigestTimer(store, notifier.handle, hour=hour)] if hour is not None else []
     if store.mode == "supabase":
         timers.append(privacy.RetentionTimer(store))
+        timers.append(autobackup.BackupTimer(store, access))
         await run_in_threadpool(system_status.record_boot, store)  # frequent starts = the server sleeps when idle
     for timer in timers:
         timer.start()
@@ -1930,6 +1932,65 @@ def privacy_apply(body: MigrateIn, request: Request) -> dict:
         raise HTTPException(status_code=400, detail="กรุณายืนยันก่อนลบข้อมูล")
     result = _run(privacy.apply, store, actor=_actor(user))
     return {"result": result, "retention": _run(privacy.retention, store)}
+
+
+def _auto_config() -> autobackup.Config:
+    return autobackup.Config.from_env(store.db.url if store.mode == "supabase" else None)
+
+
+@app.get("/api/system/backups")
+def backups_overview(request: Request) -> dict:
+    """Admin: the nightly encrypted backup: settings (never the keys), the last run and the files kept."""
+    _user(request, "users")
+    if store.mode != "supabase":
+        return {"supabase": False, "config": _auto_config().public(), "last": None, "files": []}
+    config = _auto_config()
+    with store.db.connect() as conn:
+        last = autobackup.last(conn)
+    files, error = [], None
+    if config.ready:
+        try:
+            files = autobackup.Storage(config.url, config.service_key, config.bucket, timeout=20).files()
+        except autobackup.StorageError as exc:
+            error = None if exc.status in (400, 404) else str(exc)  # no bucket yet: made at the first run
+        except StoreError as exc:
+            error = str(exc)
+    return {"supabase": True, "config": config.public(), "last": last, "files": files, "files_error": error}
+
+
+@app.post("/api/system/backups/run")
+def backups_run(body: MigrateIn, request: Request) -> dict:
+    """Back up to Supabase Storage now (the same as the nightly run)."""
+    user = _user(request, "users")
+    if store.mode != "supabase":
+        raise HTTPException(status_code=400, detail="โหมดสาธิตไม่มีฐานข้อมูลให้สำรอง")
+    if not body.confirm:
+        raise HTTPException(status_code=400, detail="กรุณายืนยันก่อน")
+    result = _run(autobackup.run, store, access, actor=_actor(user))
+    return {"result": result, **backups_overview(request)}
+
+
+@app.get("/api/system/backups/{name}")
+def backups_download(name: str, request: Request) -> StreamingResponse:
+    """One encrypted file (it opens only with BACKUP_ENCRYPTION_KEY), for restoring elsewhere."""
+    user = _user(request, "users")
+    config = _auto_config()
+    if store.mode != "supabase" or not config.ready:
+        raise HTTPException(status_code=400, detail="ยังไม่ได้ตั้งค่าสำรองข้อมูลอัตโนมัติ")
+    if not autobackup.NAME.match(name):
+        raise HTTPException(status_code=404, detail="ไม่พบไฟล์นี้")
+    response = _run(autobackup.Storage(config.url, config.service_key, config.bucket).download, name)
+    access.record(user, "backup", None, [], _address(request), patients=1)  # encrypted, but every patient is in it
+
+    def chunks():
+        with response:
+            while chunk := response.read(1 << 16):
+                yield chunk
+
+    headers = {"Content-Disposition": f'attachment; filename="{name}"'}
+    if response.headers.get("Content-Length"):
+        headers["Content-Length"] = response.headers["Content-Length"]
+    return StreamingResponse(chunks(), media_type="application/octet-stream", headers=headers)
 
 
 @app.get("/api/system/backup.zip")

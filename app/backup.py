@@ -16,6 +16,10 @@ Command line (e.g. a nightly job on a hospital server; the URL comes from the en
 
     DATABASE_URL=... python -m app.backup dump orchestra-backup.zip
     DATABASE_URL=... python -m app.backup restore orchestra-backup.zip   # into an empty database
+
+The nightly copies in Supabase Storage are encrypted (``.orcbak``, ``app/autobackup.py``): ``restore`` reads
+them directly, or ``decrypt`` turns one into the ZIP; both take the passphrase from ``BACKUP_ENCRYPTION_KEY``
+(or ask for it).
 """
 from __future__ import annotations
 
@@ -220,11 +224,35 @@ README = """ไฟล์สำรองข้อมูล ORchestraAI
 """
 
 
+def _passphrase() -> str:
+    phrase = os.environ.get("BACKUP_ENCRYPTION_KEY")
+    if phrase:
+        return phrase
+    import getpass
+
+    return getpass.getpass("รหัสผ่านสำรองข้อมูล (BACKUP_ENCRYPTION_KEY): ")
+
+
 def main(argv: list[str] | None = None) -> int:
+    from . import autobackup
+
     parser = argparse.ArgumentParser(prog="python -m app.backup", description=__doc__.split("\n\n")[0])
-    parser.add_argument("action", choices=["dump", "restore"])
-    parser.add_argument("file", help="ไฟล์ .zip ที่จะเขียน (dump) หรืออ่าน (restore)")
+    parser.add_argument("action", choices=["dump", "restore", "decrypt"])
+    parser.add_argument("file", help="ไฟล์ .zip ที่จะเขียน (dump) หรืออ่าน (restore: .zip หรือ .orcbak) · decrypt: ไฟล์ .orcbak")
+    parser.add_argument("out", nargs="?", help="decrypt: ไฟล์ .zip ที่จะเขียน")
     args = parser.parse_args(argv)
+    if args.action == "decrypt":
+        if not args.out:
+            print("ใส่ชื่อไฟล์ .zip ที่จะเขียน เช่น python -m app.backup decrypt สำรอง.orcbak สำรอง.zip", file=sys.stderr)
+            return 2
+        try:
+            with open(args.file, "rb") as src, open(args.out, "wb") as dst:
+                size = autobackup.decrypt(src, dst, _passphrase())
+        except (StoreError, OSError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        print(f"ถอดรหัสแล้ว: {args.out} ({size:,} ไบต์) · ไฟล์นี้มีข้อมูลผู้ป่วย เก็บให้ปลอดภัย")
+        return 0
     url = os.environ.get("DATABASE_URL")
     if not url:
         print("ตั้ง DATABASE_URL ก่อน (ไม่ใส่ connection string ในคำสั่ง เพื่อไม่ให้รหัสผ่านค้างในประวัติคำสั่ง)",
@@ -237,10 +265,16 @@ def main(argv: list[str] | None = None) -> int:
                 while chunk := out.read(1 << 16):
                     f.write(chunk)
             print(f"สำรองแล้ว: {len(manifest['tables'])} ตาราง {sum(t['rows'] for t in manifest['tables'])} แถว → {args.file}")
+        elif autobackup.is_encrypted(args.file):
+            with open(args.file, "rb") as src, tempfile.TemporaryFile() as plain:
+                autobackup.decrypt(src, plain, _passphrase())
+                plain.seek(0)
+                done = restore(url, plain)
+            print(f"กู้คืนแล้ว: {done['tables']} ตาราง {done['rows']} แถว (สำรองเมื่อ {done['created_at']})")
         else:
             done = restore(url, args.file)
             print(f"กู้คืนแล้ว: {done['tables']} ตาราง {done['rows']} แถว (สำรองเมื่อ {done['created_at']})")
-    except StoreError as exc:
+    except (StoreError, OSError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
     return 0

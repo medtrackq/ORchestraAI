@@ -77,7 +77,8 @@ app/
   waitlist.py            หาวันว่างหลายวัน, รายการรอผ่าตัด
   feedback.py            ปุ่มแจ้งปัญหา + บันทึกข้อผิดพลาดของระบบ
   his.py                 เชื่อมต่อ HIS ของโรงพยาบาล (API ขาเข้า /api/his/v1/)
-  backup.py              สำรอง / กู้คืนฐานข้อมูลทั้งหมด (ZIP)
+  backup.py              สำรอง / กู้คืนฐานข้อมูลทั้งหมด (ZIP) และถอดรหัสไฟล์ .orcbak
+  autobackup.py          สำรองอัตโนมัติทุกคืน: เข้ารหัส AES-256-GCM, Supabase Storage (REST), BackupTimer
   *_io.py                นำเข้า / ส่งออก Excel (ข้อมูลโรงพยาบาล, เวร, ประวัติผ่าตัด)
   reports.py, blocks.py, cancellations.py, milestones.py, seed.py, intake_*.py
   static/                หน้าเว็บทั้งหมด + feedback.js (ใช้ร่วมกัน) + sw.js (Web Push)
@@ -266,6 +267,7 @@ TEST_DATABASE_URL=postgresql://postgres@localhost/postgres .venv/bin/python -m p
 - `test_help.py`: ทุกปุ่ม (`<kbd>`) ที่คู่มือ `/help` อ้างถึงต้องมีจริงในหน้าเว็บ ถ้าเปลี่ยนชื่อปุ่มต้องแก้คู่มือด้วย
 - `test_security.py`: header ความปลอดภัยและขนาดคำขอ, การจำกัดการ login, การออกจากระบบ, สิทธิ์ตามบทบาท, ไฟล์ Excel/CSV, ปลายทางแจ้งเตือน
 - `test_backup.py`: สำรองแล้วกู้คืนได้ครบทุกตาราง
+- `test_autobackup.py`: เข้ารหัส/ถอดรหัส, Supabase Storage ปลอมบน 127.0.0.1, ลบไฟล์เก่า, ตั้งเวลา, API
 
 **ระวังเทสต์ที่ขึ้นกับเวลา:**
 - ข้อมูลตัวอย่างเป็น "วันนี้" ตามนาฬิกาจริง ตอนเย็นเคสของวันนี้จึงจบหมด
@@ -368,8 +370,10 @@ TEST_DATABASE_URL=postgresql://postgres@localhost/postgres .venv/bin/python -m p
   - เรื่องที่ผู้ใช้แจ้ง
   - ข้อผิดพลาดของระบบ
   - การเชื่อมต่อ HIS
-- **สำรองข้อมูลอย่างน้อยสัปดาห์ละครั้ง:** Supabase แผนฟรีไม่สำรองให้
-  - ปุ่มที่หน้าสถานะระบบ หรือคำสั่งด้านล่าง
+- **สำรองข้อมูล:** Supabase แผนฟรีไม่สำรองให้
+  - ตั้งสำรองอัตโนมัติทุกคืน (`SUPABASE_SERVICE_ROLE_KEY`, `BACKUP_ENCRYPTION_KEY`) แล้วดูผลที่หน้าสถานะระบบทุกเช้า
+  - หรือปุ่มดาวน์โหลดที่หน้าสถานะระบบ / คำสั่งด้านล่าง อย่างน้อยสัปดาห์ละครั้ง
+  - ทดสอบกู้คืนจากไฟล์ `.orcbak` ลงโปรเจกต์ Supabase ทดสอบอย่างน้อยไตรมาสละครั้ง (ไฟล์ที่ไม่เคยลองกู้ = ยังไม่รู้ว่าใช้ได้)
   - ไฟล์มีข้อมูลผู้ป่วย ต้องเก็บเหมือนเวชระเบียน
   ```bash
   DATABASE_URL=<ใส่ในเครื่องเท่านั้น> .venv/bin/python -m app.backup dump backup.zip

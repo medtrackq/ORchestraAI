@@ -110,6 +110,12 @@
   .fb-filter { display: flex; align-items: center; gap: 6px; font-size: .84rem; }
   dialog .actions { justify-content: flex-end; margin-top: 14px; }
   .error { color: var(--bad); font-size: .84rem; margin: 8px 0 0; }
+  .auto { margin-top: 18px; border-top: 1px solid var(--border); padding-top: 14px; display: grid; gap: 8px; }
+  .auto h3 { margin: 0; font-size: .95rem; }
+  .auto details { font-size: .84rem; }
+  .auto details summary { cursor: pointer; color: var(--accent); }
+  .auto details ol { margin: 8px 0; padding-left: 22px; display: grid; gap: 4px; }
+  .auto .btn.small { padding: 5px 10px; font-size: .8rem; }
   .hide-wide { display: none; }
   [hidden] { display: none !important; }
   @media (max-width: 640px) {
@@ -164,11 +170,30 @@
   <section class="card" id="server" hidden>
     <header>
       <div><h2>เซิร์ฟเวอร์ งานตั้งเวลา และการสำรองข้อมูล</h2>
-        <p class="hint">Supabase แผนฟรีไม่มีการสำรองข้อมูลอัตโนมัติ ควรดาวน์โหลดไฟล์สำรองอย่างน้อยสัปดาห์ละครั้ง และเก็บในที่ปลอดภัยของโรงพยาบาล</p></div>
+        <p class="hint">Supabase แผนฟรีไม่มีการสำรองข้อมูลอัตโนมัติ · ตั้งให้ระบบสำรองเองทุกคืนได้ (หัวข้อด้านล่าง) หรือดาวน์โหลดไฟล์สำรองเองอย่างน้อยสัปดาห์ละครั้ง และเก็บในที่ปลอดภัยของโรงพยาบาล</p></div>
       <div class="actions"><button class="btn primary" type="button" id="backup">⬇ ดาวน์โหลดสำรองข้อมูลทั้งหมด (.zip)</button></div>
     </header>
     <div class="table-scroll"><table><tbody id="server-rows"></tbody></table></div>
     <p class="hint" style="margin-top:10px">วิธีกู้คืนอยู่ในไฟล์ README.txt ในไฟล์ zip (กู้คืนลงฐานข้อมูลใหม่ที่ว่างเปล่า เช่น โปรเจกต์ Supabase ใหม่)</p>
+
+    <div class="auto" id="auto">
+      <h3>สำรองข้อมูลอัตโนมัติทุกคืน (เข้ารหัส เก็บใน Supabase Storage)</h3>
+      <div class="hint" id="auto-state">กำลังโหลด…</div>
+      <div class="actions"><button class="btn primary" type="button" id="auto-run" hidden>สำรองตอนนี้</button>
+        <span class="hint" id="auto-msg" role="status"></span></div>
+      <div class="table-scroll" id="auto-files-box" hidden><table>
+        <thead><tr><th>ไฟล์ (เข้ารหัส)</th><th>ขนาด</th><th></th></tr></thead><tbody id="auto-files"></tbody></table></div>
+      <details id="auto-howto">
+        <summary>วิธีตั้งค่า (ครั้งเดียว ประมาณ 5 นาที) และวิธีกู้คืน</summary>
+        <ol>
+          <li>Supabase → Project Settings → API Keys → คัดลอกคีย์ <b>service_role</b> (secret key)</li>
+          <li>ตั้งรหัสผ่านสำหรับเข้ารหัสไฟล์สำรอง อย่างน้อย 16 ตัวอักษร และ<b>เก็บไว้อีกที่หนึ่งด้วย</b> (โปรแกรมจัดการรหัสผ่าน หรือซองปิดผนึกที่ฝ่าย IT) · ถ้ารหัสนี้หาย จะเปิดไฟล์สำรองไม่ได้เลย</li>
+          <li>Render → บริการนี้ → Environment: เพิ่ม <code>SUPABASE_SERVICE_ROLE_KEY</code> และ <code>BACKUP_ENCRYPTION_KEY</code> แล้วกด Save (อย่าส่งค่าเหล่านี้ทางแชตหรืออีเมล)</li>
+          <li>เมื่อเซิร์ฟเวอร์เริ่มใหม่ กลับมาหน้านี้แล้วกด <b>สำรองตอนนี้</b> เพื่อทดสอบ</li>
+        </ol>
+        <p class="hint">กู้คืน: กด “ดาวน์โหลด” ไฟล์ .orcbak ในรายการ แล้วบนเครื่องที่มีโค้ด ORchestraAI ตั้ง <code>BACKUP_ENCRYPTION_KEY</code> และ <code>DATABASE_URL</code> ของฐานข้อมูลใหม่ แล้วรัน <code>python -m app.backup restore ไฟล์.orcbak</code> (หรือ <code>decrypt ไฟล์.orcbak ไฟล์.zip</code> เพื่อได้ไฟล์ zip แบบเดิม)</p>
+      </details>
+    </div>
   </section>
 
   <section class="card" id="migrations" hidden>
@@ -348,6 +373,32 @@
     ].join('');
   }
 
+  async function loadBackups() {
+    if (!data || !data.server) return;
+    let b;
+    try { b = await api('/api/system/backups'); } catch (e) { $('#auto-state').textContent = 'โหลดไม่ได้: ' + e.message; return; }
+    renderBackups(b);
+  }
+
+  function renderBackups(b) {
+    const c = b.config, last = b.last;
+    $('#auto-howto').open = !c.configured;
+    $('#auto-run').hidden = !c.configured;
+    const failed = last && !last.ok;
+    const badge = !c.configured ? '<span class="badge off">ปิดอยู่</span>'
+      : failed ? '<span class="badge bad">✕ ครั้งล่าสุดไม่สำเร็จ</span>' : '<span class="badge ok">✓ เปิดอยู่</span>';
+    const parts = c.configured
+      ? [`ทุกคืน ${String(c.hour).padStart(2, '0')}:00 · เก็บ ${c.keep_days} วัน (อย่างน้อย 3 ไฟล์ล่าสุดเสมอ) · bucket ${c.bucket}`]
+      : [c.missing.length && c.missing.length < 3 ? 'ยังขาด ' + c.missing.join(' · ') : 'ยังไม่ได้ตั้งค่า (ทำตามวิธีด้านล่าง)'];
+    if (last) parts.push(last.ok ? `ล่าสุด ${when(last.at)} สำเร็จ ${kb(last.size)} โดย ${last.by}`
+      : `ล่าสุด ${when(last.at)} ไม่สำเร็จ: ${last.error}`);
+    if (b.files_error) parts.push('ดูรายการไฟล์ไม่ได้: ' + b.files_error);
+    $('#auto-state').innerHTML = badge + ' ' + esc(parts.join(' · '));
+    $('#auto-files-box').hidden = !b.files.length;
+    $('#auto-files').innerHTML = b.files.map(f => `<tr><td class="mono">${esc(f.name)}</td><td>${f.size ? kb(f.size) : '–'}</td>
+      <td><a class="btn small" href="/api/system/backups/${encodeURIComponent(f.name)}" download>ดาวน์โหลด</a></td></tr>`).join('');
+  }
+
   function render() {
     $('#sub').textContent = (data.mode === 'supabase' ? 'เชื่อมฐานข้อมูล Supabase' : 'โหมดสาธิต (ไม่มีฐานข้อมูล)')
       + (data.version ? ` · เวอร์ชัน ${data.version}` : '') + ' · ตรวจเมื่อ ' + new Date().toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
@@ -438,7 +489,18 @@
       <div>${mark(r.ok ? 'ok' : 'bad')}<span><span class="mono">${esc(r.name)}</span>${r.ok ? ' · สำเร็จ' : ` · <b>${r.skipped ? 'ข้าม' : 'ไม่สำเร็จ'}</b>: ${esc(r.error)}`}</span></div>`).join('')}</div>`;
   }
 
-  $('#reload').addEventListener('click', () => { $('#run-results').innerHTML = ''; load(); loadFeedback().catch(() => {}); });
+  $('#reload').addEventListener('click', () => { $('#run-results').innerHTML = ''; load().then(loadBackups); loadFeedback().catch(() => {}); });
+  $('#auto-run').addEventListener('click', async () => {
+    if (!confirm('สำรองข้อมูลทั้งหมดไปที่ Supabase Storage ตอนนี้? (ใช้เวลาประมาณ 1 นาที)')) return;
+    const button = $('#auto-run');
+    button.disabled = true; $('#auto-msg').textContent = 'กำลังสำรองข้อมูล…';
+    try {
+      const out = await api('/api/system/backups/run', { confirm: true });
+      $('#auto-msg').textContent = `สำเร็จ: ${out.result.name} (${kb(out.result.size)})`;
+      renderBackups(out);
+      await load();
+    } catch (e) { $('#auto-msg').textContent = e.message; await loadBackups(); } finally { button.disabled = false; }
+  });
   $('#backup').addEventListener('click', () => { $('#backup-error').hidden = true; $('#backup-confirm').showModal(); });
   $('#backup-cancel').addEventListener('click', () => $('#backup-confirm').close());
   $('#backup-ok').addEventListener('click', async () => {
@@ -510,6 +572,7 @@
       return;
     }
     await Promise.all([load(), loadFeedback()]);
+    loadBackups();
     if (location.hash) document.getElementById(location.hash.slice(1))?.scrollIntoView();  // link from a notification
   })().catch(e => {
     $('#summary').hidden = false;

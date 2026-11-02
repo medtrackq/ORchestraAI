@@ -7,3 +7,4 @@ anthropic>=2.0
 pywebpush>=2.0
 openpyxl>=3.1
 segno>=1.6        # QR code for setting up two-step sign-in (pure Python)
+cryptography>=42  # AES-GCM for the nightly encrypted backup (also needed by pywebpush)
