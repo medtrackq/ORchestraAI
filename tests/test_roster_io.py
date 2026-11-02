@@ -156,7 +156,8 @@ def test_roster_import_replaces_the_days_in_the_file(admin, store, db_url):
         ws.cell(malee, col + 1).value = None  # blank: no shift that day
     ws.cell(_row(ws, "SCR-2"), col).value = "07:30-15:30"
     data = _save(wb)
-    activity = len(store.state()["activity"])
+    logged_on = day.replace(day=1).isoformat()  # the import is logged on the first day the file covers
+    activity = len(store.state(logged_on)["activity"])
 
     preview = rio.import_roster(admin, "nov.xlsx", data, commit=False)
     assert preview["errors"] == [] and not preview["committed"]
@@ -172,7 +173,7 @@ def test_roster_import_replaces_the_days_in_the_file(admin, store, db_url):
     if col + 1 <= ws.max_column:
         assert _shifts(db_url, "SCR-1", day + timedelta(days=1)) == []
     assert _shifts(db_url, "SCR-3", day) == [("REGULAR", "08:00", "16:00", None)]  # untouched cell: kept
-    assert len(store.state()["activity"]) == activity + 1  # one entry for the file
+    assert len(store.state(logged_on)["activity"]) == activity + 1  # one entry for the file
     assert rio.import_roster(admin, "nov.xlsx", data, commit=False)["days"] == 0
 
 

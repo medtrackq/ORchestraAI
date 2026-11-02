@@ -64,7 +64,8 @@ orchestra_engine/        engine (ไม่รู้จักเว็บหร�
 
 app/
   main.py                FastAPI: middleware, ทุก route, การประกอบ store / notifier / งานเบื้องหลัง
-  auth.py                บัญชี บทบาท PERMISSIONS session cookie การจำกัดการ login
+  auth.py                บัญชี บทบาท PERMISSIONS session cookie การจำกัดการ login และขั้นตอนยืนยันตัวตน 2 ชั้น
+  twofactor.py           รหัส 6 หลัก (TOTP, RFC 6238), รหัสสำรอง, QR code (segno)
   store.py               ScheduleStore (demo) + ตัวช่วยที่ใช้ร่วมกัน (build_case, StoreError, Activity …)
   db_store.py            DatabaseStore: งานทุกอย่างในโหมด Supabase (ธุรกรรม, outbox ของ event)
   db.py                  Database: load (World), save, pending, การตรวจคอลัมน์ที่มีจริง
@@ -81,7 +82,7 @@ app/
   reports.py, blocks.py, cancellations.py, milestones.py, seed.py, intake_*.py
   static/                หน้าเว็บทั้งหมด + feedback.js (ใช้ร่วมกัน) + sw.js (Web Push)
 
-supabase/migrations/     ไฟล์ SQL ตามลำดับเวลา (001 … 017)
+supabase/migrations/     ไฟล์ SQL ตามลำดับเวลา (001 … 018)
 tests/                   pytest (โหมด demo + โหมด Supabase กับ PostgreSQL จริง)
 docs/                    คู่มือนี้ และ BACKLOG
 ```
@@ -294,7 +295,9 @@ TEST_DATABASE_URL=postgresql://postgres@localhost/postgres .venv/bin/python -m p
 - **ตรวจสิทธิ์ที่ API เสมอ:** ใช้ `_user(request, "<permission>")` หรือ `_admin(...)` ตาม `PERMISSIONS` ใน `app/auth.py` การซ่อนปุ่มในหน้าเว็บไม่นับเป็นการกันสิทธิ์
 - **ศัลยแพทย์จัดการได้เฉพาะเคสของตัวเอง:** ใช้ `check_own_case` / `_own_case`
 - **กำหนดขอบเขตข้อมูลขาเข้า:** ใช้ pydantic `Field(max_length=…, ge=…, le=…)` ทุกช่อง
-- **key, token และรหัสผ่านเก็บเป็น hash เท่านั้น:** ดูตัวอย่างที่ `his._hash`
+- **key, token และรหัสผ่านเก็บเป็น hash เท่านั้น:** ดูตัวอย่างที่ `his._hash` (ข้อยกเว้น: รหัสลับ TOTP ต้องเก็บแบบอ่านได้ เพราะใช้คำนวณรหัส จึงต้องรักษาไฟล์สำรองข้อมูลให้ดี)
+- **endpoint ใหม่กับบัญชีที่ต้องตั้งยืนยันตัวตน 2 ชั้น:** middleware ปิดทุก API ยกเว้น `ALLOWED_WHILE_2FA_SETUP` และพาหน้าเว็บไปที่ `/security` · ถ้าหน้าใหม่ต้องเปิดได้ระหว่างนั้น เพิ่มใน `PAGES_WHILE_2FA_SETUP`
+- **token ที่ใช้ชั่วคราว** (ระหว่างรหัสผ่านกับรหัส 6 หลัก, ตั้งค่า QR) เซ็นด้วยกุญแจแยกจาก session (`Accounts.pending_signer` / `setup_signer`) จึงใช้แทน session ไม่ได้ · ทำแบบเดียวกันเมื่อเพิ่ม token ชนิดใหม่
 - **ห้าม log ค่าลับหรือข้อมูลผู้ป่วย:** ข้อผิดพลาดที่ log ด้วย logger `orchestra.*` ระดับ ERROR จะไปขึ้นหน้า ⚙ สถานะระบบด้วย (ผ่าน `mask_identifiers` และเก็บเฉพาะบรรทัดแรกของ exception ด้วย `feedback.describe` เพราะ error ของฐานข้อมูลมีแถวข้อมูลผู้ป่วยในบรรทัดถัดไป)
 - **regex กับข้อความที่ผู้ใช้ส่งมา:** ต้องใช้เวลาเชิงเส้น ห้ามมี `\s*` สองตัวติดกันโดยมีตัวเลือกคั่น (เช่น `\s*-?\s*`) หรือ `\(.*?\)` (ใช้ `\([^()]*\)`) และตัดความยาวข้อความก่อน · Python `re` ถือ GIL ทั้งเซิร์ฟเวอร์จะหยุดรอ · มีเทสต์จับเวลาใน `test_intake.py`
 - **ขนาดข้อมูลขาเข้า:** ปรับ `BODY_LIMITS` ใน `main.py` เมื่อเพิ่ม endpoint ที่ไม่ต้องรับไฟล์ · error 422 ไม่ส่งค่าที่ได้รับกลับไป

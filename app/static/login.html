@@ -98,6 +98,9 @@
   .primary:disabled { opacity: .65; cursor: progress; transform: none; }
   .primary .ico { width: 20px; height: 20px; }
   .error { background: var(--bad-soft); color: var(--bad); border: 1px solid #fca5a5; border-radius: 12px; padding: 10px 12px; font-size: .88rem; }
+  .code-hint { margin: -8px 0 0; font-size: .84rem; color: var(--ink-3); }
+  .text-btn { justify-self: center; border: 0; background: none; color: var(--accent); cursor: pointer; font: inherit; font-size: .88rem; padding: 4px 8px; }
+  #otp { letter-spacing: .25em; font-variant-numeric: tabular-nums; }
   .card-foot { margin: 22px 0 0; display: grid; gap: 8px; justify-items: center; text-align: center; font-size: .84rem; color: var(--ink-3); }
   .card-foot .safe { display: flex; align-items: center; gap: 8px; }
   .card-foot .safe .ico { width: 17px; height: 17px; color: var(--ok); }
@@ -210,6 +213,18 @@
         <button class="primary" type="submit"><span>เข้าสู่ระบบ</span><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
       </form>
 
+      <form id="code" hidden>
+        <div class="field">
+          <label for="otp">รหัส 6 หลักจากแอปยืนยันตัวตน</label>
+          <div class="input"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="2.5" width="10" height="19" rx="2.2"/><path d="M11 18.5h2"/></svg>
+            <input id="otp" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="20" required placeholder="000000" spellcheck="false"></div>
+        </div>
+        <p class="code-hint">เปิดแอป (เช่น Google Authenticator) ดูรหัสของ ORchestraAI · มือถือหาย? กรอกรหัสสำรองแทนได้</p>
+        <div class="error" id="code-error" role="alert" hidden></div>
+        <button class="primary" type="submit"><span>ยืนยันและเข้าใช้งาน</span><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
+        <button class="text-btn" type="button" id="code-back">← กลับไปกรอกรหัสผ่าน</button>
+      </form>
+
       <form id="change" hidden>
         <div class="field">
           <label for="new-password">รหัสผ่านใหม่ (อย่างน้อย 10 ตัวอักษร)</label>
@@ -252,23 +267,55 @@
   }
   function show(id, message) { const el = document.getElementById(id); el.textContent = message; el.hidden = !message; }
 
+  function step(formId, title, subtitle, focusId) {
+    ['login', 'code', 'change'].forEach(id => { document.getElementById(id).hidden = id !== formId; });
+    document.getElementById('login-title').textContent = title;
+    document.getElementById('subtitle').textContent = subtitle;
+    document.getElementById(focusId).focus();
+  }
+
+  function signedIn(user, used) {
+    if (user.must_change_password) {
+      step('change', 'ตั้งรหัสผ่านใหม่', 'สวัสดี ' + user.display_name + ' · กรุณาตั้งรหัสผ่านใหม่แทนรหัสชั่วคราว', 'new-password');
+    } else if (used && used.used === 'recovery') {  // came in without the phone: set up the new one next
+      alert('ใช้รหัสสำรองแล้ว (เหลือ ' + used.recovery_left + ' รหัส) · ถ้ามือถือหาย ให้ตั้งค่ามือถือเครื่องใหม่ในหน้าถัดไป');
+      location.href = '/security';
+    } else {
+      location.href = '/';
+    }
+  }
+
   document.getElementById('login').addEventListener('submit', async e => {
     e.preventDefault();
     const f = new FormData(e.target), button = e.target.querySelector('button[type="submit"]');
     button.disabled = true; show('login-error', '');
     try {
       const data = await post('/api/login', { username: f.get('username'), password: f.get('password') });
-      if (data.user.must_change_password) {
-        temporaryPassword = f.get('password');
-        e.target.hidden = true;
-        document.getElementById('change').hidden = false;
-        document.getElementById('login-title').textContent = 'ตั้งรหัสผ่านใหม่';
-        document.getElementById('subtitle').textContent = 'สวัสดี ' + data.user.display_name + ' · กรุณาตั้งรหัสผ่านใหม่แทนรหัสชั่วคราว';
-        document.getElementById('new-password').focus();
+      temporaryPassword = f.get('password');
+      if (data.needs_code) {
+        step('code', 'ยืนยันตัวตน 2 ชั้น', 'สวัสดี ' + data.display_name + ' · กรอกรหัสจากแอปในมือถือ', 'otp');
       } else {
-        location.href = '/';
+        signedIn(data.user);
       }
     } catch (err) { show('login-error', err.message); } finally { button.disabled = false; }
+  });
+
+  document.getElementById('code').addEventListener('submit', async e => {
+    e.preventDefault();
+    const button = e.target.querySelector('button[type="submit"]');
+    button.disabled = true; show('code-error', '');
+    try {
+      const data = await post('/api/login/code', { code: document.getElementById('otp').value.trim() });
+      signedIn(data.user, data);
+    } catch (err) {
+      show('code-error', err.message);
+      document.getElementById('otp').select();
+      if (/เข้าสู่ระบบใหม่|หมดเวลา/.test(err.message)) setTimeout(() => location.reload(), 2500);
+    } finally { button.disabled = false; }
+  });
+  document.getElementById('code-back').addEventListener('click', () => {
+    document.getElementById('otp').value = ''; show('code-error', '');
+    step('login', 'เข้าสู่ระบบ', 'ระบบนัดผ่าตัดอัจฉริยะ', 'password');
   });
 
   document.getElementById('change').addEventListener('submit', async e => {

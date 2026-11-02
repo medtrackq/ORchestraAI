@@ -69,6 +69,7 @@ def test_time_per_step_for_the_report():
 
 def test_demo_store_steps():
     s = ScheduleStore(workers=2, time_limit_s=10)
+    s._clock = lambda: 12 * 60  # noon: the times below are in the past whenever the tests run
     first = s.state()["schedule"]["bookings"][0]
     case, team = first["case_id"], _team(first)
     with pytest.raises(Forbidden, match="ทีม"):  # not on this case: may not set its actual start
