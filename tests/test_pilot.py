@@ -44,7 +44,8 @@ def test_every_role_has_test_steps_and_the_tabs_match():
 
 
 def test_the_demo_data_the_steps_use_exists():
-    state = ScheduleStore(workers=2, time_limit_s=10).state()
+    demo = ScheduleStore(workers=2, time_limit_s=10)
+    state = demo.state()
     options = state["options"]
     surgeons = {s["name"].split(" ")[0] for s in options["surgeons"]}
     procedures = {p["name"] for p in options["procedures"]}
@@ -57,8 +58,8 @@ def test_the_demo_data_the_steps_use_exists():
         assert name in text and name in procedures, name
     assert set(re.findall(r"OR-\d", text)) <= rooms
     assert {b["case_id"] for b in state["schedule"]["bookings"]} >= {"C01", "C10"}
-    units = {u["unit_id"] for u in state["cssd"]}
-    assert {"LAP-01", "DV-01"} <= units
+    units = {u.unit_id for u in demo.hospital.equipments}  # the CSSD tab lists only sets still needed today (time of day)
+    assert set(re.findall(r"\b[A-Z]{2,4}-0\d\b", text)) <= units
 
 
 def test_the_kit_opens_before_signing_in_and_is_linked():
