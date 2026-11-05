@@ -25,7 +25,8 @@ from test_backup import _busy_day, _counts, target_url  # noqa: F401  (fixtures)
 from test_db import ADMIN_URL, _rows, db_url, store  # noqa: F401  (fixtures)
 
 needs_db = pytest.mark.skipif(not ADMIN_URL, reason="set TEST_DATABASE_URL to run database tests")
-KEY = "test-service-role-key"
+KEY = "eyJ.test-service-role-key"  # a legacy service_role key is a JWT
+SECRET_KEY = "sb_secret_test0123456789"  # Supabase's new secret keys
 PASSPHRASE = "correct horse battery staple 42"
 
 
@@ -36,6 +37,7 @@ class FakeStorage:
         self.buckets: dict[str, dict] = {}
         self.fail_upload: int | None = None
         self.uploads = 0
+        self.auth_seen: list[tuple] = []
         handler = self._handler()
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
         self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
@@ -63,7 +65,11 @@ class FakeStorage:
                 return self.rfile.read(int(self.headers.get("Content-Length") or 0))
 
             def _authorised(self) -> bool:
-                if self.headers.get("Authorization") != f"Bearer {KEY}" or self.headers.get("apikey") != KEY:
+                key, bearer = self.headers.get("apikey"), self.headers.get("Authorization")
+                fake.auth_seen.append((key, bearer))
+                legacy = key == KEY and bearer == f"Bearer {KEY}"  # service_role JWT: both headers
+                secret = key == SECRET_KEY and bearer is None  # sb_secret_...: not a JWT, apikey header only
+                if not (legacy or secret):
                     self._send(401, {"error": "Invalid JWT"})
                     return False
                 return True
@@ -244,6 +250,13 @@ def test_failed_nights_are_recorded_tried_three_times_then_tomorrow(store, db_ur
     tomorrow = night + timedelta(days=1)
     assert timer.tick(tomorrow)["ok"] and timer.tick(tomorrow) is None  # once a night
     assert _rows(db_url, "SELECT value FROM app_settings WHERE key = %s", f"backup_run:{tomorrow.date().isoformat()}") == [("done",)]
+
+
+@needs_db
+def test_the_new_secret_keys_work_too(store, fake_storage, monkeypatch):
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", SECRET_KEY)
+    assert ab.run(store)["ok"]
+    assert set(fake_storage.auth_seen) == {(SECRET_KEY, None)}  # never sent as a Bearer token
 
 
 @needs_db
