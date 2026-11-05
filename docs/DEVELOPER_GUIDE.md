@@ -265,6 +265,7 @@ TEST_DATABASE_URL=postgresql://postgres@localhost/postgres .venv/bin/python -m p
 **เทสต์ที่คุมคุณภาพทั้งระบบ:**
 - `test_thai_messages.py`: ข้อความที่ผู้ใช้เห็นต้องเป็นภาษาไทย
 - `test_help.py`: ทุกปุ่ม (`<kbd>`) ที่คู่มือ `/help` อ้างถึงต้องมีจริงในหน้าเว็บ ถ้าเปลี่ยนชื่อปุ่มต้องแก้คู่มือด้วย
+- `test_pilot.py`: เหมือนกันสำหรับชุดทดลองใช้งาน `/pilot` และตรวจว่าข้อมูลตัวอย่างที่ขั้นตอนทดสอบใช้ (แพทย์ หัตถการ ห้อง เครื่องมือ) ยังมีอยู่
 - `test_security.py`: header ความปลอดภัยและขนาดคำขอ, การจำกัดการ login, การออกจากระบบ, สิทธิ์ตามบทบาท, ไฟล์ Excel/CSV, ปลายทางแจ้งเตือน
 - `test_backup.py`: สำรองแล้วกู้คืนได้ครบทุกตาราง
 - `test_autobackup.py`: เข้ารหัส/ถอดรหัส, Supabase Storage ปลอมบน 127.0.0.1, ลบไฟล์เก่า, ตั้งเวลา, API
@@ -355,7 +356,7 @@ TEST_DATABASE_URL=postgresql://postgres@localhost/postgres .venv/bin/python -m p
 3. **ตั้งเวลา:** เรียกตามรอบด้วยงานตั้งเวลา (หัวข้อก่อนหน้า)
 
 ### เปลี่ยนชื่อปุ่มหรือข้อความบนหน้าเว็บ
-- ค้นใน `app/static/help.html` ว่าคู่มืออ้างชื่อเดิมไหม (`test_help.py` จะตกถ้าลืม) และค้นใน `tests/` ว่ามีเทสต์ตรวจข้อความนั้นหรือไม่
+- ค้นใน `app/static/help.html` และ `app/static/pilot.html` ว่าอ้างชื่อเดิมไหม (`test_help.py` / `test_pilot.py` จะตกถ้าลืม) และค้นใน `tests/` ว่ามีเทสต์ตรวจข้อความนั้นหรือไม่
 
 ---
 
