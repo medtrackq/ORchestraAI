@@ -211,12 +211,27 @@ def settings(mode: str, llm_enabled: bool, push_state: str | None) -> list[dict]
         ("READINESS_DIGEST_HOUR", "เวลาส่งสรุปเคสวันถัดไปที่ยังไม่พร้อม", digest.lower() != "off",
          "ปิด" if digest.lower() in ("off", "none", "-1") else f"{digest}:00 น." + ("" if _env("READINESS_DIGEST_HOUR")
                                                                                  else " (ค่าตั้งต้น)"), False),
+        _backup_row(mode),
         ("APP_TIMEZONE", "เขตเวลา", True, _env("APP_TIMEZONE") or "Asia/Bangkok (ค่าตั้งต้น)", False),
         ("SOLVER_WORKERS / SOLVER_TIME_LIMIT", "กำลังคำนวณตาราง", True,
          f"{_env('SOLVER_WORKERS') or '2'} worker · ไม่เกิน {_env('SOLVER_TIME_LIMIT') or '10'} วินาที", False),
     ]
     return [{"key": k, "label": label, "ok": ok, "value": value, "required": required}
             for k, label, ok, value, required in rows]
+
+
+def _backup_row(mode: str) -> tuple:
+    from .autobackup import Config
+
+    config = Config.from_env(_env("DATABASE_URL") or None)
+    if config.ready:
+        value = f"ตั้งแล้ว · ทุกคืน {config.hour:02d}:00 · เก็บ {config.keep_days} วัน ใน bucket {config.bucket}"
+    elif not _env("BACKUP_ENCRYPTION_KEY") and not _env("SUPABASE_SERVICE_ROLE_KEY"):
+        value = "ไม่ได้ตั้ง: ต้องดาวน์โหลดไฟล์สำรองเอง" if mode == "supabase" else "ใช้ได้เมื่อเชื่อม Supabase"
+    else:
+        value = "ยังขาด " + " · ".join(config.missing())
+    return ("BACKUP_ENCRYPTION_KEY / SUPABASE_SERVICE_ROLE_KEY", "สำรองข้อมูลอัตโนมัติทุกคืน (เข้ารหัส เก็บใน Supabase Storage)",
+            config.ready, value, False)
 
 
 def version() -> str | None:
@@ -348,11 +363,15 @@ def operations(conn, tz, now: datetime | None = None) -> tuple[dict, list[dict]]
     if has_settings:
         setting = {r["key"]: r["value"] for r in conn.execute(
             """SELECT key, value FROM app_settings WHERE key IN ('server_boots', 'backup_last', 'job:digest',
-                   'retention_last_run', 'retention_patient_days')""")}
+                   'retention_last_run', 'retention_patient_days', 'backup_auto_last')""")}
     parse = lambda v: datetime.fromisoformat(v).astimezone(tz) if v else None  # noqa: E731
     boots = [parse(b) for b in json.loads(setting.get("server_boots") or "[]")]
     recent = [b for b in boots if b and now - b < timedelta(hours=24)]
     backup = json.loads(setting["backup_last"]) if setting.get("backup_last") else None
+    from .autobackup import Config
+
+    auto = Config.from_env(_env("DATABASE_URL") or None)
+    auto_last = json.loads(setting["backup_auto_last"]) if setting.get("backup_auto_last") else None
     hour = digest_hour()
     digest = parse(setting.get("job:digest"))
     retention = parse(setting.get("retention_last_run"))
@@ -361,14 +380,27 @@ def operations(conn, tz, now: datetime | None = None) -> tuple[dict, list[dict]]
             "boots_24h": len(recent), "backup": backup, "digest_hour": hour,
             "digest_last": digest.isoformat(timespec="minutes") if digest else None,
             "retention_last": retention.isoformat(timespec="minutes") if retention else None,
-            "retention_on": bool(setting.get("retention_patient_days"))}
+            "retention_on": bool(setting.get("retention_patient_days")),
+            "auto_backup": {"config": auto.public(), "last": auto_last}}
     checks = []
 
     def add(label, status, detail, link="#server"):
         checks.append({"label": label, "status": status, "detail": detail, "link": link})
 
-    if backup is None:
-        add("สำรองข้อมูล", "warn", "ยังไม่เคยดาวน์โหลดไฟล์สำรอง · Supabase แผนฟรีไม่มีการสำรองข้อมูลอัตโนมัติ")
+    if auto.ready:
+        when = parse(auto_last["at"]) if auto_last else None
+        if auto_last is None:
+            add("สำรองข้อมูล", "warn", f"ตั้งสำรองอัตโนมัติแล้ว จะเริ่มคืนนี้ {auto.hour:02d}:00 · กด “สำรองตอนนี้” เพื่อทดสอบ")
+        elif not auto_last.get("ok"):
+            add("สำรองข้อมูล", "bad", f"สำรองอัตโนมัติไม่สำเร็จเมื่อ {when:%d/%m %H:%M}: {auto_last.get('error') or '-'}")
+        elif now - when > timedelta(hours=50):
+            add("สำรองข้อมูล", "warn", f"สำรองอัตโนมัติครั้งล่าสุด {(now - when).days} วันก่อน (ตั้งไว้ {auto.hour:02d}:00) "
+                "· เซิร์ฟเวอร์อาจหลับอยู่ตอนนั้น")
+        else:
+            add("สำรองข้อมูล", "ok", f"อัตโนมัติทุกคืน (เข้ารหัส) · ล่าสุด {when:%d/%m %H:%M} · เก็บไว้ {auto_last.get('kept', 0)} ไฟล์")
+    elif backup is None:
+        add("สำรองข้อมูล", "warn", "ยังไม่เคยดาวน์โหลดไฟล์สำรอง · Supabase แผนฟรีไม่มีการสำรองข้อมูลอัตโนมัติ "
+            "(ตั้งสำรองอัตโนมัติได้ ดูหัวข้อเซิร์ฟเวอร์ด้านล่าง)")
     else:
         age = (now - parse(backup["at"])).days
         add("สำรองข้อมูล", "ok" if age < BACKUP_WARN_DAYS else "warn",

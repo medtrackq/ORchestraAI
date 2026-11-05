@@ -75,17 +75,20 @@ def match(secret: str, code: str, *, last_step: int | None = None, now: float | 
 
 
 def uri(secret: str, account: str) -> str:
-    """What the QR code holds (the format every authenticator app reads)."""
-    label = quote(f"{ISSUER}:{account}")
-    return (f"otpauth://totp/{label}?secret={secret}&issuer={quote(ISSUER)}"
-            f"&algorithm=SHA1&digits={DIGITS}&period={STEP_S}")
+    """What the QR code holds, in the form Google's own documentation shows (SHA-1, 6 digits and 30 seconds
+    are what every app assumes, so they are left out: a shorter text makes a QR code with bigger dots)."""
+    label = quote(f"{ISSUER}:{account}", safe=":@")
+    return f"otpauth://totp/{label}?secret={secret}&issuer={quote(ISSUER)}"
 
 
 def qr_svg(text: str) -> str:
-    """The QR code as inline SVG (drawn on the server: no script from elsewhere, nothing sent out)."""
+    """The QR code as inline SVG (drawn on the server: no script from elsewhere, nothing sent out).
+    It scales to whatever size the page gives it (``viewBox``, no fixed size: a fixed size squeezed by CSS
+    cut the code off) and keeps the 4-dot white margin scanners need."""
     import segno
 
-    return segno.make_qr(text, error="m").svg_inline(scale=5, border=2, dark="#0b2530", light="#ffffff")
+    return segno.make_qr(text, error="m").svg_inline(scale=5, border=4, dark="#000000", light="#ffffff",
+                                                     omitsize=True)
 
 
 def new_recovery_codes() -> list[str]:

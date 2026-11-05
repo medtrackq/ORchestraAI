@@ -59,6 +59,14 @@ def test_codes_follow_rfc_6238():
     assert tf.valid_secret(tf.new_secret()) and not tf.valid_secret("ABC")
 
 
+def test_the_qr_code_scales_without_being_cut_off():
+    svg = tf.qr_svg(tf.uri(tf.new_secret(), "orchestra"))
+    root = svg[:svg.index(">")]
+    # the page sizes it with CSS: a fixed width/height without a viewBox was cropped, and no app could read it
+    assert 'viewBox="0 0' in root and "width=" not in root and "height=" not in root
+    assert tf.uri("ABCD", "orchestra") == "otpauth://totp/ORchestraAI:orchestra?secret=ABCD&issuer=ORchestraAI"
+
+
 # ------------------------------------------------------------------ demo mode (accounts in memory)
 
 def test_turn_on_then_sign_in_with_a_code_or_a_recovery_code(owner, clock):
