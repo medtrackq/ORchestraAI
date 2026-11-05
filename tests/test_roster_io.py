@@ -131,7 +131,8 @@ def test_downloaded_roster_reads_back_unchanged(admin):
     ws = wb[month]
     assert [ws.cell(2, c).value for c in (1, 2, 3)] == ["รหัสพนักงาน", "ชื่อ-นามสกุล", "บทบาท"]
     assert ws.cell(3, 2).value == rio.WEEKDAY_ROW and isinstance(ws.cell(2, 4).value, datetime)
-    assert ws.cell(_row(ws, "SUR-GEN"), 4).value == "ช"  # the demo's 08:00-16:00 is the morning code
+    # the demo's 08:00-16:00 is the morning code (the demo has shifts from yesterday on: today's column)
+    assert ws.cell(_row(ws, "SUR-GEN"), _col(ws, admin.db.today())).value == "ช"
     report = rio.import_roster(admin, "same.xlsx", data, commit=True)
     assert report["errors"] == [] and report["days"] == 0 and not report["committed"]
     assert report["unchanged"] == report["people"] * len([c for c in range(4, ws.max_column + 1)])
