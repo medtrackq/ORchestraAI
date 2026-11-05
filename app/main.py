@@ -100,7 +100,7 @@ app = FastAPI(title="ORchestraAI", docs_url="/api/docs", redoc_url=None, openapi
               redirect_slashes=False,  # no "/x/" -> "http://.../x" hop (an API key could follow it unencrypted)
               lifespan=_lifespan)
 
-PUBLIC = {"/login", "/help", "/api/login", "/api/login/code", "/api/health", "/api/line/webhook", "/sw.js", "/feedback.js", "/manifest.webmanifest",
+PUBLIC = {"/login", "/help", "/pilot", "/api/login", "/api/login/code", "/api/health", "/api/line/webhook", "/sw.js", "/feedback.js", "/manifest.webmanifest",
           "/icons/icon-192.png", "/icons/icon-512.png", "/icons/apple-touch-icon.png", "/icons/badge-96.png"}
 ALLOWED_WHILE_TEMPORARY = {"/api/me", "/api/password", "/api/logout"}
 # A role that must use two-step sign-in and has not set it up yet: only setting it up (and leaving).
@@ -404,6 +404,13 @@ def status_page() -> FileResponse:
 def help_page() -> FileResponse:
     """User manual per role (Thai), readable before signing in and printable for training."""
     return FileResponse(ROOT / "static" / "help.html")
+
+
+@app.get("/pilot", include_in_schema=False)
+def pilot_page() -> FileResponse:
+    """Trying the system at a hospital: a 2-week plan, test steps per role, the evaluation form (printable,
+    readable before signing in, like the manual)."""
+    return FileResponse(ROOT / "static" / "pilot.html")
 
 
 @app.get("/privacy", include_in_schema=False)

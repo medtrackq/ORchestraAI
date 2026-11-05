@@ -1,0 +1,558 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ชุดทดลองใช้งาน · ORchestraAI</title>
+<link href="https://fonts.googleapis.com/css2?family=Prompt:wght@400;500;600&family=Sarabun:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #f4f6fb; --surface: #ffffff; --surface-2: #f8fafc; --text: #0f172a; --muted: #5b6b80;
+    --border: #e2e8f0; --accent: #0e7490; --accent-soft: #e0f2fe; --ok: #047857; --ok-soft: #d1fae5;
+    --bad: #b91c1c; --bad-soft: #fee2e2; --warn: #92400e; --warn-soft: #fef3c7;
+    --shadow: 0 1px 3px rgba(15,23,42,.08), 0 8px 24px rgba(15,23,42,.06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --bg: #0b1220; --surface: #111a2e; --surface-2: #0f172a; --text: #e2e8f0; --muted: #94a3b8;
+      --border: #1f2a44; --accent: #22d3ee; --accent-soft: rgba(34,211,238,.12); --ok: #34d399; --ok-soft: rgba(16,185,129,.15);
+      --bad: #f87171; --bad-soft: rgba(239,68,68,.15); --warn: #fbbf24; --warn-soft: rgba(245,158,11,.15); --shadow: none;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #0b1220; --surface: #111a2e; --surface-2: #0f172a; --text: #e2e8f0; --muted: #94a3b8;
+    --border: #1f2a44; --accent: #22d3ee; --accent-soft: rgba(34,211,238,.12); --ok: #34d399; --ok-soft: rgba(16,185,129,.15);
+    --bad: #f87171; --bad-soft: rgba(239,68,68,.15); --warn: #fbbf24; --warn-soft: rgba(245,158,11,.15); --shadow: none;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.7 'Sarabun', 'Prompt', 'Noto Sans Thai', system-ui, sans-serif; }
+  button, input, textarea { font: inherit; color: inherit; }
+  h1, h2, h3, .tabs button, .btn { font-family: 'Prompt', 'Sarabun', system-ui, sans-serif; }
+  .top { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; padding: 14px 24px; background: var(--surface); border-bottom: 1px solid var(--border); }
+  .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
+  .orb { width: 14px; height: 14px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 12px var(--accent); flex: none; }
+  .brand h1 { margin: 0; font-size: 1.15rem; }
+  .brand p { margin: 0; font-size: .82rem; color: var(--muted); }
+  .top nav { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .btn { border: 1px solid var(--border); background: var(--surface); padding: 7px 14px; border-radius: 8px; cursor: pointer; text-decoration: none; color: var(--text); font-size: .86rem; display: inline-block; }
+  .btn:hover { border-color: var(--accent); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  :root[data-theme="dark"] .btn.primary { color: #04121a; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .btn.primary { color: #04121a; } }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .tabs { position: sticky; top: 0; z-index: 5; display: flex; gap: 4px; flex-wrap: wrap; padding: 8px 24px; background: var(--bg); border-bottom: 1px solid var(--border); }
+  .tabs button { border: 1px solid transparent; background: transparent; padding: 7px 12px; border-radius: 8px; cursor: pointer; font-size: .88rem; color: var(--muted); }
+  .tabs button[aria-selected="true"] { background: var(--accent-soft); color: var(--text); font-weight: 600; border-color: var(--accent); }
+  main { max-width: 960px; margin: 0 auto; padding: 20px 24px 60px; }
+  .part { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow); padding: 24px 28px; }
+  .part > h2 { margin: 0 0 4px; font-size: 1.35rem; }
+  .part > .who { margin: 0 0 16px; color: var(--muted); }
+  h3 { font-size: 1.08rem; margin: 26px 0 8px; padding-top: 10px; border-top: 1px solid var(--border); }
+  h3:first-of-type { border-top: 0; padding-top: 0; }
+  h4 { font-size: .98rem; margin: 16px 0 6px; }
+  p { margin: 6px 0; }
+  ol, ul { margin: 6px 0; padding-left: 24px; }
+  li { margin: 3px 0; }
+  kbd { font: 500 .86em/1.4 'Prompt', 'Sarabun', sans-serif; background: var(--surface-2); border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 6px; padding: 1px 7px; white-space: nowrap; }
+  .tip, .warn, .pdpa { border-radius: 10px; padding: 10px 14px; margin: 12px 0; font-size: .94rem; }
+  .tip { background: var(--accent-soft); }
+  .warn { background: var(--warn-soft); }
+  .pdpa { background: var(--bad-soft); }
+  .tip > b:first-child, .warn > b:first-child, .pdpa > b:first-child { display: block; }
+  table { width: 100%; border-collapse: collapse; font-size: .92rem; margin: 8px 0; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: .84rem; }
+  .table-scroll { overflow-x: auto; }
+  .timeline { display: grid; gap: 10px; margin: 10px 0; }
+  .phase { border: 1px solid var(--border); border-left: 4px solid var(--accent); border-radius: 10px; padding: 10px 14px; }
+  .phase b.when { font-family: 'Prompt', sans-serif; }
+  .phase ul { margin-top: 4px; }
+  .fill { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 4px 0 10px; font-size: .92rem; }
+  .fill > span { white-space: normal; }  /* long choice lists wrap on a phone */
+  .line { display: inline-block; min-width: 9em; border-bottom: 1px dotted var(--muted); }
+  table.script td:first-child { width: 2.4em; color: var(--muted); font-variant-numeric: tabular-nums; }
+  table.script td.result { width: 8.5em; white-space: nowrap; font-size: .88rem; }
+  table.script td.note { width: 9em; }
+  table.script .expect { color: var(--muted); font-size: .9rem; }
+  table.sus td.n { width: 2em; color: var(--muted); }
+  table.sus td.scale { white-space: nowrap; letter-spacing: .3em; text-align: center; width: 9.5em; }
+  table.log td { height: 2.4em; }
+  .calc { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; margin: 12px 0; background: var(--surface-2); }
+  .calc textarea { width: 100%; min-height: 7em; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); font-family: ui-monospace, Menlo, monospace; font-size: .9rem; }
+  .calc .out { margin-top: 8px; font-size: .92rem; }
+  .hint { color: var(--muted); font-size: .88rem; }
+  .print-head { display: none; }
+  [hidden] { display: none !important; }
+  @media (max-width: 640px) {
+    .top, main, .tabs { padding-left: 16px; padding-right: 16px; }
+    .part { padding: 18px 16px; }
+    kbd { white-space: normal; }
+    table.script td.note { display: none; }
+  }
+  @page { size: A4 portrait; margin: 13mm 13mm 15mm; }
+  @media print {
+    :root { color-scheme: light; --bg: #fff; --surface: #fff; --surface-2: #f6f7f9; --text: #000; --muted: #444; --border: #bbb;
+            --accent: #0b5f74; --accent-soft: #e8f3f6; --warn-soft: #fff6dc; --bad-soft: #fdecec; --shadow: none; }
+    body { font-size: 11pt; line-height: 1.5; background: #fff; }
+    .top, .tabs, .no-print { display: none !important; }
+    main { max-width: none; padding: 0; }
+    .print-head { display: flex !important; justify-content: space-between; font: 9pt 'Prompt', sans-serif; color: #444; border-bottom: 1px solid #999; padding-bottom: 4px; margin-bottom: 10px; }
+    .part { display: none !important; border: 0; padding: 0; box-shadow: none; }
+    .part.print-on { display: block !important; break-before: page; }
+    .part.print-on.first { break-before: auto; }
+    h3, h4 { break-after: avoid; }
+    li, .tip, .warn, .pdpa, tr, .phase { break-inside: avoid; }
+    table.script td.note { display: table-cell; }
+    a { color: inherit; text-decoration: none; }
+  }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <span class="orb" aria-hidden="true"></span>
+    <div><h1>ชุดทดลองใช้งานที่โรงพยาบาล (Pilot)</h1><p>แผน 2 สัปดาห์ · ขั้นตอนทดสอบแยกตามบทบาท · แบบประเมิน · พิมพ์แจกได้</p></div>
+  </div>
+  <nav>
+    <a class="btn" href="/help">วิธีใช้</a>
+    <a class="btn" href="/" id="back">← ตารางผ่าตัด</a>
+    <button class="btn primary" type="button" id="print-one">🖨 พิมพ์หน้านี้</button>
+    <button class="btn" type="button" id="print-all">พิมพ์ทั้งชุด</button>
+  </nav>
+</header>
+<nav class="tabs" role="tablist" aria-label="เลือกส่วน">
+  <button type="button" role="tab" data-part="plan">แผน 2 สัปดาห์</button>
+  <button type="button" role="tab" data-part="prep">เตรียมระบบและข้อมูล</button>
+  <button type="button" role="tab" data-part="scheduler">ทดสอบ: ผู้จัดตาราง</button>
+  <button type="button" role="tab" data-part="surgeon">ทดสอบ: ศัลยแพทย์</button>
+  <button type="button" role="tab" data-part="staff">ทดสอบ: วิสัญญี / พยาบาล</button>
+  <button type="button" role="tab" data-part="cssd">ทดสอบ: CSSD</button>
+  <button type="button" role="tab" data-part="admin">ทดสอบ: ผู้ดูแลระบบ</button>
+  <button type="button" role="tab" data-part="survey">แบบประเมิน</button>
+  <button type="button" role="tab" data-part="log">บันทึกประจำวัน</button>
+</nav>
+
+<main>
+  <div class="print-head"><span>ORchestraAI · ชุดทดลองใช้งานที่โรงพยาบาล</span><span id="printed"></span></div>
+
+  <!-- ================================================================ PLAN -->
+  <section class="part" id="plan" data-part="plan">
+    <h2>แผนทดลองใช้ 2 สัปดาห์</h2>
+    <p class="who">สำหรับหัวหน้าโครงการ (เช่น หัวหน้าพยาบาลห้องผ่าตัด) และผู้บริหารที่อนุมัติ</p>
+
+    <h3>เป้าหมาย</h3>
+    <ol>
+      <li><b>จัดตารางได้เร็วขึ้นและไม่ชน:</b> ห้อง ทีม เครื่องมือ CSSD และเตียงพักฟื้นไม่ซ้อนกัน</li>
+      <li><b>ทีมใช้ได้จริงในงานประจำวัน:</b> ทุกบทบาททำงานของตัวเองในระบบได้ โดยไม่ต้องมีคนช่วย</li>
+      <li><b>ข้อมูลผู้ป่วยปลอดภัยตาม PDPA:</b> เห็นเท่าที่จำเป็น มีบันทึกการเข้าถึง และมีสำรองข้อมูล</li>
+    </ol>
+
+    <h3>ขอบเขตที่แนะนำ</h3>
+    <ul>
+      <li><b>ห้องผ่าตัด 1–2 ห้อง</b> ของ 1–2 แผนก (เช่น ศัลยกรรมทั่วไป และออร์โธปิดิกส์) ทั้งเคสนัดล่วงหน้าและฉุกเฉินของห้องนั้น</li>
+      <li><b>ผู้ใช้ 10–15 คน:</b> ผู้จัดตาราง 1–2 · ศัลยแพทย์ 3–5 · วิสัญญี 2 · พยาบาล 3–4 · CSSD 1–2 · ผู้ดูแลระบบ 1</li>
+      <li>ห้องอื่นใช้วิธีเดิมตามปกติ ขยายเมื่อผ่านเกณฑ์ในหัวข้อ “ตัดสินใจไปต่อ”</li>
+    </ul>
+
+    <h3>ทีมทดลอง</h3>
+    <div class="table-scroll"><table>
+      <tr><th>บทบาท</th><th>หน้าที่</th><th>ชื่อ</th></tr>
+      <tr><td>ผู้สนับสนุน (ผู้อำนวยการ / หัวหน้ากลุ่มงาน)</td><td>อนุมัติ ตัดสินใจไปต่อเมื่อจบการทดลอง</td><td><span class="line"></span></td></tr>
+      <tr><td>หัวหน้าโครงการ</td><td>วางแผน ประชุมประจำวัน เก็บตัวชี้วัด สรุปผล</td><td><span class="line"></span></td></tr>
+      <tr><td>ผู้ดูแลระบบ (IT)</td><td>บัญชีผู้ใช้ ข้อมูลโรงพยาบาล สำรองข้อมูล ติดต่อทีมพัฒนา</td><td><span class="line"></span></td></tr>
+      <tr><td>ตัวแทนแต่ละบทบาท (champion)</td><td>ช่วยเพื่อนในบทบาทเดียวกัน รวบรวมปัญหา</td><td><span class="line"></span></td></tr>
+      <tr><td>เจ้าหน้าที่คุ้มครองข้อมูลส่วนบุคคล (DPO)</td><td>ตรวจข้อตกลงและการเข้าถึงข้อมูลผู้ป่วย</td><td><span class="line"></span></td></tr>
+    </table></div>
+
+    <h3>ลำดับเวลา</h3>
+    <div class="timeline">
+      <div class="phase"><b class="when">สัปดาห์ 0 · เตรียม (3–5 วันทำการ)</b>
+        <ul>
+          <li>ทำข้อตกลงการประมวลผลข้อมูลกับโรงพยาบาล และแจ้งทีมเรื่องการใช้ข้อมูลผู้ป่วย (ดูหัวข้อ PDPA ด้านล่าง)</li>
+          <li>เตรียมระบบและข้อมูลตามแท็บ “เตรียมระบบและข้อมูล”</li>
+          <li>อบรมบทบาทละประมาณ 1 ชั่วโมง ใช้คู่มือ <a href="/help">/help</a> ที่พิมพ์แจกได้</li>
+          <li>ทุกคนทำ “ขั้นตอนทดสอบ” ของบทบาทตัวเองกับข้อมูลตัวอย่างให้ผ่านก่อนเริ่ม</li>
+        </ul></div>
+      <div class="phase"><b class="when">สัปดาห์ที่ 1 · ทำคู่ขนาน (ระบบยังไม่ใช่ตารางหลัก)</b>
+        <ul>
+          <li>ตารางจริงยังจัดแบบเดิม ผู้จัดตารางลงเคสเดียวกันในระบบด้วย แล้วเทียบกันทุกวัน</li>
+          <li>ทุกบทบาทใช้งานประจำในระบบ (ความพร้อมก่อนผ่าตัด เครื่องมือ CSSD บันทึกเวลาจริง) แต่ตัดสินใจตามวิธีเดิม</li>
+          <li>ประชุมสั้น 10 นาทีหลังเลิกงาน ใช้แท็บ “บันทึกประจำวัน”</li>
+          <li>ปัญหาทุกเรื่องกดปุ่ม 💬 มุมขวาล่าง (ระบบแนบหน้าและเวลาให้ ห้ามพิมพ์ชื่อหรือ HN ผู้ป่วย)</li>
+        </ul></div>
+      <div class="phase"><b class="when">สัปดาห์ที่ 2 · ใช้จริง พร้อมแผนสำรอง</b>
+        <ul>
+          <li>ระบบเป็นตารางหลักของห้องที่ทดลอง เคสใหม่จองผ่านระบบ</li>
+          <li>พิมพ์ใบรายการผ่าตัดทุกเช้าเก็บไว้ที่เคาน์เตอร์ (ใช้เมื่อระบบใช้ไม่ได้)</li>
+          <li>เก็บตัวชี้วัดทุกวัน · วันสุดท้าย: ทุกคนทำแบบประเมิน แล้วประชุมสรุป</li>
+        </ul></div>
+      <div class="phase"><b class="when">หลังทดลอง · ตัดสินใจ</b>
+        <ul><li>ไปต่อ (ขยายห้อง/แผนก) · ปรับแล้วทดลองซ้ำ · หรือหยุด ตามเกณฑ์ด้านล่าง</li></ul></div>
+    </div>
+
+    <h3>ตัวชี้วัด (เทียบก่อนทดลองกับช่วงทดลอง)</h3>
+    <div class="table-scroll"><table>
+      <tr><th>ตัวชี้วัด</th><th>เป้าหมาย</th><th>ดูจากไหน</th><th>ก่อน</th><th>ช่วงทดลอง</th></tr>
+      <tr><td>เวลาที่ใช้จองต่อเคส</td><td>ลดลงอย่างน้อย 30%</td><td>จับเวลา 10 เคสแรกของแต่ละสัปดาห์</td><td></td><td></td></tr>
+      <tr><td>ตารางชน (ห้อง ทีม เครื่องมือ เตียง)</td><td>0 ครั้ง</td><td>บันทึกประจำวัน</td><td></td><td></td></tr>
+      <tr><td>อัตราการงดผ่าตัด</td><td>ไม่เพิ่มขึ้น</td><td><kbd>รายงาน</kbd> → การงดผ่าตัด แยกตามเหตุผล</td><td></td><td></td></tr>
+      <tr><td>เริ่มเคสแรกตรงเวลา (ช้าไม่เกิน 15 นาที)</td><td>เพิ่มขึ้น</td><td><kbd>รายงาน</kbd> → เวลาแต่ละช่วงของเคส</td><td></td><td></td></tr>
+      <tr><td>อัตราการใช้ห้องผ่าตัด</td><td>เพิ่มขึ้น หรือเท่าเดิมโดยทำงานล่วงเวลาน้อยลง</td><td><kbd>รายงาน</kbd> → อัตราการใช้ห้องผ่าตัดรายวัน</td><td></td><td></td></tr>
+      <tr><td>ความแม่นของเวลาที่จอง</td><td>คลาดไม่เกิน ±15 นาที เพิ่มขึ้น</td><td><kbd>รายงาน</kbd> → เวลาผ่าตัดจริงเทียบกับเวลาที่จอง</td><td></td><td></td></tr>
+      <tr><td>คะแนนความง่ายในการใช้ (SUS)</td><td>ตั้งแต่ 68 ขึ้นไป</td><td>แท็บ “แบบประเมิน”</td><td>–</td><td></td></tr>
+      <tr><td>ปัญหาร้ายแรง (ข้อมูลผิด หาย หรือรั่ว / ผู้ป่วยได้รับผลกระทบ)</td><td>0 ครั้ง</td><td>บันทึกประจำวัน และเรื่องที่ผู้ใช้แจ้ง</td><td>–</td><td></td></tr>
+    </table></div>
+    <div class="tip"><b>เก็บค่า “ก่อน” ให้ได้ก่อนเริ่ม</b>ตัวเลขย้อนหลังของโรงพยาบาล (เวลาผ่าตัด การงด การเริ่มเคสแรก) นำเข้าระบบได้ที่ <kbd>ข้อมูลโรงพยาบาล</kbd> → <kbd>นำเข้า/ส่งออก Excel</kbd> หัวข้อประวัติผ่าตัด แล้วหน้า <kbd>รายงาน</kbd> จะแสดง “เวลาผ่าตัดจริง: ก่อนใช้ระบบ เทียบกับช่วงนี้” ให้เอง</div>
+
+    <h3>ตัดสินใจไปต่อ</h3>
+    <div class="table-scroll"><table>
+      <tr><th>ไปต่อ (ขยาย) เมื่อ</th><th>ปรับแล้วทดลองซ้ำ เมื่อ</th></tr>
+      <tr><td><ul>
+        <li>ไม่มีปัญหาร้ายแรง และตารางไม่ชนเลย</li>
+        <li>SUS เฉลี่ยตั้งแต่ 68 ขึ้นไป</li>
+        <li>ผู้จัดตารางยืนยันว่าใช้เวลาจัดตารางน้อยลง</li>
+        <li>เรื่องที่ผู้ใช้แจ้งระดับ “ปัญหา” แก้แล้ว หรือมีวิธีเลี่ยงที่ทีมยอมรับ</li>
+      </ul></td><td><ul>
+        <li>SUS ต่ำกว่า 68 หรือมีบทบาทใดใช้งานประจำไม่ได้</li>
+        <li>ข้อมูลโรงพยาบาลไม่ตรงความจริง (เวร ห้อง เครื่องมือ) จนเวลาที่เสนอใช้ไม่ได้</li>
+        <li>มีปัญหาร้ายแรง: หยุดใช้เป็นตารางหลักทันที กลับวิธีเดิม แล้วหาสาเหตุ</li>
+      </ul></td></tr>
+    </table></div>
+
+    <h3>แผนสำรองเมื่อระบบใช้ไม่ได้</h3>
+    <ol>
+      <li><b>ความปลอดภัยของผู้ป่วยมาก่อนเสมอ:</b> เคสฉุกเฉินไม่ต้องรอระบบ</li>
+      <li>เปิดเว็บไม่ได้เกิน 15 นาที: ใช้ใบรายการผ่าตัดที่พิมพ์ไว้ และจัดตารางแบบเดิม จดเคสที่เปลี่ยนไว้</li>
+      <li>แจ้งผู้ดูแลระบบ ซึ่งดูสาเหตุที่หน้า <kbd>⚙ สถานะระบบ</kbd> หรือ Render → Logs (บัญชีหลักเข้าได้แม้ฐานข้อมูลมีปัญหา)</li>
+      <li>เมื่อระบบกลับมา ลงเคสที่เปลี่ยนย้อนหลัง แล้วกด <kbd>โหลดใหม่</kbd> ทุกเครื่อง</li>
+    </ol>
+    <div class="fill"><span>ผู้ติดต่อเมื่อระบบมีปัญหา: <span class="line"></span></span><span>โทร: <span class="line"></span></span></div>
+
+    <h3>PDPA ก่อนเริ่ม</h3>
+    <div class="pdpa"><b>ทำให้ครบก่อนใช้ข้อมูลผู้ป่วยจริง</b>
+      <ul>
+        <li>ข้อตกลงการประมวลผลข้อมูลส่วนบุคคลระหว่างโรงพยาบาลกับผู้ให้บริการระบบ และประกาศความเป็นส่วนตัวสำหรับผู้ป่วย</li>
+        <li>บัญชีแยกรายคน (ห้ามใช้บัญชีร่วม) ผู้ดูแลระบบเปิดการยืนยันตัวตน 2 ชั้นแล้ว</li>
+        <li>ตั้งระยะเวลาเก็บข้อมูลระบุตัวผู้ป่วยที่ <kbd>🔒 PDPA</kbd> และตั้งสำรองข้อมูลอัตโนมัติแล้ว</li>
+        <li>ตอนซ้อมและอบรม ใช้ HN สมมติขึ้นต้นด้วย <b>TEST-</b> เท่านั้น ห้ามใช้ข้อมูลผู้ป่วยจริง</li>
+        <li>ช่องหมายเหตุ ข้อความแจ้งปัญหา และกลุ่มแชตของทีม ห้ามใส่ชื่อหรือ HN ผู้ป่วย</li>
+        <li>ผู้ดูแลระบบเปิดดูบันทึกการเข้าถึงข้อมูลผู้ป่วยสัปดาห์ละครั้ง</li>
+      </ul></div>
+  </section>
+
+  <!-- ================================================================ PREP -->
+  <section class="part" id="prep" data-part="prep" hidden>
+    <h2>เตรียมระบบและข้อมูล</h2>
+    <p class="who">สำหรับผู้ดูแลระบบ ทำในสัปดาห์ 0 ใช้เวลาประมาณ 1 วัน</p>
+
+    <h3>1. ระบบสำหรับซ้อม</h3>
+    <ul>
+      <li><b>แนะนำ: แยกระบบซ้อมกับระบบจริง</b> (Render service และโปรเจกต์ Supabase อีกชุด) ซ้อมได้เต็มที่โดยไม่ปนกับข้อมูลจริง</li>
+      <li>ถ้ามีระบบเดียว: ซ้อมก่อน แล้วลบข้อมูลตัวอย่างก่อนวันใช้จริง (ข้อ 3)</li>
+      <li>ระบบที่ยังไม่มีข้อมูล: หน้าตารางผ่าตัดมีปุ่ม <kbd>ใส่ข้อมูลตัวอย่าง</kbd> (ชื่อสมมติทั้งหมด)</li>
+    </ul>
+    <div class="warn"><b>ซ้อมกับระบบที่ต่อฐานข้อมูล Supabase</b>ข้อมูลตัวอย่างจองเต็มเฉพาะวันนี้ (10 เคส) วันพรุ่งนี้ยังว่าง ขั้นตอนทดสอบจึงจองเคสใหม่ในวันพรุ่งนี้ · โหมดสาธิตที่ไม่มีฐานข้อมูลมีแค่วันเดียวซึ่งเต็มแล้ว ใช้ดูหน้าตาได้ แต่ทดสอบการจองไม่ได้</div>
+    <h4>ข้อมูลตัวอย่างที่ขั้นตอนทดสอบใช้</h4>
+    <div class="table-scroll"><table>
+      <tr><th>ประเภท</th><th>ในระบบ</th></tr>
+      <tr><td>ห้องผ่าตัด</td><td>OR-1 (ออร์โธ, laminar flow) · OR-2 (ทั่วไป) · OR-3 (หุ่นยนต์) · OR-4 (ผนังกันรังสี)</td></tr>
+      <tr><td>ศัลยแพทย์</td><td>Dr.Napat (General) · Dr.Somchai (Ortho) · Dr.Kittipong (Uro) · Dr.Pimchanok (Vascular) · Dr.Anan (General, on-call)</td></tr>
+      <tr><td>หัตถการที่ใช้ทดสอบ</td><td>Laparoscopic cholecystectomy (75 นาที) · Laparoscopic appendectomy (60) · Open inguinal hernia repair (90) · Emergency exploratory laparotomy (120)</td></tr>
+      <tr><td>เคสวันนี้</td><td>10 เคส รหัส C01–C10 ใน 4 ห้อง เริ่ม 08:00</td></tr>
+      <tr><td>เครื่องมือ CSSD</td><td>LAP-01 (ชุดส่องกล้อง) · DV-01 (หุ่นยนต์ da Vinci) และอื่น ๆ ดูได้ที่แท็บ <kbd>เครื่องมือ</kbd></td></tr>
+      <tr><td>HN ที่ใช้ทดสอบ</td><td>TEST-001 ถึง TEST-020 (สมมติ)</td></tr>
+    </table></div>
+
+    <h3>2. ใส่ข้อมูลจริงของโรงพยาบาล</h3>
+    <ol>
+      <li><kbd>ข้อมูลโรงพยาบาล</kbd> → <kbd>นำเข้า/ส่งออก Excel</kbd> → <kbd>ดาวน์โหลดแบบฟอร์มเปล่า</kbd></li>
+      <li>กรอกห้องผ่าตัด บุคลากร (รหัสพนักงานตรงกับระบบของโรงพยาบาล) หัตถการ เครื่องมือ แล้วกด <kbd>ตรวจไฟล์</kbd> แก้จนไม่มีข้อผิดพลาด แล้วนำเข้า</li>
+      <li>ตารางเวร: <kbd>เวรและวันลา</kbd> → <kbd>ดาวน์โหลดตารางเวร (.xlsx)</kbd> กรอกเดือนที่ทดลอง แล้วนำเข้า</li>
+      <li>ประวัติเวลาผ่าตัดย้อนหลัง (ถ้ามี): <kbd>ดาวน์โหลดแบบฟอร์มประวัติผ่าตัด (.xlsx)</kbd> → <kbd>ตรวจไฟล์ประวัติ</kbd> ช่วยให้ระบบประเมินเวลาผ่าตัดแม่นขึ้น และเป็นค่า “ก่อน” ของตัวชี้วัด</li>
+      <li>เวลามาตรฐานของแพทย์แต่ละคน: <kbd>Preference card</kbd></li>
+    </ol>
+
+    <h3>3. ก่อนวันใช้จริง</h3>
+    <ol>
+      <li>ลบข้อมูลตัวอย่าง: <kbd>นำเข้า/ส่งออก Excel</kbd> → <kbd>ลบเคสตัวอย่างและประวัติตัวอย่าง</kbd></li>
+      <li>ยกเลิกเคส TEST- ที่เหลือจากการซ้อม</li>
+      <li>สร้างบัญชีผู้ใช้ทุกคนในแท็บ <kbd>ผู้ใช้</kbd> (ศัลยแพทย์และพยาบาลต้องผูกกับรายชื่อบุคลากร)</li>
+      <li>หน้า <kbd>⚙ สถานะระบบ</kbd>: เช็กลิสต์ต้องไม่มีสีแดง · SQL ครบ · สำรองข้อมูลอัตโนมัติทำงาน (กด <kbd>สำรองตอนนี้</kbd> ทดสอบ)</li>
+      <li>ทุกคนเปิดแจ้งเตือนบนมือถือ: <kbd>🔔 แจ้งเตือน</kbd> → <kbd>เปิดการแจ้งเตือนบนอุปกรณ์นี้</kbd> → <kbd>ส่งข้อความทดสอบ</kbd></li>
+    </ol>
+  </section>
+
+  <!-- ================================================================ SCHEDULER -->
+  <section class="part" id="scheduler" data-part="scheduler" hidden>
+    <h2>ขั้นตอนทดสอบ: ผู้จัดตาราง OR</h2>
+    <p class="who">ทำกับข้อมูลตัวอย่าง ใช้เวลาประมาณ 45 นาที · ทำเครื่องหมายผ่าน/ไม่ผ่าน และจดสิ่งที่สงสัยไว้ในช่องหมายเหตุ</p>
+    <div class="fill"><span>ผู้ทดสอบ: <span class="line"></span></span><span>วันที่: <span class="line"></span></span><span>อุปกรณ์: ☐ คอมพิวเตอร์ ☐ แท็บเล็ต ☐ มือถือ</span></div>
+    <div class="table-scroll"><table class="script">
+      <tr><th>#</th><th>ทำอะไร / ผลที่ควรเห็น</th><th>ผล</th><th>หมายเหตุ</th></tr>
+      <tr><td>S1</td><td>เข้าสู่ระบบด้วยบัญชีที่ได้รับ ตั้งรหัสผ่านใหม่
+        <div class="expect">เห็นตารางห้องผ่าตัดของวันนี้ 4 ห้อง แถบเคสเรียงตามเวลา</div></td><td class="result">☐ ผ่าน ☐ ไม่ผ่าน</td><td class="note"></td></tr>
+      <tr><td>S2</td><td>เลือก<b>วันพรุ่งนี้</b>ที่ช่องวันที่มุมขวาบน → <kbd>จองผ่าตัด</kbd>: Dr.Napat · Laparoscopic cholecystectomy · HN TEST-001 · ชื่อผู้ป่วย “ทดสอบ หนึ่ง” (สมมติ) · เวลาที่ต้องการ 09:00 → <kbd>ตรวจสอบช่วงเวลา</kbd>
+        <div class="expect">Agent ทั้ง 3 ตรวจ แล้วเสนอห้อง เวลา และทีม · ถ้าเวลาที่ขอไม่ว่าง ระบบบอกว่าติดอะไร (เช่น แพทย์มีเคสอื่น ห้องยังไม่ว่าง)</div></td><td class="result">☐ ผ่าน ☐ ไม่ผ่าน</td><td class="note"></td></tr>
+      <tr><td>S3</td><td><kbd>ยืนยันจอง</kbd>
+        <div class="expect">เคสใหม่ขึ้นในตาราง (กรอบเขียว) ไม่ทับเคสอื่นในห้องเดียวกัน</div></td><td class="result">☐ ผ่าน ☐ ไม่ผ่าน</td><td class="note"></td></tr>
+      <tr><td>S4</td><td>พิมพ์คำขอเป็นข้อความ เช่น “ไส้ติ่งส่องกล้อง Dr.Napat พรุ่งนี้บ่าย HN TEST-002” → <kbd>วิเคราะห์คำขอ</kbd>
+        <div class="expect">ช่องในฟอร์มถูกเติมให้ ตรวจและแก้ได้ก่อนจอง</div></td><td class="result">☐ ผ่าน ☐ ไม่ผ่าน</td><td class="note"></td></tr>
+      <tr><td>S5</td><td>ฟอร์มเดิม เปลี่ยนเป็น Open inguinal hernia repair · HN TEST-003 · ชื่อ “ทดสอบ สาม” → <kbd>หาวันว่าง 14 วัน</kbd>
+        <div class="expect">ได้วันที่จองได้ไม่เกิน 3 วัน พร้อมเวลา และดู <kbd>วันที่จองไม่ได้</kbd> ว่าติดอะไร</div></td><td class="result">☐ ผ่าน ☐ ไม่ผ่าน</td><td class="note"></td></tr>
+      <tr><td>S6</td><td>จากผลข้อ S5 กด <kbd>เพิ่มเข้ารายการรอ</kbd> แล้วในรายการรอผ่าตัด <kbd>กำหนดวันที่ควรผ่าตัด</kbd> อีก 5 วัน
+        <div class="expect">อยู่ในรายการรอผ่าตัด เรียงตามความเร่ง และแสดงวันที่เหลือ</div></td><td class="result">☐ ผ่าน ☐ ไม่ผ่าน</td><td class="note"></td></tr>
+      <tr><td>S7</td><td><kbd>ฉุกเฉิน</kbd> (วันนี้): Dr.Anan · Emergency exploratory laparotomy · HN TEST-005 · ชื่อ “ทดสอบ ห้า” → <kbd>แทรกเคสฉุกเฉิน</kbd>
+        <div class="expect">เคสเข้าตารางเร็วที่สุด เคสที่ถูกเลื่อนมีกรอบเขียว ไม่มีห้องหรือทีมซ้อน ทีมที่เกี่ยวข้องได้แจ้งเตือน</div></td><td class="result">☐ ผ่าน ☐ ไม่ผ่าน</td><td class="note"></td></tr>
+      <tr><td>S8</td><td>เลือกเคสที่กำลังผ่าตัด → <kbd>เกินเวลา</kbd> 45 นาที → <kbd>คำนวณผลกระทบ</kbd>
+        <div class="expect">เห็นเคสถัดไปที่ได้รับผล และเวลาใหม่ก่อนยืนยัน</div></td><td class="result">☐ ผ่าน ☐ ไม่ผ่าน</td><td class="note"></td></tr>
+      <tr><td>S9</td><td>วันพรุ่งนี้ เคส TEST-001 → <kbd>งดผ่าตัด / ยกเลิกเคสนี้</kbd> → เลือกเหตุผล → <kbd>เลื่อน: ไปอยู่รายการรอผ่าตัด</kbd> → <kbd>ยืนยันงดผ่าตัด</kbd>
+        <div class="expect">เคสหายจากตารางไปอยู่รายการรอผ่าตัด กด <kbd>จองใหม่</kbd> ได้</div></td><td class="result">☐ ผ่าน ☐ ไม่ผ่าน</td><td class="note"></td></tr>
+      <tr><td>S10</td><td>แท็บ <kbd>ความพร้อม</kbd> → <kbd>เฉพาะเคสที่ยังไม่พร้อม</kbd>
+        <div class="expect">เห็นเคสที่ยังไม่พร้อมหรือมีปัญหา พร้อมรายการที่ค้าง</div></td><td class="result">☐ ผ่าน ☐ ไม่ผ่าน</td><td class="note"></td></tr>
+      <tr><td>S11</td><td><kbd>ข้อมูลโรงพยาบาล</kbd> → <kbd>ห้องผ่าตัด</kbd> → <kbd>ปิดห้อง</kbd> OR-4 ช่วงบ่ายวันนี้ แล้วกลับหน้าตาราง
+        <div class="expect">มีคำเตือนเคสที่ได้รับผล กด <kbd>จัดตารางวันนี้ใหม่เพื่อแก้</kbd> แล้วไม่มีเคสในช่วงที่ปิด (จากนั้นกด <kbd>ว่างแล้ว</kbd> เปิดห้องคืน)</div></td><td class="result">☐ ผ่าน ☐ ไม่ผ่าน</td><td class="note"></td></tr>
+      <tr><td>S12</td><td><kbd>🖨 พิมพ์ / WHO checklist</kbd> → <kbd>ใบรายการผ่าตัด (แยกตามห้อง)</kbd> → <kbd>พิมพ์ / บันทึก PDF</kbd>
+        <div class="expect">ได้ใบรายการทุกห้องของวันนี้ อ่านง่ายบนกระดาษ A4</div></td><td class="result">☐ ผ่าน ☐ ไม่ผ่าน</td><td class="note"></td></tr>
+      <tr><td>S13</td><td><kbd>📺 กระดานสถานะ</kbd> → <kbd>จอสำหรับญาติ</kbd>
+        <div class="expect">เห็นสถานะเคส ไม่มีชื่อหรือ HN ผู้ป่วย</div></td><td class="result">☐ ผ่าน ☐ ไม่ผ่าน</td><td class="note"></td></tr>
+      <tr><td>S14</td><td><kbd>รายงาน</kbd> → <kbd>7 วัน</kbd>
+        <div class="expect">เห็นอัตราการใช้ห้อง จำนวนเคส การงดผ่าตัด</div></td><td class="result">☐ ผ่าน ☐ ไม่ผ่าน</td><td class="note"></td></tr>
+      <tr><td>S15</td><td>กด 💬 มุมขวาล่าง → พิมพ์สิ่งที่อยากให้ปรับ 1 เรื่อง → <kbd>ส่งเรื่อง</kbd>
+        <div class="expect">ขึ้นใน “เรื่องที่คุณแจ้งล่าสุด”</div></td><td class="result">☐ ผ่าน ☐ ไม่ผ่าน</td><td class="note"></td></tr>
+    </table></div>
+  </section>
+
+  <!-- ================================================================ SURGEON -->
+  <section class="part" id="surgeon" data-part="surgeon" hidden>
+    <h2>ขั้นตอนทดสอบ: ศัลยแพทย์</h2>
+    <p class="who">ใช้บัญชีที่ผูกกับ Dr.Napat (General) · ประมาณ 20 นาที ทำบนมือถือได้</p>
+    <div class="fill"><span>ผู้ทดสอบ: <span class="line"></span></span><span>วันที่: <span class="line"></span></span><span>อุปกรณ์: ☐ คอมพิวเตอร์ ☐ แท็บเล็ต ☐ มือถือ</span></div>
+    <div class="table-scroll"><table class="script">
+      <tr><th>#</th><th>ทำอะไร / ผลที่ควรเห็น</th><th>ผล</th><th>หมายเหตุ</th></tr>
+      <tr><td>D1</td><td>เข้าสู่ระบบบนมือถือ (เพิ่มเว็บไว้ที่หน้าจอโฮม)
+        <div class="expect">เคสของคุณมีป้าย “ของฉัน”</div></td><td class="result">☐ ผ่าน ☐ ไม่ผ่าน</td><td class="note"></td></tr>
+      <tr><td>D2</td><td>เลือกวันพรุ่งนี้ → <kbd>จองผ่าตัด</kbd>: Laparoscopic appendectomy · HN TEST-011 · ชื่อ “ทดสอบ สิบเอ็ด” · เวลา 13:00 → <kbd>ตรวจสอบช่วงเวลา</kbd> → <kbd>ยืนยันจอง</kbd>
+        <div class="expect">จองได้เฉพาะเคสที่คุณเป็นแพทย์หลัก ระบบบอกห้อง เวลา และทีม</div></td><td class="result">☐ ผ่าน ☐ ไม่ผ่าน</td><td class="note"></td></tr>
+      <tr><td>D3</td><td>ลองจองในชื่อแพทย์ท่านอื่น
+        <div class="expect">ระบบไม่อนุญาต (สิทธิ์ตามบทบาท)</div></td><td class="result">☐ ผ่าน ☐ ไม่ผ่าน</td><td class="note"></td></tr>
+      <tr><td>D4</td><td><kbd>Preference card ของฉัน</kbd> → ดูเวลามาตรฐานของหัตถการที่ทำบ่อย → <kbd>เฉพาะที่เวลาต่างจากเคสจริง</kbd>
+        <div class="expect">เห็นเวลาที่จองเทียบกับเวลาจริง แก้เวลามาตรฐานของตัวเองได้</div></td><td class="result">☐ ผ่าน ☐ ไม่ผ่าน</td><td class="note"></td></tr>
+      <tr><td>D5</td><td>แท็บ <kbd>ความพร้อม</kbd>
+        <div class="expect">เห็นรายการเตรียมความพร้อมของเคสตัวเอง (ใบยินยอม ผลแล็บ ฯลฯ)</div></td><td class="result">☐ ผ่าน ☐ ไม่ผ่าน</td><td class="note"></td></tr>
+      <tr><td>D6</td><td><kbd>🔔 แจ้งเตือน</kbd> → <kbd>เปิดการแจ้งเตือนบนอุปกรณ์นี้</kbd> → <kbd>ส่งข้อความทดสอบ</kbd>
+        <div class="expect">ข้อความเด้งบนมือถือ</div></td><td class="result">☐ ผ่าน ☐ ไม่ผ่าน</td><td class="note"></td></tr>
+      <tr><td>D7</td><td>ขอให้ผู้จัดตารางย้ายเวลาเคส TEST-011
+        <div class="expect">ได้แจ้งเตือนภายใน 1 นาที ข้อความมีเลขเคส เวลา ห้อง ไม่มีชื่อหรือ HN ผู้ป่วย</div></td><td class="result">☐ ผ่าน ☐ ไม่ผ่าน</td><td class="note"></td></tr>
+      <tr><td>D8</td><td>เคส TEST-011 → <kbd>งดผ่าตัด / ยกเลิกเคสนี้</kbd> → เลือกเหตุผล → <kbd>ยืนยันงดผ่าตัด</kbd>
+        <div class="expect">เคสออกจากตาราง เหตุผลถูกนับในรายงานการงดผ่าตัด</div></td><td class="result">☐ ผ่าน ☐ ไม่ผ่าน</td><td class="note"></td></tr>
+    </table></div>
+  </section>
+
+  <!-- ================================================================ STAFF -->
+  <section class="part" id="staff" data-part="staff" hidden>
+    <h2>ขั้นตอนทดสอบ: วิสัญญีแพทย์ / พยาบาล</h2>
+    <p class="who">ใช้บัญชีที่ผูกกับรายชื่อบุคลากรที่อยู่ในทีมของเคสวันนี้ · ประมาณ 25 นาที</p>
+    <div class="fill"><span>ผู้ทดสอบ: <span class="line"></span></span><span>บทบาท: ☐ วิสัญญี ☐ พยาบาลส่งเครื่องมือ ☐ พยาบาลช่วยรอบนอก</span><span>วันที่: <span class="line"></span></span></div>
+    <div class="table-scroll"><table class="script">
+      <tr><th>#</th><th>ทำอะไร / ผลที่ควรเห็น</th><th>ผล</th><th>หมายเหตุ</th></tr>
+      <tr><td>N1</td><td>เข้าสู่ระบบ
+        <div class="expect">เคสที่คุณอยู่ในทีมมีป้าย “ของฉัน”</div></td><td class="result">☐ ผ่าน ☐ ไม่ผ่าน</td><td class="note"></td></tr>
+      <tr><td>N2</td><td>แท็บ <kbd>ความพร้อม</kbd> → เคสของคุณ → ประเมินวิสัญญี: <kbd>เรียบร้อย</kbd>
+        <div class="expect">ตัวเลขรายการที่ค้างบนแถบเคสลดลง</div></td><td class="result">☐ ผ่าน ☐ ไม่ผ่าน</td><td class="note"></td></tr>
+      <tr><td>N3</td><td>งดน้ำงดอาหาร: <kbd>มีปัญหา</kbd> พร้อมหมายเหตุสั้น ๆ (ไม่ใส่ชื่อหรือ HN)
+        <div class="expect">แถบเคสขึ้น “!” ผู้จัดตารางและศัลยแพทย์ได้แจ้งเตือน</div></td><td class="result">☐ ผ่าน ☐ ไม่ผ่าน</td><td class="note"></td></tr>
+      <tr><td>N4</td><td>รายการที่ไม่เกี่ยวกับเคสนี้ (เช่น จองเลือด): <kbd>ไม่ต้องใช้</kbd>
+        <div class="expect">รายการนั้นไม่ถูกนับว่าค้าง</div></td><td class="result">☐ ผ่าน ☐ ไม่ผ่าน</td><td class="note"></td></tr>
+      <tr><td>N5</td><td>เปิดเคสที่เริ่มแล้ว → กดบันทึกเวลาขั้นถัดไป (<kbd class="dyn">บันทึก: เข้าห้องผ่าตัด ตอนนี้</kbd> ฯลฯ)
+        <div class="expect">สถานะของเคสเปลี่ยนตามขั้น กระดานสถานะเปลี่ยนตาม</div></td><td class="result">☐ ผ่าน ☐ ไม่ผ่าน</td><td class="note"></td></tr>
+      <tr><td>N6</td><td>ลืมกดตอนเกิดจริง: <kbd>แก้/ใส่เวลาย้อนหลัง</kbd> → ใส่เวลา → <kbd>บันทึกเวลา</kbd>
+        <div class="expect">เวลาบันทึกได้ เวลาที่เรียงผิดลำดับถูกปฏิเสธพร้อมเหตุผล</div></td><td class="result">☐ ผ่าน ☐ ไม่ผ่าน</td><td class="note"></td></tr>
+      <tr><td>N7</td><td><kbd>🖨 พิมพ์ / WHO checklist</kbd> → <kbd>WHO Surgical Safety Checklist (ต่อเคส)</kbd>
+        <div class="expect">ได้แบบฟอร์มของเคสพร้อมข้อมูลทีม</div></td><td class="result">☐ ผ่าน ☐ ไม่ผ่าน</td><td class="note"></td></tr>
+      <tr><td>N8</td><td>แท็บ <kbd>บุคลากร</kbd>
+        <div class="expect">เห็นชั่วโมงทำงานและภาระของตัวเอง</div></td><td class="result">☐ ผ่าน ☐ ไม่ผ่าน</td><td class="note"></td></tr>
+      <tr><td>N9</td><td><kbd>แจ้งเตือนของฉัน</kbd>
+        <div class="expect">เห็นเฉพาะการแจ้งเตือนของตัวเอง</div></td><td class="result">☐ ผ่าน ☐ ไม่ผ่าน</td><td class="note"></td></tr>
+    </table></div>
+  </section>
+
+  <!-- ================================================================ CSSD -->
+  <section class="part" id="cssd" data-part="cssd" hidden>
+    <h2>ขั้นตอนทดสอบ: เจ้าหน้าที่จ่ายกลาง (CSSD)</h2>
+    <p class="who">ประมาณ 15 นาที</p>
+    <div class="fill"><span>ผู้ทดสอบ: <span class="line"></span></span><span>วันที่: <span class="line"></span></span><span>อุปกรณ์: ☐ คอมพิวเตอร์ ☐ แท็บเล็ต ☐ มือถือ</span></div>
+    <div class="table-scroll"><table class="script">
+      <tr><th>#</th><th>ทำอะไร / ผลที่ควรเห็น</th><th>ผล</th><th>หมายเหตุ</th></tr>
+      <tr><td>C1</td><td>เข้าสู่ระบบ ดูตารางผ่าตัด
+        <div class="expect">เห็น ••• แทน HN และไม่เห็นชื่อผู้ป่วย (CSSD ไม่ต้องใช้ข้อมูลนี้)</div></td><td class="result">☐ ผ่าน ☐ ไม่ผ่าน</td><td class="note"></td></tr>
+      <tr><td>C2</td><td>แท็บ <kbd>เครื่องมือ</kbd>
+        <div class="expect">เห็นชุดเครื่องมือที่เคสวันนี้ยังต้องใช้ (เช่น ชุดส่องกล้อง LAP-01 หรือหุ่นยนต์ DV-01) เวลาที่ต้องอบเสร็จ และชุดที่เวลาเหลือน้อย · ช่วงบ่ายชุดที่ใช้เสร็จแล้วจะไม่แสดง</div></td><td class="result">☐ ผ่าน ☐ ไม่ผ่าน</td><td class="note"></td></tr>
+      <tr><td>C3</td><td>ชุดที่อบเสร็จ: <kbd>อบเสร็จแล้ว</kbd>
+        <div class="expect">สถานะเปลี่ยน ผู้จัดตารางเห็นทันทีเมื่อกด <kbd>โหลดใหม่</kbd></div></td><td class="result">☐ ผ่าน ☐ ไม่ผ่าน</td><td class="note"></td></tr>
+      <tr><td>C4</td><td>เปลี่ยนเวลาที่จะอบเสร็จให้ช้ากว่าเคสถัดไปที่ใช้ชุดนั้น → <kbd>บันทึก</kbd>
+        <div class="expect">ผู้จัดตารางเห็นคำเตือนว่าเครื่องมือไม่ทัน</div></td><td class="result">☐ ผ่าน ☐ ไม่ผ่าน</td><td class="note"></td></tr>
+      <tr><td>C5</td><td><kbd>ข้อมูลโรงพยาบาล</kbd> → <kbd>วัสดุ/รากเทียม</kbd> → <kbd>เฉพาะที่ใกล้หมด</kbd>
+        <div class="expect">เห็นวัสดุที่ต่ำกว่าจุดสั่งซื้อ และ <kbd>รับของ / นับสต็อก / สั่งของ / แก้ไข</kbd> ได้</div></td><td class="result">☐ ผ่าน ☐ ไม่ผ่าน</td><td class="note"></td></tr>
+    </table></div>
+  </section>
+
+  <!-- ================================================================ ADMIN -->
+  <section class="part" id="admin" data-part="admin" hidden>
+    <h2>ขั้นตอนทดสอบ: ผู้ดูแลระบบ</h2>
+    <p class="who">ประมาณ 40 นาที · บางข้อทำในสัปดาห์ 0 พร้อมการเตรียมระบบ</p>
+    <div class="fill"><span>ผู้ทดสอบ: <span class="line"></span></span><span>วันที่: <span class="line"></span></span></div>
+    <div class="table-scroll"><table class="script">
+      <tr><th>#</th><th>ทำอะไร / ผลที่ควรเห็น</th><th>ผล</th><th>หมายเหตุ</th></tr>
+      <tr><td>A1</td><td><kbd>⚙ สถานะระบบ</kbd>
+        <div class="expect">ไฟล์ SQL ครบ เช็กลิสต์ไม่มีสีแดง (ถ้าขาด กด <kbd>รัน SQL ที่ยังขาด</kbd>)</div></td><td class="result">☐ ผ่าน ☐ ไม่ผ่าน</td><td class="note"></td></tr>
+      <tr><td>A2</td><td><kbd>🔐 ความปลอดภัย</kbd> → <kbd>แสดง QR code</kbd> → สแกนด้วยแอป → <kbd>ยืนยันและเปิดใช้</kbd>
+        <div class="expect">ได้รหัสสำรอง 10 รหัส · เข้าระบบครั้งต่อไปต้องกรอกรหัส 6 หลัก</div></td><td class="result">☐ ผ่าน ☐ ไม่ผ่าน</td><td class="note"></td></tr>
+      <tr><td>A3</td><td>แท็บ <kbd>ผู้ใช้</kbd> → สร้างบัญชีทดสอบ 1 บัญชีต่อบทบาท → <kbd>สร้างบัญชี</kbd>
+        <div class="expect">ได้รหัสชั่วคราว (แสดงครั้งเดียว) ผู้ใช้ต้องตั้งรหัสใหม่เมื่อเข้าครั้งแรก</div></td><td class="result">☐ ผ่าน ☐ ไม่ผ่าน</td><td class="note"></td></tr>
+      <tr><td>A4</td><td><kbd>ข้อมูลโรงพยาบาล</kbd> → <kbd>นำเข้า/ส่งออก Excel</kbd> → <kbd>ดาวน์โหลดข้อมูลปัจจุบัน (.xlsx)</kbd> → แก้ 1 รายการ → <kbd>ตรวจไฟล์</kbd>
+        <div class="expect">เห็นตัวอย่างสิ่งที่จะเปลี่ยนก่อนบันทึก ไฟล์ที่ผิดถูกปฏิเสธพร้อมบอกช่องที่ผิด</div></td><td class="result">☐ ผ่าน ☐ ไม่ผ่าน</td><td class="note"></td></tr>
+      <tr><td>A5</td><td><kbd>⚙ สถานะระบบ</kbd> → <kbd>สำรองตอนนี้</kbd>
+        <div class="expect">สำเร็จ มีไฟล์ .orcbak ในรายการ</div></td><td class="result">☐ ผ่าน ☐ ไม่ผ่าน</td><td class="note"></td></tr>
+      <tr><td>A6</td><td><kbd>🔒 PDPA</kbd> → ค้นหาบันทึกการเข้าถึงด้วย HN TEST-001 → <kbd>ค้นหา</kbd>
+        <div class="expect">เห็นว่าใครเปิดดูข้อมูลของผู้ป่วยรายนี้เมื่อไร</div></td><td class="result">☐ ผ่าน ☐ ไม่ผ่าน</td><td class="note"></td></tr>
+      <tr><td>A7</td><td><kbd>⚙ สถานะระบบ</kbd> → เรื่องที่ผู้ใช้แจ้ง → <kbd>รับทราบ</kbd> เรื่องจากข้อ S15
+        <div class="expect">ผู้แจ้งเห็นสถานะเปลี่ยนในเรื่องที่ตัวเองแจ้ง</div></td><td class="result">☐ ผ่าน ☐ ไม่ผ่าน</td><td class="note"></td></tr>
+      <tr><td>A8</td><td>ผู้ใช้ทดสอบ (มือถือหาย): แท็บ <kbd>ผู้ใช้</kbd> → <kbd>ล้าง 2 ชั้น</kbd>
+        <div class="expect">ผู้ใช้นั้นออกจากระบบทุกเครื่อง และตั้งค่าใหม่ได้</div></td><td class="result">☐ ผ่าน ☐ ไม่ผ่าน</td><td class="note"></td></tr>
+      <tr><td>A9</td><td>ปิดบัญชีทดสอบ: เอาเครื่องหมาย <kbd>ใช้งาน</kbd> ออก → บันทึก
+        <div class="expect">บัญชีนั้นเข้าระบบไม่ได้ทันที</div></td><td class="result">☐ ผ่าน ☐ ไม่ผ่าน</td><td class="note"></td></tr>
+    </table></div>
+  </section>
+
+  <!-- ================================================================ SURVEY -->
+  <section class="part" id="survey" data-part="survey" hidden>
+    <h2>แบบประเมินหลังทดลองใช้</h2>
+    <p class="who">ทุกคนที่ร่วมทดลองตอบวันสุดท้าย ใช้เวลา 5 นาที · ไม่ต้องใส่ชื่อ</p>
+    <div class="fill"><span>บทบาท: ☐ ผู้จัดตาราง ☐ ศัลยแพทย์ ☐ วิสัญญี ☐ พยาบาล ☐ CSSD ☐ ผู้ดูแลระบบ</span><span>ใช้ระบบประมาณ <span class="line" style="min-width:4em"></span> วัน</span></div>
+
+    <h3>ส่วนที่ 1: ความง่ายในการใช้ (System Usability Scale)</h3>
+    <p>วงกลมตัวเลข 1 = ไม่เห็นด้วยอย่างยิ่ง ถึง 5 = เห็นด้วยอย่างยิ่ง</p>
+    <div class="table-scroll"><table class="sus">
+      <tr><th>#</th><th>ข้อความ</th><th style="text-align:center">1 2 3 4 5</th></tr>
+      <tr><td class="n">1</td><td>ฉันคิดว่าอยากใช้ระบบนี้เป็นประจำ</td><td class="scale">① ② ③ ④ ⑤</td></tr>
+      <tr><td class="n">2</td><td>ฉันพบว่าระบบนี้ซับซ้อนเกินความจำเป็น</td><td class="scale">① ② ③ ④ ⑤</td></tr>
+      <tr><td class="n">3</td><td>ฉันคิดว่าระบบนี้ใช้งานง่าย</td><td class="scale">① ② ③ ④ ⑤</td></tr>
+      <tr><td class="n">4</td><td>ฉันคิดว่าต้องมีคนช่วยจึงจะใช้ระบบนี้ได้</td><td class="scale">① ② ③ ④ ⑤</td></tr>
+      <tr><td class="n">5</td><td>ฉันพบว่าส่วนต่าง ๆ ของระบบทำงานเข้ากันได้ดี</td><td class="scale">① ② ③ ④ ⑤</td></tr>
+      <tr><td class="n">6</td><td>ฉันคิดว่าระบบนี้มีส่วนที่ไม่สอดคล้องกันมากเกินไป</td><td class="scale">① ② ③ ④ ⑤</td></tr>
+      <tr><td class="n">7</td><td>ฉันคิดว่าคนส่วนใหญ่จะเรียนรู้การใช้ระบบนี้ได้เร็ว</td><td class="scale">① ② ③ ④ ⑤</td></tr>
+      <tr><td class="n">8</td><td>ฉันพบว่าระบบนี้ใช้งานยุ่งยาก</td><td class="scale">① ② ③ ④ ⑤</td></tr>
+      <tr><td class="n">9</td><td>ฉันรู้สึกมั่นใจเมื่อใช้ระบบนี้</td><td class="scale">① ② ③ ④ ⑤</td></tr>
+      <tr><td class="n">10</td><td>ฉันต้องเรียนรู้หลายอย่างก่อนจึงจะใช้ระบบนี้ได้</td><td class="scale">① ② ③ ④ ⑤</td></tr>
+    </table></div>
+
+    <h3>ส่วนที่ 2: งานของคุณ</h3>
+    <div class="table-scroll"><table class="sus">
+      <tr><th>#</th><th>ข้อความ</th><th style="text-align:center">1 2 3 4 5</th></tr>
+      <tr><td class="n">11</td><td>ระบบช่วยให้งานของฉันเร็วขึ้น (จองเคส เตรียมเคส เตรียมเครื่องมือ)</td><td class="scale">① ② ③ ④ ⑤</td></tr>
+      <tr><td class="n">12</td><td>ฉันเชื่อถือเวลาและทีมที่ระบบเสนอ</td><td class="scale">① ② ③ ④ ⑤</td></tr>
+      <tr><td class="n">13</td><td>การแจ้งเตือนมีประโยชน์ และไม่มากเกินไป</td><td class="scale">① ② ③ ④ ⑤</td></tr>
+      <tr><td class="n">14</td><td>ฉันรู้ว่าตารางเปลี่ยนเร็วกว่าเดิม</td><td class="scale">① ② ③ ④ ⑤</td></tr>
+      <tr><td class="n">15</td><td>ฉันมั่นใจว่าข้อมูลผู้ป่วยในระบบปลอดภัย</td><td class="scale">① ② ③ ④ ⑤</td></tr>
+    </table></div>
+    <p>16. อยากให้โรงพยาบาลใช้ระบบนี้ต่อหลังทดลองไหม: ☐ ใช่ ☐ ไม่แน่ใจ ☐ ไม่</p>
+
+    <h3>ส่วนที่ 3: ความเห็น</h3>
+    <p>17. สิ่งที่ชอบที่สุด: <span class="line" style="min-width:60%"></span></p>
+    <p>18. สิ่งที่ต้องแก้ก่อนใช้จริงทั้งโรงพยาบาล: <span class="line" style="min-width:50%"></span></p>
+    <p>19. ปัญหาที่เจอระหว่างทดลอง: <span class="line" style="min-width:60%"></span></p>
+
+    <div class="calc no-print" id="sus-calc">
+      <h4 style="margin-top:0">คิดคะแนน SUS (สำหรับหัวหน้าโครงการ)</h4>
+      <p class="tip" style="margin:6px 0"><b>วิธีใช้</b>กรอกคำตอบข้อ 1–10 ของแต่ละคน 1 บรรทัด คั่นด้วยเว้นวรรคหรือจุลภาค เช่น <code>4 2 5 1 4 2 5 1 4 2</code> · คำนวณในเครื่องนี้เท่านั้น ไม่ได้ส่งหรือเก็บไว้ที่ใด</p>
+      <textarea id="sus-input" aria-label="คำตอบข้อ 1–10 คนละบรรทัด" placeholder="4 2 5 1 4 2 5 1 4 2&#10;3 3 4 2 4 2 4 2 3 3"></textarea>
+      <div class="out" id="sus-out" role="status"></div>
+    </div>
+    <div class="table-scroll"><table>
+      <tr><th>คะแนน SUS (0–100)</th><th>ความหมาย</th></tr>
+      <tr><td>80 ขึ้นไป</td><td>ดีมาก ผู้ใช้ส่วนใหญ่อยากแนะนำต่อ</td></tr>
+      <tr><td>68–79</td><td>ดี (68 คือค่าเฉลี่ยของระบบทั่วไป) ผ่านเกณฑ์ไปต่อ</td></tr>
+      <tr><td>51–67</td><td>พอใช้ ต้องแก้จุดที่ผู้ใช้บอกว่ายากก่อนขยาย</td></tr>
+      <tr><td>ต่ำกว่า 51</td><td>ต้องปรับมาก</td></tr>
+    </table></div>
+    <p class="hint">วิธีคิด: ข้อคี่ (1, 3, 5, 7, 9) ได้ คำตอบ − 1 · ข้อคู่ (2, 4, 6, 8, 10) ได้ 5 − คำตอบ · รวม 10 ข้อแล้วคูณ 2.5</p>
+  </section>
+
+  <!-- ================================================================ LOG -->
+  <section class="part" id="log" data-part="log" hidden>
+    <h2>บันทึกประจำวัน</h2>
+    <p class="who">หัวหน้าโครงการกรอกหลังประชุม 10 นาทีทุกวัน · พิมพ์ 1 แผ่นต่อสัปดาห์</p>
+    <div class="fill"><span>สัปดาห์ที่: ☐ 1 (คู่ขนาน) ☐ 2 (ใช้จริง)</span><span>ห้องที่ทดลอง: <span class="line"></span></span></div>
+    <div class="table-scroll"><table class="log">
+      <tr><th>วันที่</th><th>จำนวนเคส</th><th>ฉุกเฉิน</th><th>งด</th><th>เคสแรกเริ่ม</th><th>ตารางชน</th><th>ปัญหาที่พบ / สิ่งที่แก้</th></tr>
+      <tr><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+      <tr><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+      <tr><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+      <tr><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+      <tr><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+    </table></div>
+    <h3>คำถามในการประชุม 10 นาที</h3>
+    <ol>
+      <li>วันนี้อะไรที่ระบบช่วยได้จริง</li>
+      <li>อะไรที่ติดหรือต้องทำซ้ำ (กดปุ่ม 💬 แจ้งไว้แล้วหรือยัง)</li>
+      <li>พรุ่งนี้จะปรับอะไร และใครทำ</li>
+      <li>ตารางในระบบตรงกับที่ทำจริงไหม (สัปดาห์ที่ 1: เทียบกับวิธีเดิม)</li>
+    </ol>
+    <div class="warn"><b>เรื่องที่ต้องหยุดใช้ทันที</b>ข้อมูลผู้ป่วยผิดคน · ตารางในระบบไม่ตรงกับห้องจริงแล้วทีมไม่รู้ · ข้อมูลผู้ป่วยหลุดออกนอกระบบ → กลับใช้วิธีเดิม แจ้งหัวหน้าโครงการและผู้ดูแลระบบทันที</div>
+  </section>
+</main>
+
+<script>
+  const $ = s => document.querySelector(s);
+  const PARTS = ['plan', 'prep', 'scheduler', 'surgeon', 'staff', 'cssd', 'admin', 'survey', 'log'];
+  let current = 'plan';
+
+  function show(name, scroll) {
+    current = PARTS.includes(name) ? name : 'plan';
+    document.querySelectorAll('.tabs button').forEach(b => b.setAttribute('aria-selected', String(b.dataset.part === current)));
+    document.querySelectorAll('.part').forEach(s => { s.hidden = s.dataset.part !== current; });
+    if (scroll) window.scrollTo({ top: 0 });
+  }
+
+  function printSet(names) {
+    document.querySelectorAll('.part').forEach(s => {
+      s.classList.toggle('print-on', names.includes(s.dataset.part));
+      s.classList.toggle('first', s.dataset.part === names[0]);
+    });
+    $('#printed').textContent = 'พิมพ์เมื่อ ' + new Date().toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: 'numeric' });
+    window.print();
+  }
+
+  // System Usability Scale: odd items (answer - 1), even items (5 - answer), sum x 2.5
+  function sus(answers) {
+    return answers.reduce((sum, a, i) => sum + (i % 2 === 0 ? a - 1 : 5 - a), 0) * 2.5;
+  }
+  $('#sus-input').addEventListener('input', e => {
+    const rows = e.target.value.split('\n').map(l => l.trim()).filter(Boolean);
+    const scores = [], bad = [];
+    rows.forEach((line, i) => {
+      const nums = line.split(/[\s,]+/).map(Number);
+      if (nums.length === 10 && nums.every(n => Number.isInteger(n) && n >= 1 && n <= 5)) scores.push(sus(nums));
+      else bad.push(i + 1);
+    });
+    const mean = scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : null;
+    $('#sus-out').innerHTML = (scores.length ? `ผู้ตอบ ${scores.length} คน · คะแนน: ${scores.map(s => s.toFixed(1)).join(', ')}<br><b>เฉลี่ย ${mean.toFixed(1)}</b> · `
+      + (mean >= 80 ? 'ดีมาก' : mean >= 68 ? 'ดี ผ่านเกณฑ์' : mean >= 51 ? 'พอใช้ ต้องแก้ก่อนขยาย' : 'ต้องปรับมาก') : '')
+      + (bad.length ? `<br>บรรทัดที่ ${bad.join(', ')} ต้องมีตัวเลข 1–5 ครบ 10 ตัว` : '');
+  });
+
+  document.querySelectorAll('.tabs button').forEach(b => b.addEventListener('click', () => {
+    history.replaceState(null, '', '#' + b.dataset.part);
+    show(b.dataset.part, true);
+  }));
+  $('#print-one').addEventListener('click', () => printSet([current]));
+  $('#print-all').addEventListener('click', () => printSet(PARTS));
+  window.addEventListener('hashchange', () => show(location.hash.slice(1), true));
+  window.addEventListener('afterprint', () => document.querySelectorAll('.part').forEach(s => s.classList.remove('print-on', 'first')));
+  show(location.hash.slice(1), false);
+</script>
+</body>
+</html>
