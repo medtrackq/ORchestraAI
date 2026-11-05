@@ -322,7 +322,7 @@ repo มี `render.yaml` (Render Blueprint) สำหรับ deploy เว็
   ```
 
 - **สำรองอัตโนมัติทุกคืน (แนะนำ):** ตั้ง 2 ค่าใน Render → Environment แล้วระบบสำรองเองทุกคืน 03:00 (หลังงานลบข้อมูล PDPA 02:00)
-  - `SUPABASE_SERVICE_ROLE_KEY`: Supabase → Project Settings → API Keys → คีย์ **service_role** (secret) ใช้อัปโหลดไฟล์เข้า Storage
+  - `SUPABASE_SERVICE_ROLE_KEY`: Supabase → Settings → API Keys → **Secret keys** (`sb_secret_…`, ส่งใน header `apikey` อย่างเดียว) หรือคีย์ **service_role** แบบเดิม (แท็บ Legacy, Supabase จะเลิกใช้ปลายปี 2026) ใช้อัปโหลดไฟล์เข้า Storage · คีย์นี้ข้ามสิทธิ์ทุกอย่างในโปรเจกต์ ใส่ใน Render เท่านั้น
   - `BACKUP_ENCRYPTION_KEY`: รหัสผ่านที่คุณตั้งเอง อย่างน้อย 16 ตัวอักษร ใช้เข้ารหัสไฟล์ **เก็บไว้อีกที่หนึ่งด้วย** (โปรแกรมจัดการรหัสผ่าน / ซองปิดผนึกที่ฝ่าย IT) ถ้าหาย จะเปิดไฟล์สำรองไม่ได้ · ถ้าเปลี่ยนรหัส ไฟล์เก่ายังต้องใช้รหัสเดิม
   - ไม่บังคับ: `BACKUP_HOUR` (ค่าตั้งต้น 3), `BACKUP_KEEP_DAYS` (14), `BACKUP_BUCKET` (`orchestra-backups`), `SUPABASE_URL` (ปกติหาเองจาก `DATABASE_URL`)
   - ทุกคืน: สร้าง ZIP แบบเดียวกับปุ่มดาวน์โหลด → เข้ารหัส AES-256-GCM (กุญแจจาก scrypt, ทีละ 1 MB ไฟล์ที่ถูกตัด สลับ หรือแก้จะถอดไม่ได้) → อัปโหลดเข้า bucket ส่วนตัว (ระบบสร้างให้ ปฏิเสธถ้าเป็น public) → ตรวจขนาดที่อัปโหลด → ลบไฟล์เก่ากว่า 14 วัน (เก็บ 3 ไฟล์ล่าสุดเสมอ ลบเฉพาะไฟล์ของระบบนี้)

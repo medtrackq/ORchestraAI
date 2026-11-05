@@ -161,7 +161,7 @@ class Config:
         elif len(self.passphrase) < MIN_PASSPHRASE:
             out.append(f"BACKUP_ENCRYPTION_KEY ต้องยาวอย่างน้อย {MIN_PASSPHRASE} ตัวอักษร")
         if not self.service_key:
-            out.append("SUPABASE_SERVICE_ROLE_KEY (คีย์ service_role ของโปรเจกต์ Supabase)")
+            out.append("SUPABASE_SERVICE_ROLE_KEY (secret key หรือ service_role key ของโปรเจกต์ Supabase)")
         if not self.url:
             out.append("SUPABASE_URL (หาที่อยู่โปรเจกต์จาก DATABASE_URL ไม่ได้)")
         if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{2,62}", self.bucket):
@@ -188,7 +188,10 @@ class Storage:
 
     def _call(self, method: str, path: str, *, body: dict | None = None, data=None, length: int | None = None,
               headers: dict | None = None, stream: bool = False):
-        heads = {"Authorization": f"Bearer {self.key}", "apikey": self.key, **(headers or {})}
+        # Supabase's new secret keys (sb_secret_...) are not JWTs: they go on the apikey header only. The
+        # legacy service_role key (a JWT) goes on both, as Supabase has always asked.
+        heads = {"apikey": self.key, **({} if self.key.startswith("sb_") else {"Authorization": f"Bearer {self.key}"}),
+                 **(headers or {})}
         payload = data
         if body is not None:
             payload = json.dumps(body).encode()
