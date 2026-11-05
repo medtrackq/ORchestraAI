@@ -43,7 +43,7 @@ from pydantic import BaseModel, Field
 
 from .auth import (COOKIE, ENV_ADMIN_ID, PENDING_S, ROLES, SESSION_HOURS, Accounts, AuthError, CodeNeeded, DbUserStore,
                    MemoryUserStore, ServiceUnavailable, TooManyAttempts, User, can, env_totp_secret, required_roles)
-from . import autobackup, backup, feedback as fb, his as his_mod, history_io, hospital_io, privacy, roster_io, system_status
+from . import autobackup, backup, environment, feedback as fb, his as his_mod, history_io, hospital_io, privacy, roster_io, system_status
 from .admin_store import require_supabase
 from .intake_service import IntakeService
 from .notify import DbNotifyStore, MemoryNotifyStore, Notifier, NotifyUnavailable
@@ -238,6 +238,8 @@ async def sessions(request: Request, call_next):
             return JSONResponse({"detail": "คำขอมาจากเว็บไซต์อื่น"}, status_code=403)
 
     response = await call_next(request)
+    if environment.is_practice() and response.headers.get("content-type", "").startswith("text/html"):
+        response = await _practice_page(response)  # the orange strip on every page of a practice system
     response.headers["Cache-Control"] = "no-store"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
@@ -251,6 +253,12 @@ async def sessions(request: Request, call_next):
 
 
 app.add_middleware(BodyLimit)  # added last, so it runs first (before the session lookup)
+
+
+async def _practice_page(response) -> Response:
+    body = b"".join([chunk async for chunk in response.body_iterator])
+    headers = {k: v for k, v in response.headers.items() if k.lower() not in ("content-length", "etag", "last-modified")}
+    return Response(environment.mark_page(body), status_code=response.status_code, headers=headers)
 
 
 @app.exception_handler(RequestValidationError)
@@ -366,8 +374,9 @@ def service_worker() -> FileResponse:
 
 
 @app.get("/manifest.webmanifest", include_in_schema=False)
-def manifest() -> FileResponse:
-    return FileResponse(ROOT / "static" / "manifest.webmanifest", media_type="application/manifest+json")
+def manifest() -> Response:
+    raw = (ROOT / "static" / "manifest.webmanifest").read_bytes()
+    return Response(environment.manifest(raw) if environment.is_practice() else raw, media_type="application/manifest+json")
 
 
 @app.get("/icons/{name}", include_in_schema=False)
@@ -1447,7 +1456,19 @@ def admin_import(body: ImportIn, request: Request) -> dict:
 @app.get("/api/admin/demo-data")
 def admin_demo_status(request: Request) -> dict:
     _, admin = _admin(request, "seed")
-    return _run(hospital_io.data_status, admin)
+    return {**_run(hospital_io.data_status, admin), "practice": environment.is_practice(),
+            "practice_phrase": environment.RESET_PHRASE}
+
+
+class PracticeResetIn(BaseModel):
+    confirm: str = Field(default="", max_length=50)
+
+
+@app.post("/api/admin/practice/reset")
+def admin_practice_reset(body: PracticeResetIn, request: Request) -> dict:
+    """Practice system only: start a new training round with fresh demo data (accounts stay)."""
+    user, admin = _admin(request, "seed")
+    return _run(environment.reset_practice, store, admin, body.confirm, actor=_actor(user))
 
 
 @app.post("/api/admin/demo-data/delete-cases")
@@ -1597,8 +1618,16 @@ def system_status_view(request: Request) -> dict:
     """SQL files applied or missing, settings (set or not, never values) and the go-live checklist."""
     _user(request, "users")
     out = _run(system_status.summary, store, notifier, intake, accounts)
-    out["checks"] = out["checks"] + [c for c in (_two_factor_check(), _feedback_check(), his.check()) if c]
+    out["checks"] = out["checks"] + [c for c in (_practice_check(), _two_factor_check(), _feedback_check(), his.check()) if c]
     return out
+
+
+def _practice_check() -> dict | None:
+    if not environment.is_practice():
+        return None
+    return {"label": "นี่คือระบบซ้อม", "status": "info",
+            "detail": "ใช้ฝึกและทดสอบเท่านั้น ห้ามใส่ข้อมูลผู้ป่วยจริง · เริ่มรอบใหม่ด้วยข้อมูลตัวอย่างได้ที่ข้อมูลโรงพยาบาล → นำเข้า/ส่งออก Excel",
+            "link": "/admin#io"}
 
 
 def _two_factor_check() -> dict | None:

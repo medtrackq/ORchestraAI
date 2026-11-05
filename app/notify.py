@@ -37,6 +37,7 @@ from urllib.parse import urlsplit
 
 from orchestra_engine import fmt
 
+from . import environment
 from .auth import ROLES, LoginLimiter, env_admin
 
 log = logging.getLogger("orchestra.notify")
@@ -536,11 +537,11 @@ class Notifier:
         statuses = []
         for target in self.store.targets(message.user_id):
             if target.channel == "webpush":
-                status, error = self.webpush.send(target, {"title": message.title, "body": message.body,
+                status, error = self.webpush.send(target, {"title": environment.title(message.title), "body": message.body,
                                                            "url": message.url, "tag": message.kind})
             elif target.channel == "line" and self.line.enabled:
                 link = f"\n{self.base_url}{message.url}" if self.base_url else ""
-                status, error = self.line.push(target.address, f"{message.title}\n{message.body}{link}")
+                status, error = self.line.push(target.address, f"{environment.title(message.title)}\n{message.body}{link}")
             else:
                 continue
             if status == "removed":
