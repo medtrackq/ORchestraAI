@@ -80,6 +80,7 @@ access = privacy.AccessLog(store)  # PDPA: who was shown patients' HN / names
 feedback = fb.Feedback(store, notifier.handle)  # problem reports from users and errors, for the admin
 his = his_mod.His(store, notifier.handle, access)  # the hospital information system calls in with an API key
 logging.getLogger("orchestra").addHandler(fb.ErrorLogHandler(feedback))  # errors the app logs are listed too
+logging.getLogger("orchestra").addHandler(fb.server_log_handler())  # and shown in the host's log (database down too)
 
 
 @asynccontextmanager

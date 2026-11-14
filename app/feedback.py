@@ -361,6 +361,25 @@ def purge(conn) -> dict:
     return out
 
 
+class ServerLogFormatter(logging.Formatter):
+    """The app's warnings and errors in the host's log (Railway / Render → logs), so they can be read even
+    when the database is down: the first line only, with patient identifiers masked (database errors
+    carry the failing row on the lines after)."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        message = (record.getMessage().splitlines() or [""])[0]
+        if record.exc_info and record.exc_info[1] is not None:
+            message += ": " + describe(record.exc_info[1])
+        return f"{record.levelname}:  {record.name}: {scrub(message, 1000)}"
+
+
+def server_log_handler() -> logging.Handler:
+    handler = logging.StreamHandler()  # stderr: what the host shows under its logs
+    handler.setLevel(logging.WARNING)
+    handler.setFormatter(ServerLogFormatter())
+    return handler
+
+
 class ErrorLogHandler(logging.Handler):
     """Errors that the app logs (background jobs, notifications, ...) also go to the admin's error list."""
 
