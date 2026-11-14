@@ -146,7 +146,9 @@ def explain_connection_error(exc: Exception) -> str:
         return "รูปแบบ DATABASE_URL ไม่ถูกต้อง (รหัสผ่านควรมีแต่ตัวอักษรภาษาอังกฤษกับตัวเลข)"
     if "connection refused" in low:
         return "เซิร์ฟเวอร์ฐานข้อมูลปฏิเสธการเชื่อมต่อ (เช็ก host และ port ใน DATABASE_URL)"
-    return "เชื่อมต่อฐานข้อมูลไม่ได้ (ดูรายละเอียดใน Render → Logs)"
+    from . import hosting
+
+    return f"เชื่อมต่อฐานข้อมูลไม่ได้ (ดูรายละเอียดใน {hosting.logs_place()})"
 
 
 @dataclass

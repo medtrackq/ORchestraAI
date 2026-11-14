@@ -5,7 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main
-from app.auth import DB_DOWN, Accounts, DbUserStore, LoginLimiter, Signer
+from app.auth import db_down, Accounts, DbUserStore, LoginLimiter, Signer
 from app.db import Database, explain_connection_error
 from app.db_store import DatabaseStore
 from app.store import StoreError
@@ -38,7 +38,7 @@ def test_owner_can_still_sign_in_and_others_get_503(monkeypatch):
     client = TestClient(main.app, base_url="https://testserver")
 
     r = client.post("/api/login", json={"username": "someone", "password": "whatever"})
-    assert r.status_code == 503 and r.json()["detail"] == DB_DOWN
+    assert r.status_code == 503 and r.json()["detail"] == db_down()
 
     assert client.post("/api/login", json={"username": "orchestra", "password": "owner-secret-123"}).status_code == 200
     assert client.get("/api/me").status_code == 200

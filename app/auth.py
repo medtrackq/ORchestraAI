@@ -28,7 +28,7 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from functools import lru_cache
 
-from . import twofactor as tf
+from . import hosting, twofactor as tf
 
 ROLES = {
     "admin": "ผู้ดูแลระบบ",
@@ -81,8 +81,9 @@ class ServiceUnavailable(AuthError):
     """The account store (database) cannot be reached right now."""
 
 
-DB_DOWN = ("ระบบเชื่อมต่อฐานข้อมูลไม่ได้ชั่วคราว ผู้ดูแลระบบ: เข้าด้วยบัญชีหลัก (APP_USERNAME) "
-           "เพื่อดูสาเหตุ หรือดู Render → Logs")
+def db_down() -> str:
+    return ("ระบบเชื่อมต่อฐานข้อมูลไม่ได้ชั่วคราว ผู้ดูแลระบบ: เข้าด้วยบัญชีหลัก (APP_USERNAME) "
+            f"เพื่อดูสาเหตุ หรือดู {hosting.logs_place()}")
 
 
 NO_TABLE = "ยังไม่มีตาราง app_users ให้รัน supabase/migrations/20261102000000_user_accounts.sql ใน SQL Editor"
@@ -271,7 +272,7 @@ def env_admin() -> User | None:
     secret = env_totp_secret()
     version = _admin_version(password + "|" + (secret or ""))  # new password or code secret -> old sessions end
     return User(ENV_ADMIN_ID, os.environ.get("APP_USERNAME", "orchestra").lower(),
-                "ผู้ดูแลระบบหลัก (Render)", "admin", session_version=version, totp_enabled=secret is not None)
+                "ผู้ดูแลระบบหลัก", "admin", session_version=version, totp_enabled=secret is not None)
 
 
 def _validate(role: str, display_name: str, staff_id: str | None) -> None:
@@ -466,7 +467,7 @@ class DbUserStore:
             with self.db.connect() as conn:
                 yield conn
         except DatabaseUnavailable as exc:
-            raise ServiceUnavailable(DB_DOWN) from exc
+            raise ServiceUnavailable(db_down()) from exc
 
     def _query(self, sql: str, params=(), *, missing=None):
         """Run a query; if migration 003 is missing return ``missing`` (or explain)."""
@@ -478,7 +479,7 @@ class DbUserStore:
             with self.db.connect() as conn:
                 return list(conn.execute(sql, params))
         except DatabaseUnavailable as exc:
-            raise ServiceUnavailable(DB_DOWN) from exc
+            raise ServiceUnavailable(db_down()) from exc
         except psycopg.errors.UndefinedTable as exc:
             if missing is not None:
                 return missing
@@ -651,7 +652,7 @@ class Accounts:
     def _check_code(self, user: User, code: str | None) -> dict | None:
         """``{"used": "app"}``, ``{"used": "recovery", "recovery_left": n}`` or None. Each code works once."""
         code = tf.clean(code)
-        if user.user_id == ENV_ADMIN_ID:  # secret from the environment, no recovery codes (Render is the way back)
+        if user.user_id == ENV_ADMIN_ID:  # secret from the environment, no recovery codes (the host's settings are the way back)
             secret = env_totp_secret()
             with self._lock:
                 step = tf.match(secret, code, last_step=self._env_last_step) if secret else None
@@ -705,7 +706,7 @@ class Accounts:
             self.code_limiter.fail(key)
             raise AuthError("รหัสไม่ถูกต้อง · ตรวจว่าเวลาในมือถือตั้งเป็นอัตโนมัติ แล้วกรอกรหัสที่แสดงอยู่ตอนนี้")
         self.code_limiter.clear(key)
-        if user.user_id == ENV_ADMIN_ID:  # no row to save in: the owner puts it in Render (APP_TOTP_SECRET)
+        if user.user_id == ENV_ADMIN_ID:  # no row to save in: the owner puts it in the host's settings (APP_TOTP_SECRET)
             return {"owner_account": True, "secret": payload["s"]}
         codes = tf.new_recovery_codes()
         self.store.enable_totp(user.user_id, payload["s"], step, [tf.hash_recovery(c) for c in codes])
@@ -713,7 +714,7 @@ class Accounts:
 
     def disable(self, user: User, code: str, address: str = "-") -> str:
         if user.user_id == ENV_ADMIN_ID:
-            raise AuthError("บัญชีหลัก: ลบค่า APP_TOTP_SECRET ใน Render เพื่อปิด")
+            raise AuthError(f"บัญชีหลัก: ลบค่า APP_TOTP_SECRET ที่ {hosting.settings_place()} เพื่อปิด")
         if user.two_factor_required:
             raise AuthError("บทบาทนี้ต้องใช้การยืนยันตัวตน 2 ชั้นเสมอ · ถ้าเปลี่ยนมือถือ ให้ตั้งค่าใหม่แทนการปิด")
         if not user.totp_enabled:
@@ -788,7 +789,7 @@ class Accounts:
 
     def change_own_password(self, user: User, current: str, new: str) -> str:
         if user.user_id == ENV_ADMIN_ID:
-            raise AuthError("รหัสผ่านของบัญชีหลักเปลี่ยนได้ที่ Render (APP_PASSWORD)")
+            raise AuthError(f"รหัสผ่านของบัญชีหลักเปลี่ยนได้ที่ {hosting.settings_place()} (APP_PASSWORD)")
         if not verify_password(current, user.password_hash):
             raise AuthError("รหัสผ่านปัจจุบันไม่ถูกต้อง")
         if current == new:

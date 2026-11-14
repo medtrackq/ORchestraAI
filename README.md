@@ -15,7 +15,7 @@
 | `orchestra_engine/fatigue.py` | Staffing Agent: เกณฑ์ความเหนื่อยล้า (ชม./วัน, ชม./7 วัน, พักหลังเคสดึก) และคะแนน 0-100% |
 | `orchestra_engine/flow.py` | สร้างข้อมูลจริงให้หน้า Flow (`python -m orchestra_engine.flow`) |
 | `orchestra_engine/thai.py` | คำภาษาไทยที่ Agent ใช้ร่วมกัน (บทบาท สถานะห้อง/เครื่องมือ/เตียง ความเร่งด่วน ผลการคำนวณ) · ข้อความทุกข้อความของ Agent เป็นภาษาไทย ส่วนรหัส (ห้อง เครื่องมือ วัสดุ) ชื่อคน ชื่อหัตถการ และชื่อ Agent คงเดิม (`tests/test_thai_messages.py` ตรวจไม่ให้มีข้อความอังกฤษหลุดกลับมา) |
-| `app/` | เว็บแอป FastAPI (หน้าเว็บ `app/static/index.html` + API) สำหรับ Render |
+| `app/` | เว็บแอป FastAPI (หน้าเว็บ `app/static/index.html` + API) สำหรับ Railway หรือ Render |
 | `app/db.py`, `app/db_store.py`, `app/seed.py` | โหมด Supabase: อ่าน/เขียนตาราง, lock + ตรวจก่อนบันทึก, ข้อมูลตัวอย่าง |
 | `supabase/migrations/20261101000000_security_and_integrity.sql` | RLS ทุกตาราง, exclusion constraint ใหม่, ตาราง activity |
 | `app/auth.py`, `app/static/login.html` | บัญชีผู้ใช้ บทบาท สิทธิ์ session และหน้าเข้าสู่ระบบ |
@@ -34,6 +34,7 @@
 | `app/system_status.py`, `app/static/status.html` | **สถานะระบบ** (`/status`, admin): ไฟล์ SQL ที่รันแล้ว/ยังขาด พร้อมปุ่มรันให้ การตั้งค่าเซิร์ฟเวอร์ และเช็กลิสต์ก่อนใช้งานจริง |
 | `app/privacy.py`, `app/static/privacy.html`, `supabase/migrations/20261112000000_privacy.sql` | **PDPA** (`/privacy`, admin): บันทึกว่าใครเห็นข้อมูลผู้ป่วยเมื่อไร และลบข้อมูลระบุตัวผู้ป่วยเมื่อครบระยะเวลาเก็บ |
 | `app/static/help.html` | **คู่มือการใช้งาน** (`/help`, ปุ่ม ❓ วิธีใช้): แยกตามบทบาท เปิดได้ก่อนเข้าสู่ระบบ พิมพ์เป็นเอกสารอบรม A4 ได้ |
+| `app/hosting.py` | เซิร์ฟเวอร์อยู่ที่ไหน (Railway / Render / อื่น): IP ผู้ใช้จาก header ที่เชื่อถือได้ ที่อยู่เว็บ เวอร์ชัน ที่ตั้งค่า และหน้า “ย้ายที่อยู่แล้ว” ของเซิร์ฟเวอร์เดิม (`APP_MOVED_TO`) |
 | `app/environment.py` | **ระบบซ้อม** (`APP_ENVIRONMENT=staging`): แถบสีส้มทุกหน้า แจ้งเตือนขึ้นต้น [ซ้อม] และเริ่มรอบฝึกใหม่ด้วยข้อมูลตัวอย่าง |
 | `app/static/pilot.html` | **ชุดทดลองใช้งานที่โรงพยาบาล** (`/pilot`): แผน 2 สัปดาห์ ขั้นตอนทดสอบแยกตามบทบาท แบบประเมิน (SUS) บันทึกประจำวัน พิมพ์แจกได้ |
 | `app/backup.py` | **สำรองข้อมูลทั้งหมด** (ZIP: CSV ทุกตาราง + manifest + restore.sql) และกู้คืน (`python -m app.backup dump/restore/decrypt`) |
@@ -50,13 +51,16 @@
 | `supabase/migrations/20261107000000_notifications.sql` | อุปกรณ์ที่รับแจ้งเตือน, การเชื่อม LINE, การตั้งค่าเรื่องที่รับ, บันทึกการส่ง |
 | `orchestra_engine/cssd.py` | Equipment & CSSD Agent: คิวงาน CSSD (ชุดไหนกลับเมื่อไร พร้อมกี่โมง เคสถัดไป เวลาเผื่อ) |
 | `orchestra_engine/intake.py`, `app/intake_service.py`, `app/intake_llm.py` | Intake & Triage Agent: อ่านคำขอ, คัดแยก, พยากรณ์เวลา, Claude (ไม่บังคับ) |
+| `Dockerfile` | image ของเว็บแอป (Python 3.12, ไม่ใช้ root) Railway build จากไฟล์นี้เอง ใช้กับเซิร์ฟเวอร์ที่มี Docker ได้ด้วย |
 | `render.yaml` | Render Blueprint (web service ฟรี + รหัสผ่านอัตโนมัติ) |
 | `web/orchestra-flow.html` | หน้า interactive 5 ขั้น (ปรับจาก ORchestraAIFlow.html) แสดงผลจาก engine จริง |
 | `orchestra_engine/validation.py` | ตัวตรวจ Hard Constraint อิสระ (ไม่ใช้โค้ด solver) |
 | `orchestra_engine/demo.py` | โรงพยาบาลจำลอง + 4 สถานการณ์ (ข้อมูลสมมติทั้งหมด) |
 | `tests/` | pytest ครอบคลุมทุก Hard Constraint และ Ripple Effect |
 
-## เข้าใช้งานผ่านเว็บ (Render)
+## เข้าใช้งานผ่านเว็บ (Render หรือ Railway)
+
+ใช้ได้ทั้ง Render (`render.yaml`) และ Railway (`Dockerfile`) โค้ดเดียวกัน · ย้ายจาก Render ไป Railway ดูหัวข้อ [ย้ายจาก Render ไป Railway](#ย้ายจาก-render-ไป-railway) · ในคู่มือนี้ที่เขียนว่า “Render → Environment” บน Railway คือ **service → Variables** (หน้า ⚙ สถานะระบบบอกที่ตั้งค่าของเซิร์ฟเวอร์ที่ใช้อยู่)
 
 repo มี `render.yaml` (Render Blueprint) สำหรับ deploy เว็บแอป `app/` เป็น service เดียว (หน้าเว็บ + API)
 
@@ -80,7 +84,7 @@ repo มี `render.yaml` (Render Blueprint) สำหรับ deploy เว็
 
 - admin สร้างบัญชีในแท็บ **ผู้ใช้** ระบบสุ่มรหัสชั่วคราวให้ (แสดงครั้งเดียว) ผู้ใช้ต้องตั้งรหัสใหม่เมื่อเข้าครั้งแรก
 - รหัสผ่านเก็บแบบ scrypt hash · session เป็น cookie ที่เซ็นด้วย HMAC (HttpOnly, SameSite=Lax, Secure บน HTTPS) อายุ 12 ชั่วโมง · เปลี่ยนรหัส / เปลี่ยนบทบาท / ปิดบัญชี = ออกจากระบบทุกเครื่องทันที · **กดออกจากระบบ = cookie ใช้ไม่ได้อีก** (บัญชีในระบบ: ออกจากทุกเครื่อง) แม้มีคนคัดลอก cookie ไว้ (เครื่องใช้ร่วมในหอผู้ป่วย)
-- ล็อกอินผิด 5 ครั้งใน 10 นาทีจากที่อยู่เดียว หรือ 20 ครั้งต่อชื่อผู้ใช้จากทุกที่ ถูกพัก 10 นาที · ทุกการล็อกอินใช้เวลาเท่ากัน (เดาไม่ได้ว่าชื่อผู้ใช้ไหนมีอยู่) · IP อ่านจาก `CF-Connecting-IP` ของ Cloudflare หน้า Render · การแก้ไขข้อมูลต้องเป็น JSON จากเว็บเดียวกัน (กัน CSRF)
+- ล็อกอินผิด 5 ครั้งใน 10 นาทีจากที่อยู่เดียว หรือ 20 ครั้งต่อชื่อผู้ใช้จากทุกที่ ถูกพัก 10 นาที · ทุกการล็อกอินใช้เวลาเท่ากัน (เดาไม่ได้ว่าชื่อผู้ใช้ไหนมีอยู่) · IP อ่านจาก header ที่ผู้ให้บริการตั้งเองทุกคำขอ: Railway `X-Real-IP`, Render `CF-Connecting-IP` ของ Cloudflare (ค่าที่ผู้ใช้ปลอมมาใช้ไม่ได้) · เซิร์ฟเวอร์อื่นหลัง proxy ของโรงพยาบาล ตั้ง `CLIENT_IP_HEADER` (เช่น `X-Real-IP` ของ nginx) · การแก้ไขข้อมูลต้องเป็น JSON จากเว็บเดียวกัน (กัน CSRF)
 - ควรตั้ง `SESSION_SECRET` (Render Blueprint สร้างให้อัตโนมัติ) · ถ้าไม่ตั้ง ระบบคำนวณกุญแจจาก `APP_PASSWORD` แบบช้า (scrypt) · หน้า ⚙ สถานะระบบเตือนเมื่อไม่ได้ตั้ง หรือ `APP_PASSWORD` สั้นกว่า 12 ตัว
 - ทุกหน้ามี Content-Security-Policy, HSTS, X-Frame-Options และไม่ cache · ข้อมูลที่ส่งเข้ามาใหญ่เกิน 12 MB ถูกปฏิเสธ
 - ทุกการเปลี่ยนแปลงบันทึกชื่อผู้ทำใน `orchestra_activity.actor`
@@ -339,7 +343,9 @@ repo มี `render.yaml` (Render Blueprint) สำหรับ deploy เว็
   - Supabase แผนฟรีรับไฟล์ละไม่เกิน 50 MB (ไฟล์สำรองปกติเล็กกว่านั้นมาก) · ไฟล์อยู่ในโปรเจกต์ Supabase เดียวกับฐานข้อมูล: กันข้อมูลหายจากการลบหรือแก้ผิด แต่ถ้าบัญชี Supabase หายทั้งบัญชี ไฟล์ก็หายด้วย จึงยังควรดาวน์โหลดเก็บเองเป็นครั้งคราว
 - หน้าสถานะแสดง: เซิร์ฟเวอร์เริ่มทำงานเมื่อไร และเริ่มใหม่กี่ครั้งใน 24 ชม. (บ่อย = แผนฟรีที่หลับเมื่อไม่มีคนใช้) · งานสรุปความพร้อม (ตามเวลาที่ตั้ง) และงานลบข้อมูล PDPA (02:00) ทำงานล่าสุดเมื่อไร · สำรองข้อมูลล่าสุด · เช็กลิสต์เตือนเมื่อไม่ได้สำรองเกิน 7 วัน หรืองานตั้งเวลาไม่ได้ทำงาน
 
-#### แผนของ Render และ Supabase สำหรับใช้งานจริง
+#### แผนของ Render, Railway และ Supabase สำหรับใช้งานจริง
+
+- **Railway แผน Hobby** ($5/เดือน รวมค่าใช้งาน $5) ไม่หลับ งานตั้งเวลาทำงานตรงเวลา และเลือก region สิงคโปร์ได้ ([Railway pricing](https://docs.railway.com/pricing/plans)) · ระบบนี้ใช้หน่วยความจำประมาณ 150–300 MB · แผนฟรีของ Railway (หน่วยความจำ 0.5 GB เครดิต $1/เดือน) ไม่พอเปิดตลอด 24 ชม.
 
 - **Render แผนฟรี** หลับเมื่อไม่มีคำขอเข้ามา 15 นาที ([Render changelog](https://render.com/changelog/free-web-services-now-remain-active-while-receiving-websocket-messages)) คนแรกที่เปิดต้องรอให้เซิร์ฟเวอร์ตื่น และงานตั้งเวลา (สรุปความพร้อม, ลบข้อมูลตาม PDPA, แจ้งเตือน) ไม่ทำงานระหว่างหลับ (ทำเมื่อมีคนเปิดเว็บครั้งถัดไป) → ใช้งานจริงควรใช้ instance แบบเสียเงิน (ไม่หลับ) · ทางเลือกชั่วคราว: ให้บริการตรวจ uptime เรียก `/api/health` ทุก 5–10 นาที
 - **Supabase แผนฟรี** ไม่มีการสำรองข้อมูลอัตโนมัติ และหยุดโปรเจกต์เมื่อไม่มีการใช้งาน 1 สัปดาห์ ([Supabase pricing](https://supabase.com/pricing)) → ใช้งานจริงกับข้อมูลผู้ป่วยควรใช้แผนที่มี daily backups และยังควรดาวน์โหลดไฟล์สำรองเก็บไว้เองเป็นประจำ (แผนฟรี: อย่างน้อยสัปดาห์ละครั้ง)
@@ -385,6 +391,41 @@ HIS ของโรงพยาบาลมักอยู่ในเครื�
 
 หน้าตั้งค่าแจ้งเตือนแสดงเฉพาะหัวข้อที่บทบาทนั้นได้รับจริง
 
+### ย้ายจาก Render ไป Railway
+
+ย้ายเฉพาะเซิร์ฟเวอร์เว็บ **ฐานข้อมูล Supabase อยู่ที่เดิม** (`DATABASE_URL` เดิม) ข้อมูล บัญชีผู้ใช้ การผูก LINE และการแจ้งเตือนในเบราว์เซอร์อยู่ครบ · Railway build จาก `Dockerfile` เอง ไม่ต้องตั้งคำสั่ง build/start · ใช้เวลาประมาณ 30–45 นาที
+
+**ก่อนเริ่ม**
+
+- สมัคร Railway ด้วยบัญชี GitHub แล้วเลือกแผน **Hobby** (แผนฟรีไม่พอเปิดตลอด 24 ชม.)
+- สำรองข้อมูลก่อน: ⚙ สถานะระบบ → **สำรองตอนนี้** (หรือดาวน์โหลดไฟล์สำรอง)
+- ค่าลับทั้งหมดคัดลอกจาก Render ไป Railway โดยตรงบนเครื่องของคุณ **อย่าส่งในแชต อีเมล หรือ LINE**
+
+**ขั้นตอน**
+
+1. **สร้าง service:** Railway → **New Project** → **Deploy from GitHub repo** → `medtrackq/ORchestraAI` (ถ้าถามสิทธิ์ GitHub ให้อนุญาตเฉพาะ repo นี้) · deploy แรกอาจล้มเพราะยังไม่มีค่าตั้ง ไม่เป็นไร ทำข้อ 2 ต่อ
+2. **คัดลอกค่าตั้ง:** เปิด Render → service `orchestra-ai` → **Environment** คู่กับ Railway → service → **Variables** แล้วเพิ่มทีละค่า (**New Variable**) หรือพิมพ์ `ชื่อ=ค่า` บรรทัดละค่าแล้ววางใน **Raw Editor**
+   - คัดลอก**ทุกค่า**ที่มีใน Render ด้วยค่าเดิมทุกตัวอักษร โดยเฉพาะ `DATABASE_URL`, `APP_USERNAME`, `APP_PASSWORD`, `SESSION_SECRET`, `APP_TOTP_SECRET` (ถ้าเปิดรหัส 2 ชั้นของบัญชีหลัก), `SUPABASE_SERVICE_ROLE_KEY` และ `BACKUP_ENCRYPTION_KEY` (ถ้าตั้งสำรองอัตโนมัติ ค่าต่างไปจะเปิดไฟล์สำรองเดิมไม่ได้), ค่า LINE, `ANTHROPIC_API_KEY`, `HOSPITAL_NAME`, `APP_TIMEZONE`, `TWO_FACTOR_ROLES`, `READINESS_DIGEST_HOUR`
+   - **ไม่ต้องคัดลอก** `PYTHON_VERSION` (Dockerfile กำหนดเอง) และ `APP_URL` ถ้าเป็นที่อยู่ `onrender.com` (Railway บอกที่อยู่ใหม่เอง)
+   - เพิ่ม `PORT=8080` และ `SOLVER_WORKERS=2` (Railway ไม่จำกัด CPU แบบแผนฟรีของ Render)
+   - กด **Deploy** ที่แถบการเปลี่ยนแปลงด้านบน (Railway เก็บการเปลี่ยนแปลงไว้จนกว่าจะกด)
+3. **ตั้งค่า service** (แท็บ **Settings**)
+   - **Networking → Public Networking → Generate Domain** (ถ้าถามพอร์ต ใส่ `8080`) ได้ที่อยู่ เช่น `https://orchestra-ai-production.up.railway.app`
+   - **Deploy → Healthcheck Path:** `/api/health` (deploy ใหม่จะรับงานต่อเมื่อพร้อมแล้วเท่านั้น)
+   - **Deploy → Regions:** Southeast Asia (Singapore) ใกล้ Supabase ภูมิภาคสิงคโปร์
+   - **Deploy → Serverless:** ปิดไว้ (ค่าตั้งต้น) ถ้าเปิด เซิร์ฟเวอร์จะหลับและงานตั้งเวลาไม่ทำงาน
+4. **ตรวจระบบใหม่:** เปิดที่อยู่ใหม่ → เข้าด้วยบัญชีหลัก (ชื่อและรหัสเดิม) → ⚙ สถานะระบบ ต้องขึ้น “Railway” แถว “เซิร์ฟเวอร์ที่ใช้” บอก region `asia-southeast1` และไม่มีเรื่องสีแดง · กด **สำรองตอนนี้** เพื่อทดสอบ · เปิดตารางผ่าตัดดูว่าข้อมูลครบ · ระหว่างนี้ระบบเดิมยังใช้ได้ตามปกติ (งานตั้งเวลาจองในฐานข้อมูล จึงไม่ทำซ้ำสองครั้ง)
+5. **สลับไปใช้ที่อยู่ใหม่**
+   - **LINE** (ถ้าใช้): LINE Developers → channel → Messaging API → **Webhook URL** = `https://<ที่อยู่ใหม่>/api/line/webhook` → **Verify**
+   - **HIS** (ถ้าเชื่อม): แจ้งทีม HIS เปลี่ยนที่อยู่เป็นที่อยู่ใหม่ (API key เดิมใช้ได้)
+   - **ระบบเดิม:** Render → Environment → เพิ่ม `APP_MOVED_TO` = ที่อยู่ใหม่ → Save · ตั้งแต่นั้นทุกหน้าของที่อยู่เดิมบอกว่าย้ายแล้วและพาไปที่อยู่ใหม่ (API ตอบ 410) และหยุดงานตั้งเวลาทั้งหมด
+   - **แจ้งผู้ใช้:** ที่อยู่ใหม่ · เข้าสู่ระบบใหม่ด้วยรหัสเดิม · ใครติดตั้งแอปบนมือถือ ลบไอคอนเดิมแล้วติดตั้งใหม่ · เปิดแจ้งเตือนในเบราว์เซอร์ใหม่ที่ 🔔 แจ้งเตือน (LINE ใช้ได้ต่อโดยไม่ต้องทำอะไร)
+6. **หลัง 2–4 สัปดาห์:** ลบ service บน Render (Settings → **Delete Web Service**) · ผู้ที่ยังเปิดที่อยู่เดิมหลังจากนั้นจะเข้าไม่ได้
+
+**ถ้ามีปัญหา:** ดู log ที่ Railway → **Deployments** → **View logs** · ระหว่างแก้ ลบ `APP_MOVED_TO` ใน Render แล้วกลับไปใช้ที่อยู่เดิมได้ทันที (ฐานข้อมูลเดียวกัน)
+
+**มีโดเมนของโรงพยาบาล:** Settings → Networking → **Custom Domain** แล้วเพิ่ม CNAME และ TXT ที่ Railway บอกใน DNS · ตั้ง `APP_URL` เป็นโดเมนนั้น · ครั้งหน้าถ้าย้ายผู้ให้บริการอีก ผู้ใช้ไม่ต้องเปลี่ยนที่อยู่
+
 ### ระบบซ้อม (สำหรับอบรมและทดลอง)
 
 ระบบซ้อมคือ ORchestraAI อีกชุดที่ใช้โค้ดเดียวกัน แต่ใช้ฐานข้อมูลแยก ให้ทีมฝึกตามขั้นตอนทดสอบได้เต็มที่โดยไม่มีทางแตะข้อมูลจริง ตั้ง `APP_ENVIRONMENT=staging` แล้วระบบจะ:
@@ -393,11 +434,13 @@ HIS ของโรงพยาบาลมักอยู่ในเครื�
 - **เริ่มรอบฝึกใหม่ได้:** ข้อมูลโรงพยาบาล → นำเข้า/ส่งออก Excel → **เริ่มรอบฝึกใหม่** (พิมพ์ “เริ่มระบบซ้อมใหม่” ยืนยัน) ลบห้อง บุคลากร เคส กิจกรรม บันทึกการเข้าถึง และข้อความ HIS ของรอบนี้ แล้วใส่ข้อมูลตัวอย่างชุดใหม่ · บัญชีผู้ใช้ การตั้งค่าแจ้งเตือน และเรื่องที่ผู้ใช้แจ้งยังอยู่ · บัญชีที่ผูกกับบุคลากรตัวอย่างผูกให้ใหม่เอง · ปุ่มนี้มีเฉพาะระบบซ้อม
 - หน้า ⚙ สถานะระบบมีหัวข้อ “นี่คือระบบซ้อม” และแถว `APP_ENVIRONMENT` ในการตั้งค่าเซิร์ฟเวอร์ · ระบบจริงไม่ต้องตั้งค่านี้ (ค่าตั้งต้นคือระบบจริง)
 
-ตั้งระบบซ้อม (ครั้งเดียว ประมาณ 20 นาที ใช้แผนฟรีได้ทั้งคู่):
+ตั้งระบบซ้อม (ครั้งเดียว ประมาณ 20 นาที · ไม่บังคับ ทำก่อนอบรมทีมก็พอ):
 
-1. **Supabase:** New project (เช่น `orchestra-practice` ภูมิภาค Singapore) → **Connect** → คัดลอก connection string แบบ **Session pooler**
-2. **Render:** New → **Web Service** (ไม่ใช่ Blueprint ซึ่งจะสร้างชื่อเดิมซ้ำ) → เลือก repo เดียวกัน branch `main` → ชื่อ เช่น `orchestra-practice` · Build `pip install -r requirements.txt` · Start `uvicorn app.main:app --host 0.0.0.0 --port $PORT` · Health check `/api/health`
-3. **Environment ของระบบซ้อม:** `APP_ENVIRONMENT=staging` · `DATABASE_URL` = connection string จากข้อ 1 · `APP_PASSWORD` และ `SESSION_SECRET` **คนละค่ากับระบบจริง** · `PYTHON_VERSION=3.12.8` · `APP_TIMEZONE=Asia/Bangkok` · `SOLVER_WORKERS=1` · `SOLVER_TIME_LIMIT=15` · ไม่ต้องตั้งค่า LINE, สำรองข้อมูลอัตโนมัติ หรือ HIS
+1. **Supabase:** New project (เช่น `orchestra-practice` ภูมิภาค Singapore, แผนฟรีได้) → **Connect** → คัดลอก connection string แบบ **Session pooler**
+2. **เซิร์ฟเวอร์ของระบบซ้อม** (เลือกที่เดียวกับระบบจริง จะได้ดูแลที่เดียว)
+   - **Railway (แนะนำหลังย้ายแล้ว):** ใน project เดิม → **Create** → **GitHub Repo** → repo เดียวกัน → ตั้งชื่อ service เช่น `orchestra-practice` → Settings: Generate Domain, Healthcheck Path `/api/health`, Region Singapore และ**เปิด Serverless** (ระบบซ้อมหลับเมื่อไม่มีคนใช้ ประหยัดค่าใช้จ่าย)
+   - **Render:** New → **Web Service** (ไม่ใช่ Blueprint ซึ่งจะสร้างชื่อเดิมซ้ำ) → repo เดียวกัน branch `main` → ชื่อ เช่น `orchestra-practice` · Build `pip install -r requirements.txt` · Start `uvicorn app.main:app --host 0.0.0.0 --port $PORT` · Health check `/api/health` · แผนฟรีได้
+3. **ค่าตั้งของระบบซ้อม** (Railway → Variables หรือ Render → Environment): `APP_ENVIRONMENT=staging` · `DATABASE_URL` = connection string จากข้อ 1 · `APP_PASSWORD` และ `SESSION_SECRET` **ต้องคนละค่ากับระบบจริง** (ผู้ฝึกจะรู้รหัสบัญชีหลักของระบบซ้อม จึงต้องไม่ใช่รหัสของระบบจริง) · `APP_TIMEZONE=Asia/Bangkok` · Railway เพิ่ม `PORT=8080` · Render เพิ่ม `PYTHON_VERSION=3.12.8`, `SOLVER_WORKERS=1`, `SOLVER_TIME_LIMIT=15` · ไม่ต้องตั้งค่า LINE, สำรองข้อมูลอัตโนมัติ หรือ HIS
 4. เปิดเว็บของระบบซ้อม → เข้าด้วยบัญชีหลัก → ⚙ สถานะระบบ → **รัน SQL ที่ยังขาด** → หน้าตารางผ่าตัด → **ใส่ข้อมูลตัวอย่าง**
 5. สร้างบัญชีผู้ฝึกในแท็บผู้ใช้ (ศัลยแพทย์และพยาบาลผูกกับบุคลากรตัวอย่าง เช่น Dr.Napat) แล้วใช้ขั้นตอนทดสอบใน `/pilot`
 6. ก่อนอบรมรอบถัดไป กด **เริ่มรอบฝึกใหม่**

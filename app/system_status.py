@@ -22,6 +22,7 @@ import psycopg
 from psycopg import pq
 from psycopg.rows import dict_row
 
+from . import hosting
 from .auth import AuthError
 from .hospital_io import DEMO_NAME, _demo_where
 from .store import StoreError
@@ -185,7 +186,7 @@ def _env(name: str) -> str:
 def settings(mode: str, llm_enabled: bool, push_state: str | None) -> list[dict]:
     """What the server is set up with (no secret values)."""
     digest = _env("READINESS_DIGEST_HOUR") or "14"
-    url = _env("APP_URL") or _env("RENDER_EXTERNAL_URL")
+    url = hosting.public_url()
     line = bool(_env("LINE_CHANNEL_ACCESS_TOKEN") and _env("LINE_CHANNEL_SECRET"))
     rows = [
         ("DATABASE_URL", "ฐานข้อมูล Supabase", mode == "supabase",
@@ -215,6 +216,7 @@ def settings(mode: str, llm_enabled: bool, push_state: str | None) -> list[dict]
         ("APP_ENVIRONMENT", "ระบบจริง หรือระบบซ้อม", True,
          "ระบบซ้อม: แถบสีส้มทุกหน้า แจ้งเตือนขึ้นต้นด้วย [ซ้อม] เริ่มรอบใหม่ได้" if _practice()
          else "ระบบจริง (ค่าตั้งต้น) · ระบบซ้อมตั้งค่า staging", False),
+        ("(ตรวจเอง)", "เซิร์ฟเวอร์ที่ใช้", True, _host(), False),
         ("APP_TIMEZONE", "เขตเวลา", True, _env("APP_TIMEZONE") or "Asia/Bangkok (ค่าตั้งต้น)", False),
         ("SOLVER_WORKERS / SOLVER_TIME_LIMIT", "กำลังคำนวณตาราง", True,
          f"{_env('SOLVER_WORKERS') or '2'} worker · ไม่เกิน {_env('SOLVER_TIME_LIMIT') or '10'} วินาที", False),
@@ -237,6 +239,15 @@ def _backup_row(mode: str) -> tuple:
             config.ready, value, False)
 
 
+def _host() -> str:
+    where = hosting.name() if hosting.provider() else "ไม่ใช่ Railway หรือ Render"
+    if hosting.region():
+        where += f" · region {hosting.region()}"
+    if hosting.provider() == hosting.RAILWAY and hosting.region() and not hosting.region().startswith("asia-southeast"):
+        where += " (ถ้าฐานข้อมูล Supabase อยู่สิงคโปร์ ย้ายไป Southeast Asia จะเร็วกว่า)"
+    return where + f" · ค่าตั้งอยู่ที่ {hosting.settings_place()}"
+
+
 def _practice() -> bool:
     from .environment import is_practice
 
@@ -244,7 +255,7 @@ def _practice() -> bool:
 
 
 def version() -> str | None:
-    commit = _env("RENDER_GIT_COMMIT")
+    commit = hosting.commit()
     return commit[:7] if commit else None
 
 
@@ -362,6 +373,14 @@ def note_backup(store, manifest: dict, size: int, actor: dict | None) -> None:
     }, ensure_ascii=False))
 
 
+# Why a server starts again and again, by host.
+RESTARTS = {
+    hosting.RENDER: "Render แผนฟรีหลับเมื่อไม่มีคนใช้ 15 นาที คนแรกต้องรอ และงานตั้งเวลาอาจไม่ทำงาน",
+    hosting.RAILWAY: ("ดูสาเหตุที่ Railway → Deployments → View logs (เช่น หน่วยความจำไม่พอ) · ปิด Serverless ไว้ "
+                      "(Settings → Deploy) งานตั้งเวลาจึงทำงานตรงเวลา"),
+}
+
+
 def operations(conn, tz, now: datetime | None = None) -> tuple[dict, list[dict]]:
     """Server starts, scheduled jobs and the last backup, and what the go-live checklist says about them."""
     from .readiness import digest_hour
@@ -415,8 +434,8 @@ def operations(conn, tz, now: datetime | None = None) -> tuple[dict, list[dict]]
         add("สำรองข้อมูล", "ok" if age < BACKUP_WARN_DAYS else "warn",
             f"ล่าสุด {age} วันก่อน" + ("" if age < BACKUP_WARN_DAYS else f" (ควรทำอย่างน้อยทุก {BACKUP_WARN_DAYS} วัน)"))
     if len(recent) >= 4:
-        add("เซิร์ฟเวอร์ทำงานต่อเนื่อง", "warn",
-            f"เริ่มใหม่ {len(recent)} ครั้งใน 24 ชม. · Render แผนฟรีหลับเมื่อไม่มีคนใช้ 15 นาที คนแรกต้องรอ และงานตั้งเวลาอาจไม่ทำงาน")
+        add("เซิร์ฟเวอร์ทำงานต่อเนื่อง", "warn", f"เริ่มใหม่ {len(recent)} ครั้งใน 24 ชม. · " + RESTARTS.get(
+            hosting.provider(), "เซิร์ฟเวอร์อาจหลับเมื่อไม่มีคนใช้ หรือหยุดทำงานบ่อย ดูสาเหตุใน log ของเซิร์ฟเวอร์"))
     # Jobs note their runs in app_settings (SQL file 008): without it there is nothing to check yet.
     if has_settings and hour is not None and now.hour >= hour + 1 and (digest is None or digest.date() != now.date()):
         add("งานสรุปความพร้อมวันถัดไป", "warn",
@@ -436,7 +455,7 @@ def summary(store, notifier, intake, accounts) -> dict:
             push_state = "ready" if notifier.store.setting("vapid_private_pem") else "no_key"
     except Exception:  # the page must load even if notifications are broken
         push_state = None
-    out = {"mode": mode, "version": version(), "settings": settings(mode, intake.llm.enabled, push_state),
+    out = {"mode": mode, "version": version(), "host": hosting.info(), "settings": settings(mode, intake.llm.enabled, push_state),
            "migrations": [], "rls_off": [], "checks": [], "db_error": None, "server": None}
     if mode != "supabase":
         return out
