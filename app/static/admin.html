@@ -403,6 +403,11 @@
     <div id="hist-result"></div>
     <div id="hist-overview"></div>
 
+    <div id="io-practice" hidden>
+      <h3>ระบบซ้อม: เริ่มรอบฝึกใหม่</h3>
+      <div class="danger-zone" id="io-practice-box"></div>
+    </div>
+
     <div id="io-demo" hidden>
       <h3>3. เริ่มใช้งานจริง: ลบข้อมูลตัวอย่าง</h3>
       <div class="row-item" id="io-demo-cases"></div>
@@ -1592,6 +1597,23 @@
   // ---------------------------------------------- demo data, start over
   async function loadDemoData() {
     const d = await api('/api/admin/demo-data');
+    $('#io-practice').hidden = !d.practice;
+    if (d.practice) {
+      $('#io-practice-box').innerHTML = `<b>ล้างข้อมูลของรอบฝึกนี้ แล้วใส่ข้อมูลตัวอย่างชุดใหม่</b>
+        <p class="hint">ใช้ก่อนอบรมแต่ละรอบ: ลบห้อง บุคลากร เคส การจอง กิจกรรม และบันทึกการเข้าถึงของรอบนี้ แล้วใส่โรงพยาบาลตัวอย่างกับเคสของวันนี้ 10 เคสใหม่
+          · <b>บัญชีผู้ใช้ การตั้งค่าแจ้งเตือน และเรื่องที่ผู้ใช้แจ้งยังอยู่</b> บัญชีที่ผูกกับบุคลากรตัวอย่าง (เช่น Dr.Napat) ผูกให้ใหม่เอง
+          · ปุ่มนี้มีเฉพาะระบบซ้อม (APP_ENVIRONMENT=staging)</p>
+        <div class="io-actions"><label style="flex:0 1 280px">พิมพ์ "${esc(d.practice_phrase)}" เพื่อยืนยัน<input type="text" id="io-practice-text" autocomplete="off"></label>
+          <button class="btn danger" type="button" id="io-practice-go" disabled>เริ่มรอบฝึกใหม่</button></div>`;
+      $('#io-practice-text').addEventListener('input', e => { $('#io-practice-go').disabled = e.target.value.trim() !== d.practice_phrase; });
+      $('#io-practice-go').addEventListener('click', e => busy(e.target, async () => {
+        const r = await api('/api/admin/practice/reset', { confirm: $('#io-practice-text').value });
+        STAFF = null;
+        showAffected([], `เริ่มรอบฝึกใหม่แล้ว · จองเคสตัวอย่าง ${r.booked} เคส · ผูกบัญชีกับบุคลากรตัวอย่างใหม่ ${r.relinked_users} บัญชี`
+          + (r.unlinked_users ? ` · ต้องผูกเอง ${r.unlinked_users} บัญชี` : ''), true);
+        await loadDemoData();
+      }));
+    }
     const demo = d.demo_cases + d.demo_history;
     $('#io-demo-cases').innerHTML = `<div class="title"><b>เคสตัวอย่างและประวัติตัวอย่าง</b>
         ${demo ? `<span class="badge warn">${demo} รายการ</span>` : '<span class="badge ok">ไม่มีแล้ว</span>'}</div>

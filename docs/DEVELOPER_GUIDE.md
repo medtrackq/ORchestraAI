@@ -66,6 +66,7 @@ app/
   main.py                FastAPI: middleware, ทุก route, การประกอบ store / notifier / งานเบื้องหลัง
   auth.py                บัญชี บทบาท PERMISSIONS session cookie การจำกัดการ login และขั้นตอนยืนยันตัวตน 2 ชั้น
   twofactor.py           รหัส 6 หลัก (TOTP, RFC 6238), รหัสสำรอง, QR code (segno)
+  environment.py         ระบบซ้อม (APP_ENVIRONMENT=staging): แถบบนทุกหน้า HTML, [ซ้อม] ในแจ้งเตือน, เริ่มรอบฝึกใหม่
   store.py               ScheduleStore (demo) + ตัวช่วยที่ใช้ร่วมกัน (build_case, StoreError, Activity …)
   db_store.py            DatabaseStore: งานทุกอย่างในโหมด Supabase (ธุรกรรม, outbox ของ event)
   db.py                  Database: load (World), save, pending, การตรวจคอลัมน์ที่มีจริง
@@ -304,6 +305,7 @@ TEST_DATABASE_URL=postgresql://postgres@localhost/postgres .venv/bin/python -m p
 - **ห้าม log ค่าลับหรือข้อมูลผู้ป่วย:** ข้อผิดพลาดที่ log ด้วย logger `orchestra.*` ระดับ ERROR จะไปขึ้นหน้า ⚙ สถานะระบบด้วย (ผ่าน `mask_identifiers` และเก็บเฉพาะบรรทัดแรกของ exception ด้วย `feedback.describe` เพราะ error ของฐานข้อมูลมีแถวข้อมูลผู้ป่วยในบรรทัดถัดไป)
 - **regex กับข้อความที่ผู้ใช้ส่งมา:** ต้องใช้เวลาเชิงเส้น ห้ามมี `\s*` สองตัวติดกันโดยมีตัวเลือกคั่น (เช่น `\s*-?\s*`) หรือ `\(.*?\)` (ใช้ `\([^()]*\)`) และตัดความยาวข้อความก่อน · Python `re` ถือ GIL ทั้งเซิร์ฟเวอร์จะหยุดรอ · มีเทสต์จับเวลาใน `test_intake.py`
 - **ขนาดข้อมูลขาเข้า:** ปรับ `BODY_LIMITS` ใน `main.py` เมื่อเพิ่ม endpoint ที่ไม่ต้องรับไฟล์ · error 422 ไม่ส่งค่าที่ได้รับกลับไป
+- **ระบบซ้อม:** middleware ใส่แถบ “ระบบซ้อม” ให้ทุก response ที่เป็น `text/html` เอง หน้าใหม่ไม่ต้องทำอะไร · ถ้าเพิ่มช่องทางแจ้งเตือนใหม่ ให้ส่งหัวข้อผ่าน `environment.title()` · ตารางใหม่ที่เก็บข้อมูลของรอบฝึก (ไม่ใช่บัญชีหรือการตั้งค่า) ให้เพิ่มใน `PRACTICE_TABLES` หรือ `hospital_io.WIPE_ORDER`
 - **งานหนักที่ผู้ใช้สั่งได้** (เช่นค้นหาวันว่าง): จำกัดจำนวนที่ทำพร้อมกัน (`SEARCHES`) และทีละรายการต่อคน
 
 ### การออกแบบ

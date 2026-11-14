@@ -212,6 +212,9 @@ def settings(mode: str, llm_enabled: bool, push_state: str | None) -> list[dict]
          "ปิด" if digest.lower() in ("off", "none", "-1") else f"{digest}:00 น." + ("" if _env("READINESS_DIGEST_HOUR")
                                                                                  else " (ค่าตั้งต้น)"), False),
         _backup_row(mode),
+        ("APP_ENVIRONMENT", "ระบบจริง หรือระบบซ้อม", True,
+         "ระบบซ้อม: แถบสีส้มทุกหน้า แจ้งเตือนขึ้นต้นด้วย [ซ้อม] เริ่มรอบใหม่ได้" if _practice()
+         else "ระบบจริง (ค่าตั้งต้น) · ระบบซ้อมตั้งค่า staging", False),
         ("APP_TIMEZONE", "เขตเวลา", True, _env("APP_TIMEZONE") or "Asia/Bangkok (ค่าตั้งต้น)", False),
         ("SOLVER_WORKERS / SOLVER_TIME_LIMIT", "กำลังคำนวณตาราง", True,
          f"{_env('SOLVER_WORKERS') or '2'} worker · ไม่เกิน {_env('SOLVER_TIME_LIMIT') or '10'} วินาที", False),
@@ -232,6 +235,12 @@ def _backup_row(mode: str) -> tuple:
         value = "ยังขาด " + " · ".join(config.missing())
     return ("BACKUP_ENCRYPTION_KEY / SUPABASE_SERVICE_ROLE_KEY", "สำรองข้อมูลอัตโนมัติทุกคืน (เข้ารหัส เก็บใน Supabase Storage)",
             config.ready, value, False)
+
+
+def _practice() -> bool:
+    from .environment import is_practice
+
+    return is_practice()
 
 
 def version() -> str | None:
