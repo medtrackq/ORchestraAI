@@ -35,6 +35,7 @@ import psycopg
 from psycopg import sql
 from psycopg.rows import dict_row
 
+from . import hosting
 from .store import StoreError
 
 FORMAT = 1
@@ -97,7 +98,7 @@ def dump(url: str) -> tuple[tempfile.SpooledTemporaryFile, dict]:
         manifest = {
             "format": FORMAT, "app": "ORchestraAI",
             "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            "version": (os.environ.get("RENDER_GIT_COMMIT") or "")[:7] or None,
+            "version": hosting.commit()[:7] or None,
             "migrations": [m["name"] for m in system_status.check(conn) if m["status"] == "applied"],
             "tables": [], "sequences": _sequences(conn),
         }
@@ -218,7 +219,8 @@ README = """ไฟล์สำรองข้อมูล ORchestraAI
      DATABASE_URL="<connection string ของฐานข้อมูลใหม่>" python -m app.backup restore ไฟล์นี้.zip
    วิธีที่ 2 (มี psql): แตกไฟล์ zip แล้วในโฟลเดอร์นั้นรัน
      psql "<connection string ของฐานข้อมูลใหม่>" -f restore.sql
-3. ตั้ง DATABASE_URL ของแอปใน Render ให้ชี้ไปฐานข้อมูลใหม่
+3. ตั้ง DATABASE_URL ของแอปในค่าตั้งของเซิร์ฟเวอร์ (Railway → Variables หรือ Render → Environment)
+   ให้ชี้ไปฐานข้อมูลใหม่
 
 การกู้คืนทำในทรานแซกชันเดียว ถ้าผิดพลาดจะยกเลิกทั้งหมด
 """

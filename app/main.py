@@ -1,4 +1,4 @@
-"""ORchestraAI web app: API + web UI in one service (deployed on Render).
+"""ORchestraAI web app: API + web UI in one service (deployed on Railway or Render; see app/hosting.py).
 
 Run locally:
     APP_PASSWORD=changeme uvicorn app.main:app --reload
@@ -18,6 +18,8 @@ Environment:
     INTAKE_MODEL       Claude model for intake (default claude-opus-5-5)
     SOLVER_WORKERS     CP-SAT worker threads (default 2)
     SOLVER_TIME_LIMIT  seconds per solve (default 10)
+    APP_MOVED_TO       only on an old server after a move: every page sends people to this address
+    CLIENT_IP_HEADER   only when hosted elsewhere behind a proxy: the header holding the caller's IP
 """
 from __future__ import annotations
 
@@ -43,7 +45,8 @@ from pydantic import BaseModel, Field
 
 from .auth import (COOKIE, ENV_ADMIN_ID, PENDING_S, ROLES, SESSION_HOURS, Accounts, AuthError, CodeNeeded, DbUserStore,
                    MemoryUserStore, ServiceUnavailable, TooManyAttempts, User, can, env_totp_secret, required_roles)
-from . import autobackup, backup, environment, feedback as fb, his as his_mod, history_io, hospital_io, privacy, roster_io, system_status
+from . import (autobackup, backup, environment, feedback as fb, his as his_mod, history_io, hosting, hospital_io, privacy,
+               roster_io, system_status)
 from .admin_store import require_supabase
 from .intake_service import IntakeService
 from .notify import DbNotifyStore, MemoryNotifyStore, Notifier, NotifyUnavailable
@@ -82,7 +85,10 @@ logging.getLogger("orchestra").addHandler(fb.ErrorLogHandler(feedback))  # error
 @asynccontextmanager
 async def _lifespan(_app):
     """Background jobs: the daily reminder of the next day's not-ready cases; the PDPA retention run; the
-    nightly encrypted backup (once it is set up)."""
+    nightly encrypted backup (once it is set up). None on an old server after a move (APP_MOVED_TO)."""
+    if hosting.moved_to():
+        yield
+        return
     hour = digest_hour()
     timers = [DigestTimer(store, notifier.handle, hour=hour)] if hour is not None else []
     if store.mode == "supabase":
@@ -121,15 +127,9 @@ def _https(request: Request) -> bool:
 
 
 def _address(request: Request) -> str:
-    """The client's IP. Render runs behind Cloudflare, which always overwrites CF-Connecting-IP; the first
-    X-Forwarded-For entry is whatever the client sent (Render only appends), so it is the fallback only.
-    Login limits do not rely on it alone (there is also a per-user-name cap)."""
-    for value in (request.headers.get("cf-connecting-ip", ""),
-                  request.headers.get("x-forwarded-for", "").split(",")[0]):
-        value = value.strip()
-        if value:
-            return value[:64]
-    return request.client.host if request.client else "unknown"
+    """The client's IP, from the header the host's proxy sets (hosting.IP_HEADERS). Login limits do not rely
+    on it alone (there is also a per-user-name cap)."""
+    return hosting.client_ip(request.headers, request.client.host if request.client else None)
 
 
 MAX_BODY = 12 * 1024 * 1024  # an Excel upload (5 MB) as base64 JSON fits; anything bigger is refused unread
@@ -252,7 +252,30 @@ async def sessions(request: Request, call_next):
     return response
 
 
-app.add_middleware(BodyLimit)  # added last, so it runs first (before the session lookup)
+app.add_middleware(BodyLimit)  # added after the session lookup, so it runs before it
+
+
+@app.middleware("http")
+async def moved(request: Request, call_next):
+    """An old server after a move (APP_MOVED_TO): pages say where the system is now and go there; the API
+    answers 410 so the HIS and the LINE webhook show an error until their address is changed. Added last,
+    so it runs first: nothing else (sign-in, the database) is touched."""
+    target = hosting.moved_to()
+    path = request.scope["path"]
+    if not target or hosting.moved_path(path) or urlparse(target).netloc == request.headers.get("host"):
+        return await call_next(request)  # (APP_MOVED_TO copied to the new server by mistake: no loop)
+    if path.startswith("/api/"):
+        response = JSONResponse({"detail": f"ระบบย้ายไปที่ {target} แล้ว", "moved_to": target}, status_code=410)
+    else:
+        response = Response(hosting.moved_page(target, path), media_type="text/html; charset=utf-8")
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "same-origin"
+    response.headers["Content-Security-Policy"] = CSP
+    if _https(request):
+        response.headers["Strict-Transport-Security"] = "max-age=31536000"
+    return response
 
 
 async def _practice_page(response) -> Response:
@@ -555,7 +578,8 @@ def two_factor_status(request: Request) -> dict:
     ready = owner or (store.mode == "supabase" and _run(accounts.store.two_factor_ready)) or store.mode != "supabase"
     return {"enabled": user.totp_enabled, "required": user.two_factor_required, "must_setup": user.must_setup_2fa,
             "owner_account": owner, "ready": bool(ready), "recovery_left": _run(accounts.recovery_left, user),
-            "required_roles": sorted(required_roles()), "demo": store.mode != "supabase"}
+            "required_roles": sorted(required_roles()), "demo": store.mode != "supabase",
+            "host": hosting.info() if owner else None}  # where the owner puts APP_TOTP_SECRET
 
 
 @app.post("/api/2fa/setup")
@@ -1636,9 +1660,9 @@ def _two_factor_check() -> dict | None:
         return None
     problems, fine = [], []
     if os.environ.get("APP_TOTP_SECRET") and not env_totp_secret():
-        problems.append("ค่า APP_TOTP_SECRET ใน Render ไม่ถูกต้อง (บัญชีหลักยังเข้าด้วยรหัสผ่านอย่างเดียว)")
+        problems.append(f"ค่า APP_TOTP_SECRET ใน {hosting.name()} ไม่ถูกต้อง (บัญชีหลักยังเข้าด้วยรหัสผ่านอย่างเดียว)")
     elif not env_totp_secret():
-        problems.append("บัญชีหลักยังไม่เปิด (ตั้งค่าที่หน้าความปลอดภัยของบัญชี แล้วใส่ APP_TOTP_SECRET ใน Render)")
+        problems.append(f"บัญชีหลักยังไม่เปิด (ตั้งค่าที่หน้าความปลอดภัยของบัญชี แล้วใส่ APP_TOTP_SECRET ที่ {hosting.settings_place()})")
     else:
         fine.append("บัญชีหลักเปิดแล้ว")
     if store.mode == "supabase":

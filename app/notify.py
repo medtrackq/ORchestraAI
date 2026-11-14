@@ -37,7 +37,7 @@ from urllib.parse import urlsplit
 
 from orchestra_engine import fmt
 
-from . import environment
+from . import environment, hosting
 from .auth import ROLES, LoginLimiter, env_admin
 
 log = logging.getLogger("orchestra.notify")
@@ -243,7 +243,7 @@ class WebPushSender:
 
     def __init__(self, store, subject: str | None = None) -> None:
         self.store = store
-        site = os.environ.get("APP_URL") or os.environ.get("RENDER_EXTERNAL_URL")  # Render sets the latter
+        site = hosting.public_url()
         self.subject = subject or os.environ.get("VAPID_SUBJECT") or site or "mailto:orchestra-notify@example.org"
         self._vapid = None
         self._public: str | None = None
@@ -502,7 +502,7 @@ class Notifier:
         self._code_tries = LoginLimiter(limit=5, window_s=900, per_user=10**9)  # wrong LINE link codes
         self.background = background
         self._pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="notify") if background else None
-        self.base_url = (os.environ.get("APP_URL") or os.environ.get("RENDER_EXTERNAL_URL") or "").rstrip("/")
+        self.base_url = hosting.public_url()
 
     # -- who
     def users(self) -> list:

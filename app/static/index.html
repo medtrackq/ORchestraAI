@@ -1602,7 +1602,7 @@
           <button class="btn" type="button" data-act="reset">รีเซ็ตรหัสผ่าน</button>
           ${u.totp_enabled ? '<button class="btn" type="button" data-act="reset-2fa" title="เมื่อมือถือหายและไม่มีรหัสสำรอง">ล้าง 2 ชั้น</button>' : ''}
         </div>
-      </div>`).join('') || '<p class="hint">ยังไม่มีผู้ใช้ (บัญชีหลักจาก Render ใช้ได้เสมอ)</p>';
+      </div>`).join('') || '<p class="hint">ยังไม่มีผู้ใช้ (บัญชีหลักจากค่าตั้งของเซิร์ฟเวอร์ใช้ได้เสมอ)</p>';
     $('#user-list').querySelectorAll('[data-act]').forEach(button => button.addEventListener('click', () => {
       const row = button.closest('.row-item'), id = row.dataset.user;
       busy(button, async () => {
@@ -1692,7 +1692,7 @@
     const others = status.webpush.devices.length - (here ? 1 : 0);
     let lineHtml;
     if (!status.line.enabled) {
-      lineHtml = `<p class="hint">ผู้ดูแลยังไม่ได้ตั้งค่า LINE Official Account${can('users') ? ' (ใส่ LINE_CHANNEL_ACCESS_TOKEN และ LINE_CHANNEL_SECRET ใน Render)' : ''}</p>`;
+      lineHtml = `<p class="hint">ผู้ดูแลยังไม่ได้ตั้งค่า LINE Official Account${can('users') ? ' (ใส่ LINE_CHANNEL_ACCESS_TOKEN และ LINE_CHANNEL_SECRET ในค่าตั้งของเซิร์ฟเวอร์ ดูที่ ⚙ สถานะระบบ)' : ''}</p>`;
     } else if (status.line.linked) {
       lineHtml = '<p>✅ เชื่อม LINE แล้ว</p><button class="btn" type="button" id="line-off">ยกเลิกการเชื่อม LINE</button>';
     } else {

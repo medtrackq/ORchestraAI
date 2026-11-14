@@ -4,7 +4,7 @@
 
 | เอกสาร | สำหรับ |
 |---|---|
-| `README.md` | ความสามารถของระบบทั้งหมด วิธีตั้งค่า Render / Supabase / LINE |
+| `README.md` | ความสามารถของระบบทั้งหมด วิธีตั้งค่า Railway / Render / Supabase / LINE และขั้นตอนย้ายจาก Render ไป Railway |
 | หน้า `/help` ในระบบ | คู่มือผู้ใช้แต่ละบทบาท (ภาษาไทย พิมพ์ได้) |
 | `docs/BACKLOG.md` | งานที่บันทึกไว้ทำภายหลัง |
 | `/api/docs` (ต้องเข้าระบบ) | API ทุกเส้น สร้างจากโค้ดอัตโนมัติ (FastAPI / OpenAPI) |
@@ -18,7 +18,7 @@ ORchestraAI จัดตารางห้องผ่าตัดด้วย A
 - **Backend:** Python 3.12 + FastAPI (`app/`) และ engine ที่ไม่ขึ้นกับเว็บ (`orchestra_engine/`)
 - **Frontend:** หน้า HTML ไฟล์เดียวต่อหน้า (`app/static/*.html`) เขียน CSS/JS ในไฟล์เอง ไม่มี build step และไม่มี framework
 - **ฐานข้อมูล:** Supabase (PostgreSQL 16) โครงสร้างอยู่ใน `supabase/migrations/`
-- **Hosting:** Render (`render.yaml`) deploy อัตโนมัติเมื่อ merge เข้า `main`
+- **Hosting:** Railway (`Dockerfile`) หรือ Render (`render.yaml`) deploy อัตโนมัติเมื่อ merge เข้า `main` · โค้ดที่ขึ้นกับผู้ให้บริการอยู่ใน `app/hosting.py` ที่เดียว
 - **CI:** GitHub Actions (`.github/workflows/tests.yml`) รัน pyflakes และ pytest กับ PostgreSQL 16 จริง ทุก PR
 
 ### สองโหมดการทำงาน
@@ -66,6 +66,7 @@ app/
   main.py                FastAPI: middleware, ทุก route, การประกอบ store / notifier / งานเบื้องหลัง
   auth.py                บัญชี บทบาท PERMISSIONS session cookie การจำกัดการ login และขั้นตอนยืนยันตัวตน 2 ชั้น
   twofactor.py           รหัส 6 หลัก (TOTP, RFC 6238), รหัสสำรอง, QR code (segno)
+  hosting.py             เซิร์ฟเวอร์อยู่ที่ไหน: IP ผู้ใช้ (header ที่เชื่อถือได้ของแต่ละเจ้า), ที่อยู่เว็บ, เวอร์ชัน, ที่ตั้งค่า/log, APP_MOVED_TO
   environment.py         ระบบซ้อม (APP_ENVIRONMENT=staging): แถบบนทุกหน้า HTML, [ซ้อม] ในแจ้งเตือน, เริ่มรอบฝึกใหม่
   store.py               ScheduleStore (demo) + ตัวช่วยที่ใช้ร่วมกัน (build_case, StoreError, Activity …)
   db_store.py            DatabaseStore: งานทุกอย่างในโหมด Supabase (ธุรกรรม, outbox ของ event)
@@ -139,7 +140,7 @@ DATABASE_URL=postgresql://postgres@localhost/orchestra_dev APP_PASSWORD=dev-pass
 
 ## 4. ค่าตั้ง (Environment variables)
 
-ระบบจริงตั้งที่ Render → service → **Environment** · หน้า ⚙ สถานะระบบบอกว่าตั้งแล้วหรือยัง (ไม่แสดงค่า)
+ระบบจริงตั้งที่ Railway → service → **Variables** (หรือ Render → service → **Environment**) · หน้า ⚙ สถานะระบบบอกว่าตั้งแล้วหรือยัง (ไม่แสดงค่า) และบอกว่าอยู่บนเซิร์ฟเวอร์ไหน
 
 | ชื่อ | ใช้ทำอะไร | ค่าตั้งต้น |
 |---|---|---|
@@ -151,7 +152,10 @@ DATABASE_URL=postgresql://postgres@localhost/orchestra_dev APP_PASSWORD=dev-pass
 | `ANTHROPIC_API_KEY`, `INTAKE_MODEL` | Intake Agent อ่านข้อความด้วย Claude · ไม่ตั้ง = กฎภาษาไทย | — |
 | `LINE_CHANNEL_ACCESS_TOKEN`, `LINE_CHANNEL_SECRET`, `LINE_ADD_FRIEND_URL` | แจ้งเตือนทาง LINE | — |
 | `VAPID_SUBJECT` | ผู้ส่ง Web Push | — |
-| `APP_URL` | ที่อยู่เว็บในข้อความ LINE (Render ใช้ `RENDER_EXTERNAL_URL` ให้เอง) | — |
+| `APP_URL` | ที่อยู่เว็บในข้อความ LINE (ไม่ตั้ง = Render `RENDER_EXTERNAL_URL` / Railway `RAILWAY_PUBLIC_DOMAIN`) · ตั้งเมื่อใช้โดเมนของโรงพยาบาล | — |
+| `PORT` | พอร์ตที่แอปฟัง (Railway/Render ตั้งให้ · Railway แนะนำตั้ง `8080` ให้ตรงกับโดเมน) | 8000 ใน Dockerfile |
+| `CLIENT_IP_HEADER` | เฉพาะเซิร์ฟเวอร์อื่นหลัง proxy: header ที่มี IP ผู้ใช้ (เช่น `X-Real-IP`) · `none` = ไม่เชื่อ header ใดเลย | Railway `X-Real-IP` · Render `CF-Connecting-IP` |
+| `APP_MOVED_TO` | เฉพาะเซิร์ฟเวอร์เดิมหลังย้าย: ทุกหน้าพาไปที่อยู่ใหม่ API ตอบ 410 หยุดงานตั้งเวลา | — |
 | `READINESS_DIGEST_HOUR` | ชั่วโมงส่งสรุปความพร้อมวันถัดไป + รายการรอผ่าตัด · `off` = ปิด | 14 |
 | `HOSPITAL_NAME` | ชื่อโรงพยาบาลบนกระดาษพิมพ์ | — |
 
@@ -198,14 +202,14 @@ DATABASE_URL=postgresql://postgres@localhost/orchestra_dev APP_PASSWORD=dev-pass
    - **ห้าม** ปิดหรือข้ามเทสต์เพื่อให้เขียว
    - แนะนำ: ตั้ง branch protection ให้ `main` ต้องผ่าน check นี้ก่อน merge
 8. **merge:** ใช้แบบ merge commit ตามที่ใช้อยู่
-9. **Render deploy เอง:** ใช้เวลา 2–5 นาที · เวอร์ชันที่ขึ้นจริงดูได้ที่หน้า ⚙ สถานะระบบ (7 ตัวแรกของ commit)
+9. **Railway / Render deploy เอง:** ใช้เวลา 2–5 นาที · เวอร์ชันที่ขึ้นจริงดูได้ที่หน้า ⚙ สถานะระบบ (7 ตัวแรกของ commit)
 10. **รัน SQL ใหม่:** ⚙ สถานะระบบ → **รัน SQL ที่ยังขาด** → **รันเลย** (หรือวางใน Supabase SQL Editor) · โค้ดใหม่ต้องทำงานได้แม้ยังไม่รัน (ดูข้อ 6)
 11. **ตรวจหลังขึ้นระบบ:**
     - หน้า ⚙ สถานะระบบ: เช็กลิสต์ไม่มีสีแดงใหม่ และหัวข้อ "ข้อผิดพลาดของระบบ" ไม่มีเรื่องใหม่
     - ลองใช้ความสามารถที่เพิ่งขึ้นจริง 1 ครั้ง
 
 **ถ้าระบบจริงมีปัญหาหลัง deploy:**
-1. Render → service → **Events** → เลือก deploy ก่อนหน้า → **Rollback**
+1. Railway → service → **Deployments** → deploy ก่อนหน้า → เมนู ⋮ → **Redeploy** (Render: service → **Events** → **Rollback**)
 2. แก้ใน branch ใหม่ แล้วทำ workflow เดิม
 
 migration ย้อนไม่ได้ จึงต้องเพิ่มอย่างเดียว ไม่ลบหรือเปลี่ยนชื่อคอลัมน์ที่โค้ดเวอร์ชันเก่ายังใช้
@@ -306,6 +310,7 @@ TEST_DATABASE_URL=postgresql://postgres@localhost/postgres .venv/bin/python -m p
 - **regex กับข้อความที่ผู้ใช้ส่งมา:** ต้องใช้เวลาเชิงเส้น ห้ามมี `\s*` สองตัวติดกันโดยมีตัวเลือกคั่น (เช่น `\s*-?\s*`) หรือ `\(.*?\)` (ใช้ `\([^()]*\)`) และตัดความยาวข้อความก่อน · Python `re` ถือ GIL ทั้งเซิร์ฟเวอร์จะหยุดรอ · มีเทสต์จับเวลาใน `test_intake.py`
 - **ขนาดข้อมูลขาเข้า:** ปรับ `BODY_LIMITS` ใน `main.py` เมื่อเพิ่ม endpoint ที่ไม่ต้องรับไฟล์ · error 422 ไม่ส่งค่าที่ได้รับกลับไป
 - **ระบบซ้อม:** middleware ใส่แถบ “ระบบซ้อม” ให้ทุก response ที่เป็น `text/html` เอง หน้าใหม่ไม่ต้องทำอะไร · ถ้าเพิ่มช่องทางแจ้งเตือนใหม่ ให้ส่งหัวข้อผ่าน `environment.title()` · ตารางใหม่ที่เก็บข้อมูลของรอบฝึก (ไม่ใช่บัญชีหรือการตั้งค่า) ให้เพิ่มใน `PRACTICE_TABLES` หรือ `hospital_io.WIPE_ORDER`
+- **ของที่ขึ้นกับผู้ให้บริการเซิร์ฟเวอร์** (IP ผู้ใช้, ที่อยู่เว็บ, เวอร์ชัน, ที่ตั้งค่า) อ่านผ่าน `app/hosting.py` เท่านั้น ห้ามอ่าน `RENDER_*` / `RAILWAY_*` หรือ header ของ proxy ตรง ๆ · IP ต้องมาจาก header ที่ proxy ของผู้ให้บริการเขียนทับเองทุกคำขอเท่านั้น (Railway ไม่ตั้ง `CF-Connecting-IP` ถ้าเชื่อ header นั้นบน Railway ผู้ใช้จะปลอม IP เพื่อหลบการจำกัด login ได้)
 - **งานหนักที่ผู้ใช้สั่งได้** (เช่นค้นหาวันว่าง): จำกัดจำนวนที่ทำพร้อมกัน (`SEARCHES`) และทีละรายการต่อคน
 
 ### การออกแบบ
@@ -350,7 +355,8 @@ TEST_DATABASE_URL=postgresql://postgres@localhost/postgres .venv/bin/python -m p
 - ดูตัวอย่าง `DigestTimer` (`app/readiness.py`) และ `RetentionTimer` (`app/privacy.py`) โดยเริ่มใน `_lifespan` ของ `main.py`
 - **ทำครั้งเดียวต่อวัน:** ใช้ `claim_digest(day, kind=...)`
 - **ให้หน้าสถานะเห็นว่างานทำงาน:** เรียก `mark_job(...)`
-- **Render แผนฟรีหลับเมื่อไม่มีคนใช้:** งานจะทำเมื่อเซิร์ฟเวอร์ตื่นครั้งถัดไป ต้องออกแบบให้ทำย้อนหลังได้
+- **เซิร์ฟเวอร์อาจหลับหรือเริ่มใหม่** (Render แผนฟรี, deploy ใหม่): งานจะทำเมื่อเซิร์ฟเวอร์ตื่นครั้งถัดไป ต้องออกแบบให้ทำย้อนหลังได้ · ระหว่าง deploy อาจมีสองเครื่องทำงานพร้อมกันชั่วครู่ จึงต้องจองงานในฐานข้อมูลเสมอ
+- **เซิร์ฟเวอร์เดิมหลังย้าย (`APP_MOVED_TO`) ไม่เริ่มงานตั้งเวลา** งานใหม่ต้องอยู่หลังเงื่อนไขนี้ใน `_lifespan`
 
 ### เชื่อม HIS แบบดึงข้อมูล (เมื่อโรงพยาบาลมี API ให้เราเรียกได้)
 1. **ตัวเชื่อม:** เขียนไฟล์ใหม่ เช่น `app/his_<ยี่ห้อ>.py` ให้อ่านข้อมูลจาก API ของโรงพยาบาล แล้วแปลงเป็น dict รูปแบบเดียวกับ `HisRequestIn`
@@ -381,7 +387,7 @@ TEST_DATABASE_URL=postgresql://postgres@localhost/postgres .venv/bin/python -m p
   ```bash
   DATABASE_URL=<ใส่ในเครื่องเท่านั้น> .venv/bin/python -m app.backup dump backup.zip
   ```
-- **Log ของเซิร์ฟเวอร์:** Render → service → **Logs**
+- **Log ของเซิร์ฟเวอร์:** Railway → service → **Deployments** → **View logs** (Render: service → **Logs**)
 - **ข้อผิดพลาดที่ไม่คาดคิด:** ระบบเก็บให้เองในหน้าสถานะระบบ (หัวข้อข้อผิดพลาดของระบบ) และแจ้ง admin
 - **Supabase แผนฟรีหยุดโปรเจกต์เมื่อไม่ได้ใช้นาน:**
   - หน้าเว็บจะขึ้น "เชื่อมต่อฐานข้อมูลไม่ได้"

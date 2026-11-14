@@ -1,0 +1,14 @@
+# Not needed to run the app (and secrets must never go into an image).
+.git
+.github
+.claude
+.venv
+.pytest_cache
+**/__pycache__
+**/*.py[cod]
+.env
+.env.*
+tests
+docs
+supabase/.temp
+supabase/.branches

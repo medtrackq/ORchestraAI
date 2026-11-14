@@ -188,7 +188,7 @@
         <ol>
           <li>Supabase → Settings → <b>API Keys</b> → หัวข้อ Secret keys → กดรูปตาเพื่อแสดง แล้วคัดลอกคีย์ที่ขึ้นต้นด้วย <code>sb_secret_</code> (โปรเจกต์เก่าใช้คีย์ <b>service_role</b> ในแท็บ Legacy ได้เหมือนกัน แต่ Supabase จะเลิกใช้ปลายปี 2026)</li>
           <li>ตั้งรหัสผ่านสำหรับเข้ารหัสไฟล์สำรอง อย่างน้อย 16 ตัวอักษร และ<b>เก็บไว้อีกที่หนึ่งด้วย</b> (โปรแกรมจัดการรหัสผ่าน หรือซองปิดผนึกที่ฝ่าย IT) · ถ้ารหัสนี้หาย จะเปิดไฟล์สำรองไม่ได้เลย</li>
-          <li>Render → บริการนี้ → Environment: เพิ่ม <code>SUPABASE_SERVICE_ROLE_KEY</code> และ <code>BACKUP_ENCRYPTION_KEY</code> แล้วกด Save (อย่าส่งค่าเหล่านี้ทางแชตหรืออีเมล)</li>
+          <li><span class="host-settings">ค่าตั้งของเซิร์ฟเวอร์</span>: เพิ่ม <code>SUPABASE_SERVICE_ROLE_KEY</code> และ <code>BACKUP_ENCRYPTION_KEY</code> (<span class="host-how">เพิ่มค่า แล้วเริ่มเซิร์ฟเวอร์ใหม่</span>) · อย่าส่งค่าเหล่านี้ทางแชตหรืออีเมล</li>
           <li>เมื่อเซิร์ฟเวอร์เริ่มใหม่ กลับมาหน้านี้แล้วกด <b>สำรองตอนนี้</b> เพื่อทดสอบ</li>
         </ol>
         <p class="hint">กู้คืน: กด “ดาวน์โหลด” ไฟล์ .orcbak ในรายการ แล้วบนเครื่องที่มีโค้ด ORchestraAI ตั้ง <code>BACKUP_ENCRYPTION_KEY</code> และ <code>DATABASE_URL</code> ของฐานข้อมูลใหม่ แล้วรัน <code>python -m app.backup restore ไฟล์.orcbak</code> (หรือ <code>decrypt ไฟล์.orcbak ไฟล์.zip</code> เพื่อได้ไฟล์ zip แบบเดิม)</p>
@@ -214,7 +214,7 @@
 
   <section class="card" id="settings">
     <header><div><h2>การตั้งค่าเซิร์ฟเวอร์</h2>
-      <p class="hint">ตั้งที่ Render → บริการนี้ → Environment แล้วกด Save (เซิร์ฟเวอร์จะเริ่มใหม่เอง) · หน้านี้บอกแค่ว่าตั้งแล้วหรือยัง ไม่แสดงรหัสผ่านหรือคีย์ลับ</p></div></header>
+      <p class="hint">ตั้งที่ <span class="host-settings">ค่าตั้งของเซิร์ฟเวอร์</span>: <span class="host-how">เพิ่มค่า แล้วเริ่มเซิร์ฟเวอร์ใหม่</span> · หน้านี้บอกแค่ว่าตั้งแล้วหรือยัง ไม่แสดงรหัสผ่านหรือคีย์ลับ</p></div></header>
     <div class="table-scroll">
       <table>
         <thead><tr><th>เรื่อง</th><th class="hide-sm">ชื่อตัวแปร</th><th>สถานะ</th></tr></thead>
@@ -284,7 +284,7 @@
     box.hidden = false;
     if (data.mode !== 'supabase') {
       box.className = 'banner warn';
-      box.innerHTML = `${mark('warn')}<div class="text"><b>โหมดสาธิต</b> · ยังไม่ได้เชื่อมฐานข้อมูล Supabase ข้อมูลทั้งหมดอยู่ในหน่วยความจำและหายเมื่อเซิร์ฟเวอร์เริ่มใหม่ ตั้ง DATABASE_URL ใน Render ก่อนใช้งานจริง</div>`;
+      box.innerHTML = `${mark('warn')}<div class="text"><b>โหมดสาธิต</b> · ยังไม่ได้เชื่อมฐานข้อมูล Supabase ข้อมูลทั้งหมดอยู่ในหน่วยความจำและหายเมื่อเซิร์ฟเวอร์เริ่มใหม่ ตั้ง DATABASE_URL ที่ ${esc(data.host.settings)} ก่อนใช้งานจริง</div>`;
       return;
     }
     if (data.db_error) {
@@ -400,8 +400,10 @@
   }
 
   function render() {
+    document.querySelectorAll('.host-settings').forEach(el => { el.textContent = data.host.settings; });
+    document.querySelectorAll('.host-how').forEach(el => { el.textContent = data.host.how; });
     $('#sub').textContent = (data.mode === 'supabase' ? 'เชื่อมฐานข้อมูล Supabase' : 'โหมดสาธิต (ไม่มีฐานข้อมูล)')
-      + (data.version ? ` · เวอร์ชัน ${data.version}` : '') + ' · ตรวจเมื่อ ' + new Date().toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
+      + (data.host.provider ? ` · ${data.host.name}` : '') + (data.version ? ` · เวอร์ชัน ${data.version}` : '') + ' · ตรวจเมื่อ ' + new Date().toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
     renderSummary();
     renderChecks();
     renderMigrations();

@@ -11,7 +11,7 @@ Each night (``BACKUP_HOUR``, default 03:00, after the PDPA run at 02:00) the ser
 4. removes files older than ``BACKUP_KEEP_DAYS`` (default 14), always keeping the newest 3.
 
 Without the passphrase the files cannot be read, so it must be kept somewhere else as well (a password
-manager or a sealed envelope with the hospital's IT): Render going away must not take it with it.
+manager or a sealed envelope with the hospital's IT): the host going away must not take it with it.
 Restore: ``python -m app.backup decrypt <file>.orcbak backup.zip`` then ``restore`` as usual (or
 ``restore`` the .orcbak directly), with ``BACKUP_ENCRYPTION_KEY`` set.
 """

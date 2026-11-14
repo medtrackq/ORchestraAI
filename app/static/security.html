@@ -165,15 +165,15 @@
   </section>
 
   <section class="card" id="owner-card" hidden>
-    <h2>บัญชีหลัก: ใส่รหัสลับใน Render</h2>
-    <p class="hint">บัญชีหลัก (APP_USERNAME) ไม่ได้เก็บในฐานข้อมูล เพื่อให้เข้าระบบได้แม้ฐานข้อมูลมีปัญหา รหัสลับจึงต้องเก็บใน Render</p>
+    <h2>บัญชีหลัก: ใส่รหัสลับใน <span class="host-name">เซิร์ฟเวอร์</span></h2>
+    <p class="hint">บัญชีหลัก (APP_USERNAME) ไม่ได้เก็บในฐานข้อมูล เพื่อให้เข้าระบบได้แม้ฐานข้อมูลมีปัญหา รหัสลับจึงต้องเก็บในค่าตั้งของ <span class="host-name">เซิร์ฟเวอร์</span></p>
     <ol class="steps">
       <li><div><h3>คัดลอกรหัสลับนี้</h3><div class="key" id="owner-secret"></div>
         <button class="btn" type="button" id="copy-secret">คัดลอก</button></div></li>
-      <li><div><h3>Render → Service ของ ORchestraAI → Environment</h3>
-        <p class="hint">กด Add Environment Variable · Key: <b>APP_TOTP_SECRET</b> · Value: รหัสลับที่คัดลอก · กด Save (Render deploy ใหม่ประมาณ 2–3 นาที)</p></div></li>
+      <li><div><h3 id="owner-place">ค่าตั้งของเซิร์ฟเวอร์</h3>
+        <p class="hint"><span id="owner-how">เพิ่มค่า</span> · ชื่อ: <b>APP_TOTP_SECRET</b> · ค่า: รหัสลับที่คัดลอก</p></div></li>
       <li><div><h3>เข้าระบบใหม่</h3>
-        <p class="hint">หลัง deploy ทุกเครื่องจะออกจากระบบ เข้าใหม่ด้วยรหัสผ่านแล้วกรอกรหัสจากแอป · ถ้ามือถือหาย: แก้หรือลบค่านี้ใน Render</p></div></li>
+        <p class="hint">หลัง deploy ทุกเครื่องจะออกจากระบบ เข้าใหม่ด้วยรหัสผ่านแล้วกรอกรหัสจากแอป · ถ้ามือถือหาย: แก้หรือลบค่านี้ใน <span class="host-name">เซิร์ฟเวอร์</span></p></div></li>
     </ol>
     <p class="note warn" style="margin-top:14px"><b>อย่าส่งรหัสลับนี้ในแชตหรืออีเมล</b> ใครมีรหัสนี้สร้างรหัส 6 หลักของบัญชีหลักได้</p>
   </section>
@@ -213,13 +213,18 @@
 
   function render() {
     const s = STATUS;
+    if (s.host) {  // where the owner's secret goes: Railway, Render or another server
+      document.querySelectorAll('.host-name').forEach(el => { el.textContent = s.host.name; });
+      $('#owner-place').textContent = s.host.settings;
+      $('#owner-how').textContent = s.host.how;
+    }
     $('#who').textContent = `${ME.display_name} (${ME.username}) · ${ME.role_label}`;
     $('#must').hidden = !s.must_setup;
     $('#back').hidden = s.must_setup;
     $('#state-card').hidden = false;
     const on = s.enabled;
     $('#status').innerHTML = `<span class="badge ${on ? 'on' : 'off'}">${on ? 'เปิดอยู่' : 'ยังไม่เปิด'}</span>`
-      + `<span class="hint">${on ? (s.owner_account ? 'บัญชีหลัก: ใช้รหัสลับที่ตั้งใน Render (APP_TOTP_SECRET)' : 'เข้าระบบครั้งต่อไปต้องกรอกรหัสจากแอป')
+      + `<span class="hint">${on ? (s.owner_account ? `บัญชีหลัก: ใช้รหัสลับที่ตั้งใน ${esc(s.host ? s.host.name : 'เซิร์ฟเวอร์')} (APP_TOTP_SECRET)` : 'เข้าระบบครั้งต่อไปต้องกรอกรหัสจากแอป')
         : s.required ? 'บทบาทนี้ต้องเปิด' : 'แนะนำให้เปิด โดยเฉพาะผู้ที่เห็นข้อมูลผู้ป่วย'}</span>`
       + (s.demo ? '<span class="hint">· โหมดข้อมูลจำลอง: การตั้งค่าหายเมื่อเซิร์ฟเวอร์เริ่มใหม่</span>' : '');
     const notReady = !s.ready;
