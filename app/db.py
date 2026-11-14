@@ -146,6 +146,12 @@ def explain_connection_error(exc: Exception) -> str:
         return "รูปแบบ DATABASE_URL ไม่ถูกต้อง (รหัสผ่านควรมีแต่ตัวอักษรภาษาอังกฤษกับตัวเลข)"
     if "connection refused" in low:
         return "เซิร์ฟเวอร์ฐานข้อมูลปฏิเสธการเชื่อมต่อ (เช็ก host และ port ใน DATABASE_URL)"
+    if "max client" in low or "emaxconn" in low or "too many clients" in low or "remaining connection slots" in low:
+        return ("การเชื่อมต่อฐานข้อมูลเต็ม (Session pooler รับได้จำกัด) ลองใหม่อีกครั้ง "
+                "ถ้ายังเป็นอยู่ ให้ใช้ port 6543 (Transaction pooler) ใน DATABASE_URL หรือปิดเซิร์ฟเวอร์อีกตัวที่ใช้ฐานข้อมูลเดียวกัน")
+    if "allow_list" in low or "allowlist" in low or "not allowed" in low or "no pg_hba.conf entry" in low:
+        return ("Supabase ไม่อนุญาตให้เซิร์ฟเวอร์นี้เชื่อมต่อ: ดู Supabase → Database → Network Restrictions "
+                "แล้วอนุญาตทุก IP (หรือ IP ของเซิร์ฟเวอร์ใหม่)")
     from . import hosting
 
     return f"เชื่อมต่อฐานข้อมูลไม่ได้ (ดูรายละเอียดใน {hosting.logs_place()})"

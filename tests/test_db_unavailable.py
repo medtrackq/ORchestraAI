@@ -22,6 +22,10 @@ UNREACHABLE = "postgresql://postgres:secret@127.0.0.1:1/postgres"  # nothing lis
     ("invalid dsn: missing \"=\" after \"postgres\" in connection info string", "postgresql://"),
     ('invalid URI query parameter: "pgbouncer"', "ตัวอักษรภาษาอังกฤษกับตัวเลข"),
     ("connection timeout expired", "pause"),
+    ('connection to server at "1.2.3.4", port 5432 failed: FATAL:  Max client connections reached', "6543"),
+    ("FATAL:  (EMAXCONNSESSION) max clients reached in session mode - max clients are limited to pool_size: 15",
+     "การเชื่อมต่อฐานข้อมูลเต็ม"),
+    ("FATAL:  Address not in tenant allow_list: {1, 2, 3, 4}", "Network Restrictions"),
 ])
 def test_driver_errors_become_fixable_messages(message, expected):
     text = explain_connection_error(Exception(message))
@@ -106,3 +110,22 @@ def test_key_value_conninfo_is_kept_as_is():
 
     url = "host=127.0.0.1 port=5432 dbname=postgres user=postgres"
     assert normalize_url(url) == url and check_url(url) is None
+
+
+def test_errors_reach_the_hosts_log_without_patient_data(capsys):
+    """When the database is down the admin's error list cannot be saved: the host's log still shows why."""
+    import logging
+
+    from app import feedback as fb
+
+    handler = fb.server_log_handler()
+    log = logging.getLogger("orchestra.db.test")
+    log.addHandler(handler)
+    try:
+        log.error("database connection failed: %s", 'FATAL:  Max client connections reached\nDETAIL: Key (patient_hn)=(HN 12345)')
+        log.info("not shown")
+    finally:
+        log.removeHandler(handler)
+    err = capsys.readouterr().err
+    assert "ERROR:  orchestra.db.test: database connection failed: FATAL:  Max client connections reached" in err
+    assert "12345" not in err and "not shown" not in err
