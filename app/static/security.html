@@ -213,7 +213,7 @@
 
   function render() {
     const s = STATUS;
-    if (s.host) {  // where the owner's secret goes: Railway, Render or another server
+    if (s.host) {  // where the owner's secret goes: Railway or another server
       document.querySelectorAll('.host-name').forEach(el => { el.textContent = s.host.name; });
       $('#owner-place').textContent = s.host.settings;
       $('#owner-how').textContent = s.host.how;

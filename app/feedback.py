@@ -362,7 +362,7 @@ def purge(conn) -> dict:
 
 
 class ServerLogFormatter(logging.Formatter):
-    """The app's warnings and errors in the host's log (Railway / Render → logs), so they can be read even
+    """The app's warnings and errors in the host's log (Railway → Deploy Logs), so they can be read even
     when the database is down: the first line only, with patient identifiers masked (database errors
     carry the failing row on the lines after)."""
 

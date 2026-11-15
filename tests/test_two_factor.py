@@ -128,11 +128,11 @@ def test_wrong_codes_are_limited_and_the_wait_is_short(owner, clock):
     assert late.post("/api/login/code", json={"code": "123456"}).status_code == 401  # no password step: nothing
 
 
-def test_the_owner_account_uses_the_render_setting(owner, clock, monkeypatch):
+def test_the_owner_account_uses_the_server_setting(owner, clock, monkeypatch):
     setup = owner.post("/api/2fa/setup", json={}).json()
     assert setup["owner_account"]
     done = owner.post("/api/2fa/enable", json={"setup_token": setup["setup_token"], "code": _code(setup["secret"], clock)})
-    assert done.json() == {"owner_account": True, "secret": setup["secret"]}  # to put in Render
+    assert done.json() == {"owner_account": True, "secret": setup["secret"]}  # to put in the server's settings (Railway → Variables)
     assert not owner.get("/api/2fa").json()["enabled"]  # nothing changes until it is set there
 
     monkeypatch.setenv("APP_TOTP_SECRET", setup["secret"])
@@ -141,7 +141,7 @@ def test_the_owner_account_uses_the_render_setting(owner, clock, monkeypatch):
     assert c.post("/api/login", json={"username": OWNER[0], "password": OWNER[1]}).json()["needs_code"]
     clock["step"] += 1
     assert c.post("/api/login/code", json={"code": _code(setup["secret"], clock)}).status_code == 200
-    assert c.post("/api/2fa/disable", json={"code": "123456"}).status_code == 401  # switched off in Render only
+    assert c.post("/api/2fa/disable", json={"code": "123456"}).status_code == 401  # switched off in the server's settings only
     monkeypatch.setenv("APP_TOTP_SECRET", "not a secret")
     assert "user" in session(*OWNER).get("/api/me").json()  # a broken setting never locks the owner out
 

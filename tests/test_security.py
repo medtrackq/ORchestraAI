@@ -63,7 +63,8 @@ def test_logout_ends_the_session_on_the_server(owner):
     assert replay.get("/api/me").status_code == 401
 
 
-def test_guessing_from_many_addresses_is_still_limited():
+def test_guessing_from_many_addresses_is_still_limited(monkeypatch):
+    monkeypatch.setenv("CLIENT_IP_HEADER", "x-forwarded-for")  # behind a proxy that names each caller
     c = TestClient(app, base_url="https://testserver")
     for i in range(20):
         r = c.post("/api/login", json={"username": OWNER[0], "password": f"wrong-{i}"},
