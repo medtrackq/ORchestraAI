@@ -95,6 +95,13 @@
   .chip.LEAVE { background: var(--leave-soft); color: var(--leave); }
   .chip button { border: 0; background: transparent; cursor: pointer; color: inherit; padding: 0 2px; font-size: .9rem; line-height: 1; }
   .chip input { margin: 0; }
+  .chip .his-mark { font-size: .7rem; font-weight: 600; opacity: .75; }
+  .badge.his { background: var(--accent-soft); color: var(--accent); border-color: transparent; font-weight: 600; }
+  .his-note { font-size: .82rem; color: var(--muted); margin: 4px 0 0; }
+  .fhir-stats td, .fhir-stats th { text-align: center; }
+  .fhir-stats td:first-child, .fhir-stats th:first-child { text-align: left; }
+  .fhir-maps { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+  .fhir-maps textarea { min-height: 96px; font: .85rem ui-monospace, SFMono-Regular, Menlo, monospace; }
   .stock { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: .84rem; }
   .stock b { font-size: 1rem; }
   .stock .short { color: var(--bad); }
@@ -423,6 +430,15 @@
     <div id="his-body"><p class="hint">กำลังโหลด…</p></div>
   </section>
 
+  <!-- Master data from the HIS (HL7 FHIR R4): staff and rosters, operating rooms, equipment -->
+  <section class="card" data-panel="his" hidden>
+    <h2>ข้อมูลหลักจาก HIS: บุคลากร ตารางเวร ห้องผ่าตัด เครื่องมือ</h2>
+    <p class="hint">มาตรฐาน HL7 FHIR R4 · รับได้ 3 ทาง: HIS ส่งเข้ามา, ระบบไปดึงจาก FHIR server ของ HIS หรือนำเข้าไฟล์ ·
+      ทุกครั้งทดลองก่อนได้ (ไม่บันทึก) · รับเฉพาะของห้องผ่าตัด ส่วนอื่นข้าม · ข้อมูลที่ HIS เป็นเจ้าของจะมีป้าย HIS และล็อกในระบบนี้ ·
+      ไม่ได้เชื่อม ระบบก็ใช้แบบกรอกเองหรือ Excel ได้ตามปกติ</p>
+    <div id="fhir-body"><p class="hint">กำลังโหลด…</p></div>
+  </section>
+
   <!-- Supplies and implants -->
   <section class="card" data-panel="inventory" hidden>
     <h2>วัสดุสิ้นเปลืองและรากเทียม</h2>
@@ -505,6 +521,16 @@
         + (r.unscheduled.length ? `<br><b>จัดไม่ได้ ${r.unscheduled.length} เคส (ต้องหาวันใหม่):</b> ${esc(r.unscheduled.map(u => u.case_id + ' ' + u.reasons.join('; ')).join(' | '))}` : '');
     })));
     box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
+  // ---------------------------------------------- records that came from the HIS
+  const hisBadge = r => r.his ? '<span class="badge his" title="ข้อมูลหลักมาจากระบบ HIS ของโรงพยาบาล">HIS</span> ' : '';
+  function hisLock(form, names, note) {
+    names.forEach(n => {
+      const el = form.elements[n];
+      if (el) { el.disabled = true; el.title = 'มาจาก HIS (แก้ที่ HIS)'; }
+    });
+    form.insertAdjacentHTML('beforeend', `<p class="his-note">🔒 ${esc(note)}</p>`);
   }
 
   // ------------------------------------------------------------------ tabs
@@ -628,9 +654,9 @@
         const overnight = s.end.slice(0, 10) !== s.start.slice(0, 10);
         const time = s.type === 'LEAVE' && s.start.slice(11) === '00:00' && s.end.slice(11) === '00:00' ? 'ลาทั้งวัน'
           : `${s.start.slice(11)}-${s.end.slice(11)}${overnight && s.type !== 'LEAVE' ? '⁺¹' : ''}`;
-        const title = `${SHIFT_TH[s.type]} ${s.start} ถึง ${s.end}${s.note ? ' · ' + s.note : ''}`;
-        return `<div class="chip ${esc(s.type)}" title="${esc(title)}">${can('roster') ? `<input type="checkbox" data-shift="${esc(s.id)}" aria-label="เลือก">` : ''}
-          <span>${s.type === 'REGULAR' ? '' : esc(SHIFT_TH[s.type]) + ' '}${esc(time)}</span></div>`;
+        const title = `${SHIFT_TH[s.type]} ${s.start} ถึง ${s.end}${s.note ? ' · ' + s.note : ''}${s.his ? ' · จาก HIS (แก้ที่ HIS)' : ''}`;
+        return `<div class="chip ${esc(s.type)}" title="${esc(title)}">${can('roster') && !s.his ? `<input type="checkbox" data-shift="${esc(s.id)}" aria-label="เลือก">` : ''}
+          <span>${s.type === 'REGULAR' ? '' : esc(SHIFT_TH[s.type]) + ' '}${esc(time)}</span>${s.his ? '<span class="his-mark">HIS</span>' : ''}</div>`;
       }).join('');
     const head = `<tr><th>บุคลากร</th>${dates.map(d => {
       const w = (new Date(d + 'T00:00:00Z').getUTCDay() + 6) % 7;
@@ -729,13 +755,16 @@
       busy(b, async () => { await api('/api/admin/closures/' + b.dataset.closure, {}, 'DELETE'); showAffected([], 'ยกเลิกการปิดห้องแล้ว'); await loadRooms(); });
     }));
     $('#rooms').innerHTML = data.rooms.map(r => `<form class="row-item" data-room="${esc(r.code)}">
-        <div class="title"><b>${esc(r.code)}</b><span>
+        <div class="title"><b>${esc(r.code)}</b><span>${hisBadge(r)}
           <span class="badge ${r.status === 'AVAILABLE' ? 'ok' : 'bad'}">${esc(STATUS_TH[r.status] || r.status)}</span>
           <span class="badge">${esc(ROOM_TYPE_TH[r.type] || r.type)}</span>
           ${r.elective_start || r.elective_end ? `<span class="badge">elective ${esc(r.elective_start || '00:00')}-${esc(r.elective_end || '24:00')}</span>` : ''}</span></div>
         ${edit ? roomFields(r, data) + '<div class="actions"><button class="btn primary" type="submit">บันทึก</button></div>'
           : `<small class="hint">${esc(r.capabilities.map(c => CAP_TH[c] || c).join(', ') || 'ไม่มีความสามารถพิเศษ')} · ทำความสะอาด ${r.base_turnover_mins}/${r.infectious_turnover_mins} นาที</small>`}
       </form>`).join('') || '<p class="hint">ยังไม่มีห้อง</p>';
+    $('#rooms').querySelectorAll('form').forEach(form => {
+      if (data.rooms.find(r => r.code === form.dataset.room)?.his) hisLock(form, ['status'], 'สถานะเปิด/ปิดห้องมาจาก HIS · ปิดชั่วคราวใช้ “ปิดห้อง” ด้านบน');
+    });
     $('#rooms').querySelectorAll('form').forEach(form => form.addEventListener('submit', e => {
       e.preventDefault();
       busy(form.querySelector('[type="submit"]'), async () => {
@@ -857,12 +886,15 @@
     const q = $('#staff-q').value.trim().toLowerCase(), role = $('#staff-role').value;
     const shown = data.staff.filter(p => (!role || p.role === role) && (!q || (p.name + ' ' + p.code).toLowerCase().includes(q)));
     $('#staff').innerHTML = shown.map(p => `<details class="row-item">
-        <summary class="title" style="cursor:pointer"><span><b>${esc(p.name)}</b> <small class="hint">${esc(p.code)} · ${esc(ROLE_TH[p.role] || p.role)}${p.specialty ? ' · ' + esc(p.specialty) : ''}</small></span>
+        <summary class="title" style="cursor:pointer"><span><b>${esc(p.name)}</b> ${hisBadge(p)}<small class="hint">${esc(p.code)} · ${esc(ROLE_TH[p.role] || p.role)}${p.specialty ? ' · ' + esc(p.specialty) : ''}</small></span>
           <span><span class="badge ${p.active ? 'ok' : 'bad'}">${p.active ? 'ใช้งาน' : 'ปิดใช้งาน'}</span>
           <span class="badge">${p.max_hours_per_week}/${p.max_hours_per_day} ชม. · พัก ${p.min_rest_hours}</span>
           ${p.skills.map(s => `<span class="badge warn">${esc(s)}</span>`).join(' ')}</span></summary>
         ${edit ? `<form data-staff="${esc(p.id)}">${staffFields(p, data)}<div class="actions"><button class="btn primary" type="submit">บันทึก</button></div></form>` : ''}
       </details>`).join('') || '<p class="hint">ไม่พบบุคลากร</p>';
+    $('#staff').querySelectorAll('form').forEach(form => {
+      if (data.staff.find(p => p.id === form.dataset.staff)?.his) hisLock(form, ['code', 'name', 'role', 'active'], 'รหัส ชื่อ บทบาท และสถานะใช้งานมาจาก HIS · ทักษะและเกณฑ์ชั่วโมงแก้ที่นี่ได้');
+    });
     $('#staff').querySelectorAll('form').forEach(form => form.addEventListener('submit', e => {
       e.preventDefault();
       busy(form.querySelector('[type="submit"]'), async () => {
@@ -915,13 +947,16 @@
         ${edit ? typeFields(t) + '<div class="actions"><button class="btn primary" type="submit">บันทึก</button></div>' : ''}</form>`).join('')
       || '<p class="hint">ยังไม่มีชนิดเครื่องมือ</p>';
     $('#units').innerHTML = data.units.map(u => `<form class="row-item" data-unit="${esc(u.serial)}">
-        <div class="title"><b>${esc(u.serial)}</b><span><span class="badge">${esc(u.type)}</span><span class="badge ${u.status === 'AVAILABLE' ? 'ok' : 'warn'}">${esc(u.status)}</span></span></div>
+        <div class="title"><b>${esc(u.serial)}</b><span>${hisBadge(u)}<span class="badge">${esc(u.type)}</span><span class="badge ${u.status === 'AVAILABLE' ? 'ok' : u.status === 'RETIRED' ? 'bad' : 'warn'}">${esc(u.status === 'RETIRED' ? 'ปลดระวาง (HIS)' : u.status)}</span></span></div>
         ${edit ? unitFields(u) + '<div class="actions"><button class="btn primary" type="submit">บันทึก</button></div>' : ''}</form>`).join('')
       || '<p class="hint">ยังไม่มีเครื่องมือ</p>';
     $('#types').querySelectorAll('form').forEach(f => f.addEventListener('submit', e => {
       e.preventDefault();
       busy(f.querySelector('[type="submit"]'), async () => { await api('/api/admin/equipment-types/' + f.dataset.type, readType(f), 'PATCH'); showAffected([], 'บันทึกแล้ว'); await loadEquipment(); });
     }));
+    $('#units').querySelectorAll('form').forEach(f => {
+      if (data.units.find(u => u.serial === f.dataset.unit)?.his) hisLock(f, ['type_id'], 'ชนิดเครื่องมือและการปลดระวางมาจาก HIS · ที่เก็บแก้ที่นี่ได้');
+    });
     $('#units').querySelectorAll('form').forEach(f => f.addEventListener('submit', e => {
       e.preventDefault();
       busy(f.querySelector('[type="submit"]'), async () => {
@@ -1392,6 +1427,181 @@
   async function loadHis() {
     HIS = await api('/api/admin/his');
     renderHis();
+    await loadFhir();
+  }
+
+  // ------------------------------------------- master data from the HIS (FHIR R4)
+  let FHIR = null, FHIR_TEXT = null, FHIR_NAME = '';
+  const FHIR_MODE = { push: 'HIS ส่งเข้ามา', pull: 'ดึงจาก HIS', file: 'ไฟล์' };
+  const FHIR_STATUS = { success: ['ok', 'สำเร็จ'], partial: ['warn', 'บางรายการไม่ผ่าน'], failed: ['bad', 'ไม่สำเร็จ'] };
+  const FHIR_ENTITY = { room: 'ห้องผ่าตัด', staff: 'บุคลากร', equipment: 'เครื่องมือ' };
+  const mapText = m => Object.entries(m || {}).map(([k, v]) => `${k} = ${v}`).join('\n');
+  function readMap(text, what) {
+    const out = {};
+    for (const line of text.split('\n')) {
+      const t = line.trim();
+      if (!t || t.startsWith('#')) continue;
+      const i = t.indexOf('=');
+      if (i < 1) throw new Error(`${what}: บรรทัด "${t}" ต้องเป็น รหัส = ค่า`);
+      out[t.slice(0, i).trim()] = t.slice(i + 1).trim();
+    }
+    return out;
+  }
+  const fhirSummary = st => [...Object.entries(FHIR_ENTITY).map(([k, n]) => {
+      const done = st[k].new + st[k].changed + st[k].linked;
+      return done || st[k].failed ? `${n} ${done}${st[k].failed ? ` (ไม่ผ่าน ${st[k].failed})` : ''}` : '';
+    }), st.roster.days || st.roster.failed ? `เวร ${st.roster.days} วัน${st.roster.failed ? ` (ไม่ผ่าน ${st.roster.failed})` : ''}` : '']
+    .filter(Boolean).join(' · ') || 'ไม่มีอะไรเปลี่ยน';
+
+  async function loadFhir() {
+    FHIR = await api('/api/admin/his/fhir');
+    renderFhir();
+  }
+
+  function renderFhirReport(r, again) {
+    const [tone, label] = FHIR_STATUS[r.status] || ['', r.status];
+    const st = r.stats, ro = st.roster;
+    const rows = Object.entries(FHIR_ENTITY).map(([k, n]) => `<tr><td>${n}</td>${['new', 'changed', 'linked', 'unchanged', 'skipped', 'failed']
+      .map(x => `<td>${st[k][x] || 0}</td>`).join('')}</tr>`).join('');
+    const box = $('#fhir-result');
+    box.innerHTML = `<div class="row-item">
+      <div class="title"><b>${r.dry_run ? 'ผลการทดลอง (ยังไม่บันทึก)' : r.committed ? 'บันทึกแล้ว' : 'ไม่มีอะไรเปลี่ยน'}</b><span class="badge ${tone}">${label}</span></div>
+      <div class="table-scroll"><table class="io fhir-stats"><thead><tr><th></th><th>เพิ่ม</th><th>แก้ไข</th><th>ผูกกับรายการเดิม</th><th>ไม่เปลี่ยน</th><th>ข้าม</th><th>ไม่ผ่าน</th></tr></thead>
+        <tbody>${rows}</tbody></table></div>
+      <p>ตารางเวร: เปลี่ยน ${ro.days} วัน (เวรใหม่ ${ro.added} · เอาออก ${ro.removed} · รับเวรที่กรอกไว้แล้ว ${ro.adopted}) · ไม่เปลี่ยน ${ro.unchanged} วัน${ro.failed ? ` · ไม่ผ่าน ${ro.failed}` : ''}${st.equipment.retired ? ` · เครื่องมือปลดระวาง/กลับมาใช้ ${st.equipment.retired}` : ''}</p>
+      ${r.problems.length ? `<details open><summary><b>ไม่ผ่าน ${r.problems_total} รายการ</b> (รายการอื่นบันทึกได้ตามปกติ)</summary><ul>${r.problems.slice(0, 60)
+        .map(p => `<li><code>${esc(p.resource)}</code> ${esc(p.message)}</li>`).join('')}</ul></details>` : ''}
+      ${r.skipped.length ? `<details><summary>ข้าม (ไม่ใช่ของห้องผ่าตัด)</summary><ul>${r.skipped
+        .map(p => `<li><code>${esc(p.resource)}</code> ${esc(p.reason)}</li>`).join('')}</ul></details>` : ''}
+      ${r.changes.length ? `<details><summary>เพิ่ม/แก้ไข ${r.changes.length} รายการ</summary><ul>${r.changes.slice(0, 100)
+        .map(c => `<li>${esc(FHIR_ENTITY[c.entity])} <b>${esc(c.key)}</b> ${c.action === 'new' ? 'เพิ่มใหม่' : esc(c.changes.join(' · '))}</li>`).join('')}</ul></details>` : ''}
+      ${r.roster_changes.length ? `<details><summary>ตารางเวรที่เปลี่ยน ${r.roster_changes.length} คน</summary><ul>${r.roster_changes
+        .map(p => `<li><b>${esc(p.name)}</b>: ${p.days.map(d => `${esc(d.date)} ${esc(d.before)} → ${esc(d.after)}`).join(' · ')}</li>`).join('')}</ul></details>` : ''}
+      ${r.affected && r.affected.length ? `<p class="note warn"><b>เคสที่จองไว้ได้รับผลกระทบ:</b> ${r.affected.map(a => `${esc(a.date)} (${a.count} เรื่อง)`).join(', ')} · ตรวจที่หน้าตารางผ่าตัด</p>` : ''}
+      ${again ? `<div class="io-actions"><button class="btn primary" type="button" id="fhir-commit">${esc(again.label)}</button>
+        <span class="hint">บันทึกตามผลทดลองด้านบน${r.problems.length ? ' (รายการที่ไม่ผ่านจะข้ามไป)' : ''}</span></div>` : ''}
+    </div>`;
+    if (again) $('#fhir-commit').addEventListener('click', e => busy(e.target, again.run));
+    box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
+  function renderFhir() {
+    const box = $('#fhir-body');
+    if (!FHIR.ready) { box.innerHTML = `<p class="readonly">${esc(FHIR.need_sql)}</p>`; return; }
+    const s = FHIR.settings, m = FHIR.managed;
+    const token = s.token_env ? (FHIR.token_set ? `✓ ตั้งค่า ${s.token_env} ใน Railway แล้ว` : `ยังไม่มีค่า ${s.token_env} ใน Railway → Variables`)
+      : 'ไม่ใส่ชื่อตัวแปร = เรียก FHIR server โดยไม่มี token';
+    box.innerHTML = `
+      <div class="io-actions"><span class="badge his">HIS</span>
+        <span class="badge">ห้องผ่าตัด ${m.rooms}</span><span class="badge">บุคลากร ${m.staff}</span>
+        <span class="badge">เครื่องมือ ${m.equipment}</span><span class="badge">เวรที่จะถึง ${m.shifts}</span><span class="hint">รายการที่มาจาก HIS</span></div>
+
+      <h3>1. HIS ส่งข้อมูลเข้ามา</h3>
+      <p class="hint">สร้าง API key ด้านบนโดยเลือกสิทธิ์ “ส่งข้อมูลหลัก (FHIR)” แล้วให้ฝ่าย IT ส่ง FHIR Bundle (Location, Practitioner, PractitionerRole, Device, Schedule, Slot) มาที่</p>
+      <ul class="his-endpoints"><li><code>POST ${esc(FHIR.push_url)}</code> · header <code>Content-Type: application/fhir+json</code> · ทดลองไม่บันทึก: เติม <code>?dry_run=true</code></li>
+        <li>ตอบกลับเป็น <code>OperationOutcome</code> บอกจำนวนที่เพิ่ม แก้ไข ข้าม และไม่ผ่าน พร้อมเหตุผลรายรายการ</li>
+        <li>ข้อกำหนดสำหรับฝ่าย IT (การจับคู่ทุกช่อง ตัวอย่าง): <code>docs/HIS_INTERFACE.md</code> และ <code>docs/integration/sample-bundle.json</code></li></ul>
+
+      <h3>2. นำเข้าไฟล์ FHIR</h3>
+      <div class="io-actions"><label style="flex:1 1 300px">FHIR Bundle (.json) ไม่เกิน 20 MB<input type="file" id="fhir-file" accept=".json,application/json,application/fhir+json"></label>
+        <button class="btn primary" type="button" id="fhir-check" disabled>ตรวจไฟล์ (ทดลอง)</button></div>
+
+      <h3>3. ดึงจาก FHIR server ของ HIS</h3>
+      <form id="fhir-settings">
+        <div class="grid">
+          <label>ที่อยู่ FHIR server<input type="text" inputmode="url" name="base_url" maxlength="300" value="${esc(s.base_url)}" placeholder="https://his.hospital.go.th/fhir"></label>
+          <label>ชื่อตัวแปร token (ใน Railway → Variables)<input type="text" name="token_env" maxlength="70" value="${esc(s.token_env)}" placeholder="HIS_TOKEN"></label>
+          <label>ดึงอัตโนมัติทุก (ชั่วโมง · 0 = ไม่ดึงเอง)<input type="number" name="pull_hours" min="0" max="168" value="${s.pull_hours}"></label>
+          <label>ตารางเวรล่วงหน้า (วัน)<input type="number" name="roster_days" min="1" max="62" value="${s.roster_days}"></label>
+        </div>
+        <p class="hint">${esc(token)} · ใส่ token จริงที่ Railway → Variables เท่านั้น ไม่ใช่ที่หน้านี้</p>
+        <details><summary>จับคู่รหัสของ HIS (บรรทัดละ <code>รหัส = ค่า</code>)</summary>
+          <div class="fhir-maps">
+            <label>ห้องผ่าตัด: Location.type → STANDARD / HYBRID / NEGATIVE_PRESSURE (รหัสอื่น = ไม่ใช่ห้องผ่าตัด)<textarea name="room_types">${esc(mapText(s.room_types))}</textarea></label>
+            <label>บทบาท: PractitionerRole.code → SURGEON / ANESTHESIOLOGIST / SCRUB_NURSE / CIRCULATING_NURSE<textarea name="roles">${esc(mapText(s.roles))}</textarea></label>
+            <label>เครื่องมือ: Device.type → ชื่อชนิดเครื่องมือในระบบ (รหัสที่ตรงกับชื่อชนิดจับคู่เอง)<textarea name="equipment_types">${esc(mapText(s.equipment_types))}</textarea></label>
+            <label>เวร: Slot.serviceType → REGULAR / ON_CALL / LEAVE / OFF<textarea name="shift_types">${esc(mapText(s.shift_types))}</textarea></label>
+          </div>
+          <div class="grid">
+            <label>identifier system: รหัสพนักงาน<input type="text" name="sys_employee" maxlength="200" value="${esc(s.systems.employee)}"></label>
+            <label>เลขใบอนุญาต<input type="text" name="sys_license" maxlength="200" value="${esc(s.systems.license)}"></label>
+            <label>เลขครุภัณฑ์<input type="text" name="sys_asset" maxlength="200" value="${esc(s.systems.asset)}"></label>
+            <label>รหัสห้อง<input type="text" name="sys_room" maxlength="200" value="${esc(s.systems.room)}"></label>
+          </div>
+          <p class="hint">ไม่ใส่ system: รหัสพนักงานใช้ identifier ชนิด EI, ใบอนุญาตใช้ PRN/LN, ห้องและครุภัณฑ์ใช้ identifier ตัวแรก</p>
+        </details>
+        <div class="io-actions">
+          <button class="btn primary" type="submit">บันทึกการตั้งค่า</button>
+          <button class="btn" type="button" id="fhir-test" ${s.base_url ? '' : 'disabled'}>ทดสอบการเชื่อมต่อ</button>
+          <button class="btn" type="button" id="fhir-pull" ${s.base_url ? '' : 'disabled'}>ดึงจาก HIS (ทดลอง)</button>
+        </div>
+      </form>
+      <div id="fhir-result"></div>
+
+      <h3>4. ประวัติการรับข้อมูล</h3>
+      ${FHIR.runs.length ? `<div class="table-scroll"><table class="io"><thead><tr><th>เวลา</th><th class="text">ทาง</th><th class="text">ผล</th><th class="text">สรุป</th><th class="text">โดย</th></tr></thead><tbody>
+        ${FHIR.runs.map(x => { const [tone, label] = FHIR_STATUS[x.status] || ['', x.status];
+          return `<tr><td>${esc(x.at)}</td><td class="text">${esc(FHIR_MODE[x.mode] || x.mode)}${x.dry_run ? ' <span class="badge">ทดลอง</span>' : ''}</td>
+            <td class="text"><span class="badge ${tone}">${label}</span></td><td class="text">${esc(fhirSummary(x.stats))}</td><td class="text">${esc(x.by || '')}</td></tr>`; }).join('')}
+        </tbody></table></div>` : '<p class="hint">ยังไม่เคยรับข้อมูล</p>'}
+
+      <details><summary>ข้อมูลไหน HIS เป็นเจ้าของ (ล็อกในระบบนี้)</summary>
+        <div class="table-scroll"><table class="io"><thead><tr><th>ข้อมูล</th><th class="text">HIS เป็นเจ้าของ</th><th class="text">ทีมห้องผ่าตัดแก้ได้</th></tr></thead><tbody>
+          <tr><td>ห้องผ่าตัด</td><td class="text">รหัสห้อง · เปิด/ปิดใช้งาน</td><td class="text">ประเภท (เริ่มจาก HIS) · ความสามารถ · เวลาทำความสะอาด · เวลารับเคส elective · ปิดห้องชั่วคราว</td></tr>
+          <tr><td>บุคลากร</td><td class="text">รหัสพนักงาน · ชื่อ · บทบาท · ใช้งาน</td><td class="text">ความเชี่ยวชาญ (เริ่มจาก HIS) · ทักษะ · เกณฑ์ชั่วโมง</td></tr>
+          <tr><td>เครื่องมือ</td><td class="text">หมายเลขครุภัณฑ์ · ชนิด · ปลดระวาง</td><td class="text">สถานะ CSSD · ที่อยู่ตอนนี้ · นัดซ่อมบำรุง</td></tr>
+          <tr><td>ตารางเวร</td><td class="text">เวรที่ HIS ส่งมา (แทนเวรของ HIS ทั้งวันที่ส่ง)</td><td class="text">เวรที่เพิ่มในระบบนี้ (ไม่ถูกลบ)</td></tr>
+        </tbody></table></div></details>`;
+
+    $('#fhir-file').addEventListener('change', async e => {
+      const file = e.target.files[0];
+      FHIR_TEXT = null; FHIR_NAME = file ? file.name : '';
+      $('#fhir-check').disabled = true;
+      if (!file) return;
+      if (file.size > 20 * 1024 * 1024) { toast('ไฟล์ใหญ่เกิน 20 MB'); return; }
+      FHIR_TEXT = await file.text();
+      $('#fhir-check').disabled = false;
+    });
+    const sendFile = dry => api('/api/admin/his/fhir/import', { content: FHIR_TEXT, filename: FHIR_NAME, dry_run: dry });
+    $('#fhir-check').addEventListener('click', e => busy(e.target, async () => {
+      const out = await sendFile(true);
+      FHIR = out.overview; renderFhir();
+      renderFhirReport(out.report, { label: 'นำเข้าจริง', run: async () => {
+        const done = await sendFile(false);
+        FHIR = done.overview; renderFhir(); renderFhirReport(done.report);
+        toast(done.report.committed ? 'นำเข้าข้อมูลจาก HIS แล้ว' : 'ไม่มีอะไรเปลี่ยน', true);
+      } });
+    }));
+    $('#fhir-settings').addEventListener('submit', e => {
+      e.preventDefault();
+      const f = e.target;
+      busy(f.querySelector('[type="submit"]'), async () => {
+        FHIR = await api('/api/admin/his/fhir/settings', {
+          base_url: f.elements['base_url'].value.trim(), token_env: f.elements['token_env'].value.trim(),
+          pull_hours: Number(f.elements['pull_hours'].value || 0), roster_days: Number(f.elements['roster_days'].value || 31),
+          room_types: readMap(f.elements['room_types'].value, 'ห้องผ่าตัด'), roles: readMap(f.elements['roles'].value, 'บทบาท'),
+          equipment_types: readMap(f.elements['equipment_types'].value, 'เครื่องมือ'), shift_types: readMap(f.elements['shift_types'].value, 'เวร'),
+          systems: { employee: f.elements['sys_employee'].value.trim(), license: f.elements['sys_license'].value.trim(),
+                     asset: f.elements['sys_asset'].value.trim(), room: f.elements['sys_room'].value.trim() },
+        }, 'PUT');
+        renderFhir();
+        toast('บันทึกการตั้งค่าแล้ว', true);
+      });
+    });
+    $('#fhir-test').addEventListener('click', e => busy(e.target, async () => {
+      const t = await api('/api/admin/his/fhir/test', {});
+      const missing = Object.entries(t.resources).filter(([, ok]) => !ok).map(([k]) => k);
+      toast(`เชื่อมต่อได้: FHIR ${t.fhir_version || '?'}${t.software ? ' · ' + t.software : ''}${missing.length ? ' · ไม่รองรับ ' + missing.join(', ') : ''}`, true);
+    }));
+    $('#fhir-pull').addEventListener('click', e => busy(e.target, async () => {
+      const out = await api('/api/admin/his/fhir/pull', { dry_run: true });
+      FHIR = out.overview; renderFhir();
+      renderFhirReport(out.report, { label: 'ดึงจริง', run: async () => {
+        const done = await api('/api/admin/his/fhir/pull', { dry_run: false });
+        FHIR = done.overview; renderFhir(); renderFhirReport(done.report);
+        toast(done.report.committed ? 'รับข้อมูลจาก HIS แล้ว' : 'ไม่มีอะไรเปลี่ยน', true);
+      } });
+    }));
   }
 
   function hisTargets(kind, selected) {
@@ -1435,6 +1645,7 @@
         <li><code>POST ${esc(base)}/surgery-requests/batch</code> ส่งครั้งละไม่เกิน 200 รายการ</li>
         <li><code>GET ${esc(base)}/surgery-requests/{his_ref}</code> สถานะคำขอ: รอ จองแล้ว (วัน เวลา ห้อง) ผ่าตัดแล้ว ยกเลิก</li>
         <li><code>GET ${esc(base)}/schedule?date=YYYY-MM-DD</code> ตารางผ่าตัดของวัน</li>
+        <li><code>POST ${esc(base)}/fhir</code> ข้อมูลหลัก (FHIR R4): บุคลากร ตารางเวร ห้องผ่าตัด เครื่องมือ (ดูหัวข้อด้านล่าง)</li>
         <li>รายละเอียดทุกช่อง: <a href="/api/docs#/HIS" target="_blank" rel="noopener">/api/docs</a> (ต้องเข้าระบบ)</li></ul></details>` : ''}
 
       <h3>2. รหัสที่ยังจับคู่ไม่ได้</h3>

@@ -36,7 +36,8 @@ from .store import StoreError
 
 log = logging.getLogger("orchestra.his")
 
-SCOPES = {"requests:write": "ส่งใบขอผ่าตัด (สร้าง แก้ไข ยกเลิก)", "schedule:read": "อ่านตารางผ่าตัดและสถานะคำขอ"}
+SCOPES = {"requests:write": "ส่งใบขอผ่าตัด (สร้าง แก้ไข ยกเลิก)", "schedule:read": "อ่านตารางผ่าตัดและสถานะคำขอ",
+          "masterdata:write": "ส่งข้อมูลหลัก (FHIR): บุคลากร ตารางเวร ห้องผ่าตัด เครื่องมือ"}
 KINDS = {"surgeon": "ศัลยแพทย์", "procedure": "หัตถการ"}
 STATUS_TH = {"APPLIED": "บันทึกแล้ว", "UNCHANGED": "ไม่มีอะไรเปลี่ยน", "NEEDS_MAPPING": "รอจับคู่รหัส",
              "NEEDS_ACTION": "ต้องดำเนินการในระบบ", "REJECTED": "ข้อมูลไม่ถูกต้อง"}

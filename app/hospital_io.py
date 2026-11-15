@@ -892,6 +892,7 @@ def _demo_where() -> tuple[str, tuple]:
 
 
 WIPE_ORDER = (  # children before parents
+    "his_external_refs",  # which HIS resource is which record: the records go, so do these
     "case_history", "case_history_imports", "resource_allocations", "supply_reservations", "scheduled_surgeries", "surgery_requests",
     "surgeon_preference_cards", "procedure_supplies", "supply_deliveries", "supply_items", "procedures",
     "equipment_maintenance", "equipment_units", "equipment_types", "room_closures", "operating_rooms",
