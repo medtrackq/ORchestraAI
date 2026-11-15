@@ -561,6 +561,8 @@ def import_roster(admin: HospitalAdmin, filename: str, content: bytes, *, commit
         cols = admin._columns(conn)
         held: dict[tuple[str, date], set] = {}
         note = ", note" if ("staff_schedules", "note") in cols else ", NULL AS note"
+        note += ", managed_by" if ("staff_schedules", "managed_by") in cols else ", NULL AS managed_by"
+        his_days: set[tuple[str, date]] = set()
         for r in conn.execute(
             f"""SELECT staff_id, shift_start, shift_end, shift_type{note} FROM staff_schedules
                 WHERE shift_start >= %s AND shift_start < %s AND staff_id = ANY(%s)""",
@@ -569,11 +571,16 @@ def import_roster(admin: HospitalAdmin, filename: str, content: bytes, *, commit
         ):
             key = (str(r["staff_id"]), r["shift_start"].astimezone(admin.db.tz).date())
             held.setdefault(key, set()).add((r["shift_type"] or "REGULAR", r["shift_start"], r["shift_end"], r["note"]))
+            if r["managed_by"]:
+                his_days.add(key)
         changed = {}
         for key, shifts in wanted.items():
             before = held.get(key, set())
             if book.text(key[1], shifts) == book.text(key[1], before):
                 report["unchanged"] += 1
+            elif key in his_days:  # the HIS sends this person's roster: changed there, not by a file
+                errors.append({"sheet": where[key].split("!")[0], "cell": where[key].split("!")[-1],
+                               "message": f"{names[key[0]]} วันที่ {key[1].isoformat()} มีเวรจาก HIS (แก้ที่ HIS)"})
             else:
                 changed[key] = (before, shifts)
         report["days"] = len(changed)

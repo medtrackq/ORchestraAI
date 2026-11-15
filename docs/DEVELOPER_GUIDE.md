@@ -78,7 +78,8 @@ app/
   system_status.py       หน้า ⚙ สถานะระบบ: migration, ค่าตั้ง, เช็กลิสต์ go-live
   waitlist.py            หาวันว่างหลายวัน, รายการรอผ่าตัด
   feedback.py            ปุ่มแจ้งปัญหา + บันทึกข้อผิดพลาดของระบบ
-  his.py                 เชื่อมต่อ HIS ของโรงพยาบาล (API ขาเข้า /api/his/v1/)
+  his.py                 เชื่อมต่อ HIS ของโรงพยาบาล (API ขาเข้า /api/his/v1/): ใบขอผ่าตัด
+  his_fhir.py            ข้อมูลหลักจาก HIS (FHIR R4): บุคลากร ตารางเวร ห้อง เครื่องมือ · push / pull / ไฟล์ · managed_by
   backup.py              สำรอง / กู้คืนฐานข้อมูลทั้งหมด (ZIP) และถอดรหัสไฟล์ .orcbak
   autobackup.py          สำรองอัตโนมัติทุกคืน: เข้ารหัส AES-256-GCM, Supabase Storage (REST), BackupTimer
   *_io.py                นำเข้า / ส่งออก Excel (ข้อมูลโรงพยาบาล, เวร, ประวัติผ่าตัด)
@@ -318,6 +319,7 @@ TEST_DATABASE_URL=postgresql://postgres@localhost/postgres .venv/bin/python -m p
 - **ทำงานได้ก่อนรัน SQL:** ดูข้อ 6
 - **ตารางผ่าตัดต้องไม่ชนกัน:** ผลจาก engine ต้องผ่าน `validate_schedule` / `_guard` ก่อนบันทึกทุกครั้ง ห้ามเขียน `scheduled_surgeries` ตรงโดยไม่ผ่าน `db.save`
 - **ระบบภายนอกห้ามเปลี่ยนเคสที่จองแล้วเอง:** เช่น HIS ให้แจ้งคนแทน
+- **ข้อมูลหลักที่มาจาก HIS (`managed_by`):** ฟิลด์ที่ HIS เป็นเจ้าของล็อกใน `admin_store` (`save_room`, `save_staff`, `save_unit`, `delete_shifts`) และ `roster_io` จึงล็อกทั้งฟอร์มและ Excel ในที่เดียว · ถ้าเพิ่มช่องทางแก้ข้อมูลห้อง/บุคลากร/เครื่องมือ/เวรใหม่ ต้องผ่านฟังก์ชันเหล่านี้ · ตอน sync ตั้ง `admin._his` (บันทึกเป็นของ HIS) · เพิ่มชนิด FHIR ใหม่: แปลงใน `his_fhir.map_*` (ไม่แตะฐานข้อมูล) แล้วส่งเป็นแถวผ่าน `hospital_io._Run` เพื่อให้ตรวจเหมือน Excel · เครื่องมือ `RETIRED` ไม่ถูกโหลดเข้าแผน (`db.load`)
 - **งานเบื้องหลังต้องไม่ล้มทั้งเซิร์ฟเวอร์:** ครอบ `try/except` แล้ว `log.exception(...)` และใช้ `claim_digest` / `app_settings` กันการทำซ้ำเมื่อมีหลายเครื่องหรือเริ่มใหม่
 
 ---
@@ -362,6 +364,7 @@ TEST_DATABASE_URL=postgresql://postgres@localhost/postgres .venv/bin/python -m p
 1. **ตัวเชื่อม:** เขียนไฟล์ใหม่ เช่น `app/his_<ยี่ห้อ>.py` ให้อ่านข้อมูลจาก API ของโรงพยาบาล แล้วแปลงเป็น dict รูปแบบเดียวกับ `HisRequestIn`
 2. **ส่งเข้าระบบ:** ส่งเข้า `his.receive(payload, source="<ยี่ห้อ>")` เพื่อให้การจับคู่รหัส กล่องรับข้อมูล PDPA และการกันเคสที่จองแล้ว ทำงานเหมือนเดิมทั้งหมด
 3. **ตั้งเวลา:** เรียกตามรอบด้วยงานตั้งเวลา (หัวข้อก่อนหน้า)
+4. **ข้อมูลหลัก (บุคลากร เวร ห้อง เครื่องมือ):** FHIR server ใช้ `MasterData.pull` ที่มีแล้ว · ระบบที่ไม่ใช่ FHIR ให้แปลงเป็น resource FHIR (`Location`, `Practitioner`, `Device`, `Schedule`, `Slot`) แล้วส่ง `master.run(resources, mode="pull", ...)` จะได้การตรวจ การล็อก และประวัติเหมือนเดิม
 
 ### เปลี่ยนชื่อปุ่มหรือข้อความบนหน้าเว็บ
 - ค้นใน `app/static/help.html` และ `app/static/pilot.html` ว่าอ้างชื่อเดิมไหม (`test_help.py` / `test_pilot.py` จะตกถ้าลืม) และค้นใน `tests/` ว่ามีเทสต์ตรวจข้อความนั้นหรือไม่

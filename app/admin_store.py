@@ -96,6 +96,17 @@ class HospitalAdmin:
         # schema read once; and the bookings checked once at the end instead of after every row.
         self._batch: list[str] | None = None
         self._schema: set[tuple[str, str]] | None = None
+        # Set while the HIS's master data is saved (app/his_fhir.py): records saved then are marked as the
+        # HIS's, and only then may the fields the HIS owns change on a record that came from the HIS.
+        self._his: str | None = None
+
+    def _his_owned(self, conn, table: str) -> bool:
+        """Whether ``table`` has its managed_by column (migration 019)."""
+        return (table, "managed_by") in self._columns(conn)
+
+    def _mark_his(self, conn, table: str, where: str, value) -> None:
+        if self._his and self._his_owned(conn, table):
+            conn.execute(f"UPDATE {table} SET managed_by = %s WHERE {where} = %s", (self._his, value))  # noqa: S608
 
     # ------------------------------------------------------------- helpers
 
@@ -164,7 +175,8 @@ class HospitalAdmin:
                 {"code": r["room_code"], "type": r["room_type"], "capabilities": sorted(r["capabilities"] or []),
                  "base_turnover_mins": r["base_turnover_mins"], "infectious_turnover_mins": r["infectious_turnover_mins"],
                  "status": r["status"] or "AVAILABLE",
-                 "elective_start": _hhmm(r.get("elective_start")), "elective_end": _hhmm(r.get("elective_end"))}
+                 "elective_start": _hhmm(r.get("elective_start")), "elective_end": _hhmm(r.get("elective_end")),
+                 "his": bool(r.get("managed_by"))}
                 for r in conn.execute("SELECT * FROM operating_rooms ORDER BY room_code")
             ]
             closures = []
@@ -201,6 +213,11 @@ class HospitalAdmin:
         if opens and closes and closes <= opens:
             raise StoreError("เวลาปิดรับเคส elective ต้องหลังเวลาเปิด")
         with self.store._transaction(write=True) as conn:
+            if not new and not self._his and self._his_owned(conn, "operating_rooms"):
+                held = conn.execute("SELECT status, managed_by FROM operating_rooms WHERE room_code = %s", (code,)).fetchone()
+                if held and held["managed_by"] and status != (held["status"] or "AVAILABLE"):
+                    raise StoreError(f"ห้อง {code} มาจาก HIS: เปิด/ปิดห้องต้องแก้ที่ HIS "
+                                     "(ปิดชั่วคราวใช้ “ปิดห้อง” ในหน้านี้ได้)")
             values = (room_type, Jsonb(caps), base, dirty, status)
             if new:
                 try:
@@ -222,6 +239,7 @@ class HospitalAdmin:
             if ("operating_rooms", "elective_start") in self._columns(conn):
                 conn.execute("UPDATE operating_rooms SET elective_start = %s, elective_end = %s WHERE room_code = %s",
                              (opens, closes, code))
+            self._mark_his(conn, "operating_rooms", "room_code", code)
             hours = (f", elective {opens.strftime('%H:%M') if opens else '-'}-{closes.strftime('%H:%M') if closes else '-'}"
                      if opens or closes else "")
             detail = f"{code}: {room_type} [{', '.join(caps)}] สถานะ {status}, ทำความสะอาด {base}/{dirty} นาที{hours}"
@@ -278,7 +296,7 @@ class HospitalAdmin:
                  "max_hours_per_week": float(r["max_hours_per_week"] or 48),
                  "max_hours_per_day": float(r.get("max_hours_per_day") or 10),
                  "min_rest_hours": float(r["min_rest_hours"]) if r.get("min_rest_hours") is not None else 8.0,
-                 "active": bool(r["is_active"])}
+                 "active": bool(r["is_active"]), "his": bool(r.get("managed_by"))}
                 for r in conn.execute("SELECT * FROM staff ORDER BY is_active DESC, role, full_name")
             ]
         return {"staff": people, "roles": list(ROLES), "limits_ready": ("staff", "max_hours_per_day") in cols,
@@ -303,6 +321,16 @@ class HospitalAdmin:
         active = bool(data.get("active", True))
         with self.store._transaction(write=True) as conn:
             cols = self._columns(conn)
+            if not new and not self._his and ("staff", "managed_by") in cols:
+                held = conn.execute("SELECT employee_code, full_name, role, is_active, managed_by FROM staff "
+                                    "WHERE staff_id = %s", (_uuid(staff_id, "บุคลากร"),)).fetchone()
+                if held and held["managed_by"]:
+                    locked = [label for label, before, after in (
+                        ("รหัสพนักงาน", held["employee_code"], code), ("ชื่อ", held["full_name"], name),
+                        ("บทบาท", held["role"], role), ("สถานะใช้งาน", bool(held["is_active"]), active)) if before != after]
+                    if locked:
+                        raise StoreError(f"{held['full_name']} มาจาก HIS: แก้{' '.join(locked)}ที่ HIS "
+                                         "(ทักษะและเกณฑ์ชั่วโมงแก้ที่นี่ได้)")
             fields = {"employee_code": code, "full_name": name, "role": role, "specialty": specialty,
                       "skills": Jsonb(skills), "max_hours_per_week": round(weekly), "is_active": active}
             if ("staff", "max_hours_per_day") in cols:
@@ -323,6 +351,7 @@ class HospitalAdmin:
                         raise StoreError("ไม่พบบุคลากรนี้")
             except psycopg.errors.UniqueViolation as exc:
                 raise StoreError(f"รหัสพนักงาน {code} มีอยู่แล้ว") from exc
+            self._mark_his(conn, "staff", "staff_id", _uuid(staff_id, "บุคลากร"))
             detail = (f"{name} ({code}) {role} ทักษะ [{', '.join(skills)}] เกณฑ์ {weekly:g} ชม./7 วัน, "
                       f"{daily:g} ชม./วัน, พัก {rest:g} ชม." + ("" if active else " · ปิดใช้งาน"))
             self._log(conn, ("เพิ่มบุคลากร " if new else "แก้ไขบุคลากร ") + name, [detail], actor)
@@ -344,11 +373,12 @@ class HospitalAdmin:
         with self.store._transaction(write=False) as conn:
             cols = self._columns(conn)
             note = ", s.note" if ("staff_schedules", "note") in cols else ""
+            note += ", s.managed_by" if ("staff_schedules", "managed_by") in cols else ""
             rows = [
                 {"id": str(r["schedule_id"]), "staff_id": str(r["staff_id"]), "name": r["full_name"],
                  "role": r["role"], "start": self._local(r["shift_start"]), "end": self._local(r["shift_end"]),
                  "type": r["shift_type"] or "REGULAR", "available": r["is_available"] is not False,
-                 "note": r.get("note")}
+                 "note": r.get("note"), "his": bool(r.get("managed_by"))}
                 for r in conn.execute(
                     f"""SELECT s.schedule_id, s.staff_id, s.shift_start, s.shift_end, s.shift_type, s.is_available{note},
                                p.full_name, p.role
@@ -412,6 +442,10 @@ class HospitalAdmin:
         if not ids:
             raise StoreError("เลือกเวรที่จะลบ")
         with self.store._transaction(write=True) as conn:
+            if self._his_owned(conn, "staff_schedules") and conn.execute(
+                    "SELECT 1 FROM staff_schedules WHERE schedule_id = ANY(%s) AND managed_by IS NOT NULL LIMIT 1",
+                    (ids,)).fetchone():
+                raise StoreError("เวรที่มาจาก HIS ลบในระบบนี้ไม่ได้ (แก้ที่ HIS แล้ว HIS จะส่งตารางมาใหม่)")
             rows = conn.execute(
                 """DELETE FROM staff_schedules s USING staff p WHERE s.schedule_id = ANY(%s) AND p.staff_id = s.staff_id
                    RETURNING p.full_name, s.shift_start, s.shift_end, s.shift_type""",
@@ -442,7 +476,8 @@ class HospitalAdmin:
             ]
             units = [
                 {"serial": r["serial_number"], "type_id": str(r["eq_type_id"]), "type": r["name"],
-                 "status": r["current_status"] or "AVAILABLE", "location": r["current_location"]}
+                 "status": r["current_status"] or "AVAILABLE", "location": r["current_location"],
+                 "his": bool(r.get("managed_by"))}
                 for r in conn.execute(
                     """SELECT u.*, t.name FROM equipment_units u JOIN equipment_types t USING (eq_type_id)
                        ORDER BY t.name, u.serial_number"""
@@ -959,6 +994,11 @@ class HospitalAdmin:
         with self.store._transaction(write=True) as conn:
             if conn.execute("SELECT 1 FROM equipment_types WHERE eq_type_id = %s", (type_id,)).fetchone() is None:
                 raise StoreError("ไม่พบชนิดเครื่องมือนี้")
+            if not new and not self._his and self._his_owned(conn, "equipment_units"):
+                held = conn.execute("SELECT eq_type_id, managed_by FROM equipment_units WHERE serial_number = %s",
+                                    (serial,)).fetchone()
+                if held and held["managed_by"] and held["eq_type_id"] != type_id:
+                    raise StoreError(f"เครื่อง {serial} มาจาก HIS: เปลี่ยนชนิดเครื่องมือที่ HIS")
             try:
                 if new:
                     conn.execute(
@@ -975,6 +1015,7 @@ class HospitalAdmin:
                         raise StoreError(f"ไม่พบเครื่อง {serial}")
             except psycopg.errors.UniqueViolation as exc:
                 raise StoreError(f"มีเครื่องหมายเลข {serial} อยู่แล้ว") from exc
+            self._mark_his(conn, "equipment_units", "serial_number", serial.strip())
             self._log(conn, ("เพิ่มเครื่องมือ " if new else "แก้ไขเครื่องมือ ") + serial, [location or ""], actor)
             affected = [] if new else self._affected(conn, self.db.today(), self.db.today() + timedelta(days=CHECK_DAYS))
         return {"serial": serial, "affected": affected}

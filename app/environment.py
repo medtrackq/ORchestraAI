@@ -28,7 +28,8 @@ BANNER = ('<div role="note" data-env="practice" style="margin:0;padding:6px 16px
           'font:600 12px/1.5 Prompt,Sarabun,system-ui,sans-serif;box-shadow:0 2px 8px rgba(0,0,0,.25)">ระบบซ้อม</div>')
 # Tables of a training round that go when it starts over (besides the hospital data and bookings):
 # what people did, what they were shown, and HIS messages / code matches that point at the old records.
-PRACTICE_TABLES = ("orchestra_activity", "patient_access_log", "his_inbox", "his_mappings", "notification_deliveries")
+PRACTICE_TABLES = ("orchestra_activity", "patient_access_log", "his_inbox", "his_mappings", "notification_deliveries",
+                   "his_sync_runs")
 
 
 def name() -> str:

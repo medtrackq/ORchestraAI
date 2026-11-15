@@ -1,0 +1,810 @@
+{
+  "resourceType": "Bundle",
+  "type": "collection",
+  "entry": [
+    {
+      "fullUrl": "https://hospital.example/fhir/Location/or-suite",
+      "resource": {
+        "resourceType": "Location",
+        "id": "or-suite",
+        "status": "active",
+        "name": "อาคารผ่าตัด ชั้น 3",
+        "physicalType": {
+          "coding": [
+            {
+              "system": "http://terminology.hl7.org/CodeSystem/location-physical-type",
+              "code": "lvl"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "fullUrl": "https://hospital.example/fhir/Location/loc-cssd",
+      "resource": {
+        "resourceType": "Location",
+        "id": "loc-cssd",
+        "status": "active",
+        "name": "หน่วยจ่ายกลาง (CSSD)",
+        "physicalType": {
+          "coding": [
+            {
+              "system": "http://terminology.hl7.org/CodeSystem/location-physical-type",
+              "code": "ro"
+            }
+          ]
+        },
+        "identifier": [
+          {
+            "system": "https://hospital.example/fhir/location",
+            "value": "CSSD"
+          }
+        ],
+        "type": [
+          {
+            "coding": [
+              {
+                "system": "https://hospital.example/fhir/CodeSystem/location-type",
+                "code": "CSSD"
+              }
+            ]
+          }
+        ],
+        "partOf": {
+          "reference": "Location/or-suite"
+        }
+      }
+    },
+    {
+      "fullUrl": "https://hospital.example/fhir/Location/loc-or1",
+      "resource": {
+        "resourceType": "Location",
+        "id": "loc-or1",
+        "status": "active",
+        "name": "ห้องผ่าตัด 1",
+        "physicalType": {
+          "coding": [
+            {
+              "system": "http://terminology.hl7.org/CodeSystem/location-physical-type",
+              "code": "ro"
+            }
+          ]
+        },
+        "identifier": [
+          {
+            "system": "https://hospital.example/fhir/location",
+            "value": "OR-1"
+          }
+        ],
+        "type": [
+          {
+            "coding": [
+              {
+                "system": "https://hospital.example/fhir/CodeSystem/location-type",
+                "code": "OR"
+              }
+            ]
+          }
+        ],
+        "partOf": {
+          "reference": "Location/or-suite"
+        }
+      }
+    },
+    {
+      "fullUrl": "https://hospital.example/fhir/Location/loc-or2",
+      "resource": {
+        "resourceType": "Location",
+        "id": "loc-or2",
+        "status": "active",
+        "name": "ห้องผ่าตัด 2",
+        "physicalType": {
+          "coding": [
+            {
+              "system": "http://terminology.hl7.org/CodeSystem/location-physical-type",
+              "code": "ro"
+            }
+          ]
+        },
+        "identifier": [
+          {
+            "system": "https://hospital.example/fhir/location",
+            "value": "OR-2"
+          }
+        ],
+        "type": [
+          {
+            "coding": [
+              {
+                "system": "https://hospital.example/fhir/CodeSystem/location-type",
+                "code": "OR"
+              }
+            ]
+          }
+        ],
+        "partOf": {
+          "reference": "Location/or-suite"
+        }
+      }
+    },
+    {
+      "fullUrl": "https://hospital.example/fhir/Location/loc-or4",
+      "resource": {
+        "resourceType": "Location",
+        "id": "loc-or4",
+        "status": "suspended",
+        "name": "ห้องผ่าตัด 4",
+        "physicalType": {
+          "coding": [
+            {
+              "system": "http://terminology.hl7.org/CodeSystem/location-physical-type",
+              "code": "ro"
+            }
+          ]
+        },
+        "identifier": [
+          {
+            "system": "https://hospital.example/fhir/location",
+            "value": "OR-4"
+          }
+        ],
+        "type": [
+          {
+            "coding": [
+              {
+                "system": "https://hospital.example/fhir/CodeSystem/location-type",
+                "code": "OR"
+              }
+            ]
+          }
+        ],
+        "partOf": {
+          "reference": "Location/or-suite"
+        }
+      }
+    },
+    {
+      "fullUrl": "https://hospital.example/fhir/Location/loc-or5",
+      "resource": {
+        "resourceType": "Location",
+        "id": "loc-or5",
+        "status": "active",
+        "name": "ห้องผ่าตัดความดันลบ",
+        "physicalType": {
+          "coding": [
+            {
+              "system": "http://terminology.hl7.org/CodeSystem/location-physical-type",
+              "code": "ro"
+            }
+          ]
+        },
+        "identifier": [
+          {
+            "system": "https://hospital.example/fhir/location",
+            "value": "OR-5"
+          }
+        ],
+        "type": [
+          {
+            "coding": [
+              {
+                "system": "https://hospital.example/fhir/CodeSystem/location-type",
+                "code": "OR-NEG"
+              }
+            ]
+          }
+        ],
+        "partOf": {
+          "reference": "Location/or-suite"
+        }
+      }
+    },
+    {
+      "fullUrl": "https://hospital.example/fhir/Location/loc-ward",
+      "resource": {
+        "resourceType": "Location",
+        "id": "loc-ward",
+        "status": "active",
+        "name": "หอผู้ป่วยศัลยกรรมชาย",
+        "physicalType": {
+          "coding": [
+            {
+              "system": "http://terminology.hl7.org/CodeSystem/location-physical-type",
+              "code": "ro"
+            }
+          ]
+        },
+        "identifier": [
+          {
+            "system": "https://hospital.example/fhir/location",
+            "value": "W-SURG"
+          }
+        ],
+        "type": [
+          {
+            "coding": [
+              {
+                "system": "https://hospital.example/fhir/CodeSystem/location-type",
+                "code": "WARD"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "fullUrl": "https://hospital.example/fhir/Practitioner/pr-2001",
+      "resource": {
+        "resourceType": "Practitioner",
+        "id": "pr-2001",
+        "active": true,
+        "identifier": [
+          {
+            "system": "https://hospital.example/fhir/employee",
+            "type": {
+              "coding": [
+                {
+                  "code": "EI"
+                }
+              ]
+            },
+            "value": "D-2001"
+          },
+          {
+            "system": "https://hospital.example/fhir/license",
+            "type": {
+              "coding": [
+                {
+                  "code": "PRN"
+                }
+              ]
+            },
+            "value": "ว.45678"
+          }
+        ],
+        "name": [
+          {
+            "use": "official",
+            "text": "นพ.ธนพล ศรีสุข"
+          }
+        ]
+      }
+    },
+    {
+      "fullUrl": "https://hospital.example/fhir/PractitionerRole/role-2001",
+      "resource": {
+        "resourceType": "PractitionerRole",
+        "id": "role-2001",
+        "active": true,
+        "practitioner": {
+          "reference": "Practitioner/pr-2001"
+        },
+        "code": [
+          {
+            "coding": [
+              {
+                "system": "https://hospital.example/fhir/CodeSystem/or-role",
+                "code": "SURGEON"
+              }
+            ]
+          }
+        ],
+        "specialty": [
+          {
+            "text": "General Surgery"
+          }
+        ]
+      }
+    },
+    {
+      "fullUrl": "https://hospital.example/fhir/Practitioner/pr-2002",
+      "resource": {
+        "resourceType": "Practitioner",
+        "id": "pr-2002",
+        "active": true,
+        "identifier": [
+          {
+            "system": "https://hospital.example/fhir/employee",
+            "type": {
+              "coding": [
+                {
+                  "code": "EI"
+                }
+              ]
+            },
+            "value": "D-2002"
+          },
+          {
+            "system": "https://hospital.example/fhir/license",
+            "type": {
+              "coding": [
+                {
+                  "code": "PRN"
+                }
+              ]
+            },
+            "value": "ว.56789"
+          }
+        ],
+        "name": [
+          {
+            "use": "official",
+            "prefix": [
+              "พญ."
+            ],
+            "given": [
+              "อรุณี"
+            ],
+            "family": "มีสุข"
+          }
+        ]
+      }
+    },
+    {
+      "fullUrl": "https://hospital.example/fhir/PractitionerRole/role-2002",
+      "resource": {
+        "resourceType": "PractitionerRole",
+        "id": "role-2002",
+        "active": true,
+        "practitioner": {
+          "reference": "Practitioner/pr-2002"
+        },
+        "code": [
+          {
+            "coding": [
+              {
+                "system": "https://hospital.example/fhir/CodeSystem/or-role",
+                "code": "ANESTHESIOLOGIST"
+              }
+            ]
+          }
+        ],
+        "specialty": [
+          {
+            "text": "Anesthesiology"
+          }
+        ]
+      }
+    },
+    {
+      "fullUrl": "https://hospital.example/fhir/Practitioner/pr-3001",
+      "resource": {
+        "resourceType": "Practitioner",
+        "id": "pr-3001",
+        "active": true,
+        "identifier": [
+          {
+            "system": "https://hospital.example/fhir/employee",
+            "type": {
+              "coding": [
+                {
+                  "code": "EI"
+                }
+              ]
+            },
+            "value": "N-3001"
+          }
+        ],
+        "name": [
+          {
+            "use": "official",
+            "text": "พย.กมลวรรณ ใจงาม"
+          }
+        ]
+      }
+    },
+    {
+      "fullUrl": "https://hospital.example/fhir/PractitionerRole/role-3001",
+      "resource": {
+        "resourceType": "PractitionerRole",
+        "id": "role-3001",
+        "active": true,
+        "practitioner": {
+          "reference": "Practitioner/pr-3001"
+        },
+        "code": [
+          {
+            "coding": [
+              {
+                "system": "https://hospital.example/fhir/CodeSystem/or-role",
+                "code": "SCRUB_NURSE"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "fullUrl": "https://hospital.example/fhir/Practitioner/pr-3002",
+      "resource": {
+        "resourceType": "Practitioner",
+        "id": "pr-3002",
+        "active": true,
+        "identifier": [
+          {
+            "system": "https://hospital.example/fhir/employee",
+            "type": {
+              "coding": [
+                {
+                  "code": "EI"
+                }
+              ]
+            },
+            "value": "N-3002"
+          }
+        ],
+        "name": [
+          {
+            "use": "official",
+            "text": "พย.สุนีย์ แก้วใส"
+          }
+        ]
+      }
+    },
+    {
+      "fullUrl": "https://hospital.example/fhir/PractitionerRole/role-3002",
+      "resource": {
+        "resourceType": "PractitionerRole",
+        "id": "role-3002",
+        "active": true,
+        "practitioner": {
+          "reference": "Practitioner/pr-3002"
+        },
+        "code": [
+          {
+            "coding": [
+              {
+                "system": "https://hospital.example/fhir/CodeSystem/or-role",
+                "code": "CIRCULATING_NURSE"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "fullUrl": "https://hospital.example/fhir/Practitioner/pr-4001",
+      "resource": {
+        "resourceType": "Practitioner",
+        "id": "pr-4001",
+        "active": true,
+        "identifier": [
+          {
+            "system": "https://hospital.example/fhir/employee",
+            "type": {
+              "coding": [
+                {
+                  "code": "EI"
+                }
+              ]
+            },
+            "value": "P-4001"
+          }
+        ],
+        "name": [
+          {
+            "use": "official",
+            "text": "ภก.วิชัย ยาดี"
+          }
+        ]
+      }
+    },
+    {
+      "fullUrl": "https://hospital.example/fhir/PractitionerRole/role-4001",
+      "resource": {
+        "resourceType": "PractitionerRole",
+        "id": "role-4001",
+        "active": true,
+        "practitioner": {
+          "reference": "Practitioner/pr-4001"
+        },
+        "code": [
+          {
+            "coding": [
+              {
+                "system": "https://hospital.example/fhir/CodeSystem/or-role",
+                "code": "PHARMACIST"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "fullUrl": "https://hospital.example/fhir/Device/dev-lap-03",
+      "resource": {
+        "resourceType": "Device",
+        "id": "dev-lap-03",
+        "status": "active",
+        "identifier": [
+          {
+            "system": "https://hospital.example/fhir/asset",
+            "value": "LAP-03"
+          }
+        ],
+        "type": {
+          "coding": [
+            {
+              "system": "https://hospital.example/fhir/CodeSystem/device-type",
+              "code": "LAPAROSCOPY_TRAY"
+            }
+          ]
+        },
+        "location": {
+          "reference": "Location/loc-cssd"
+        }
+      }
+    },
+    {
+      "fullUrl": "https://hospital.example/fhir/Device/dev-carm-03",
+      "resource": {
+        "resourceType": "Device",
+        "id": "dev-carm-03",
+        "status": "active",
+        "identifier": [
+          {
+            "system": "https://hospital.example/fhir/asset",
+            "value": "CARM-03"
+          }
+        ],
+        "type": {
+          "coding": [
+            {
+              "system": "https://hospital.example/fhir/CodeSystem/device-type",
+              "code": "C_ARM"
+            }
+          ]
+        },
+        "location": {
+          "reference": "Location/loc-or2"
+        }
+      }
+    },
+    {
+      "fullUrl": "https://hospital.example/fhir/Device/dev-lap-old",
+      "resource": {
+        "resourceType": "Device",
+        "id": "dev-lap-old",
+        "status": "inactive",
+        "identifier": [
+          {
+            "system": "https://hospital.example/fhir/asset",
+            "value": "LAP-OLD"
+          }
+        ],
+        "type": {
+          "coding": [
+            {
+              "system": "https://hospital.example/fhir/CodeSystem/device-type",
+              "code": "LAPAROSCOPY_TRAY"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "fullUrl": "https://hospital.example/fhir/Device/dev-bed-77",
+      "resource": {
+        "resourceType": "Device",
+        "id": "dev-bed-77",
+        "status": "active",
+        "identifier": [
+          {
+            "system": "https://hospital.example/fhir/asset",
+            "value": "BED-77"
+          }
+        ],
+        "type": {
+          "coding": [
+            {
+              "system": "https://hospital.example/fhir/CodeSystem/device-type",
+              "code": "HOSPITAL_BED",
+              "display": "เตียงผู้ป่วย"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "fullUrl": "https://hospital.example/fhir/Schedule/sch-2001",
+      "resource": {
+        "resourceType": "Schedule",
+        "id": "sch-2001",
+        "active": true,
+        "actor": [
+          {
+            "reference": "Practitioner/pr-2001"
+          }
+        ],
+        "planningHorizon": {
+          "start": "2026-12-01T00:00:00+07:00",
+          "end": "2026-12-08T00:00:00+07:00"
+        }
+      }
+    },
+    {
+      "fullUrl": "https://hospital.example/fhir/Schedule/sch-3001",
+      "resource": {
+        "resourceType": "Schedule",
+        "id": "sch-3001",
+        "active": true,
+        "actor": [
+          {
+            "reference": "Practitioner/pr-3001"
+          }
+        ],
+        "planningHorizon": {
+          "start": "2026-12-01T00:00:00+07:00",
+          "end": "2026-12-08T00:00:00+07:00"
+        }
+      }
+    },
+    {
+      "fullUrl": "https://hospital.example/fhir/Slot/s2001-0",
+      "resource": {
+        "resourceType": "Slot",
+        "id": "s2001-0",
+        "schedule": {
+          "reference": "Schedule/sch-2001"
+        },
+        "status": "free",
+        "start": "2026-12-01T08:00:00+07:00",
+        "end": "2026-12-01T16:00:00+07:00"
+      }
+    },
+    {
+      "fullUrl": "https://hospital.example/fhir/Slot/s3001-0",
+      "resource": {
+        "resourceType": "Slot",
+        "id": "s3001-0",
+        "schedule": {
+          "reference": "Schedule/sch-3001"
+        },
+        "status": "free",
+        "start": "2026-12-01T07:30:00+07:00",
+        "end": "2026-12-01T15:30:00+07:00"
+      }
+    },
+    {
+      "fullUrl": "https://hospital.example/fhir/Slot/s2001-1",
+      "resource": {
+        "resourceType": "Slot",
+        "id": "s2001-1",
+        "schedule": {
+          "reference": "Schedule/sch-2001"
+        },
+        "status": "free",
+        "start": "2026-12-02T08:00:00+07:00",
+        "end": "2026-12-02T16:00:00+07:00"
+      }
+    },
+    {
+      "fullUrl": "https://hospital.example/fhir/Slot/s3001-1",
+      "resource": {
+        "resourceType": "Slot",
+        "id": "s3001-1",
+        "schedule": {
+          "reference": "Schedule/sch-3001"
+        },
+        "status": "free",
+        "start": "2026-12-02T07:30:00+07:00",
+        "end": "2026-12-02T15:30:00+07:00"
+      }
+    },
+    {
+      "fullUrl": "https://hospital.example/fhir/Slot/s2001-2",
+      "resource": {
+        "resourceType": "Slot",
+        "id": "s2001-2",
+        "schedule": {
+          "reference": "Schedule/sch-2001"
+        },
+        "status": "free",
+        "start": "2026-12-03T08:00:00+07:00",
+        "end": "2026-12-03T16:00:00+07:00"
+      }
+    },
+    {
+      "fullUrl": "https://hospital.example/fhir/Slot/s3001-2",
+      "resource": {
+        "resourceType": "Slot",
+        "id": "s3001-2",
+        "schedule": {
+          "reference": "Schedule/sch-3001"
+        },
+        "status": "free",
+        "start": "2026-12-03T07:30:00+07:00",
+        "end": "2026-12-03T15:30:00+07:00"
+      }
+    },
+    {
+      "fullUrl": "https://hospital.example/fhir/Slot/s2001-3",
+      "resource": {
+        "resourceType": "Slot",
+        "id": "s2001-3",
+        "schedule": {
+          "reference": "Schedule/sch-2001"
+        },
+        "status": "free",
+        "start": "2026-12-04T08:00:00+07:00",
+        "end": "2026-12-04T16:00:00+07:00"
+      }
+    },
+    {
+      "fullUrl": "https://hospital.example/fhir/Slot/s3001-3",
+      "resource": {
+        "resourceType": "Slot",
+        "id": "s3001-3",
+        "schedule": {
+          "reference": "Schedule/sch-3001"
+        },
+        "status": "free",
+        "start": "2026-12-04T07:30:00+07:00",
+        "end": "2026-12-04T15:30:00+07:00"
+      }
+    },
+    {
+      "fullUrl": "https://hospital.example/fhir/Slot/s2001-4",
+      "resource": {
+        "resourceType": "Slot",
+        "id": "s2001-4",
+        "schedule": {
+          "reference": "Schedule/sch-2001"
+        },
+        "status": "free",
+        "start": "2026-12-05T08:00:00+07:00",
+        "end": "2026-12-05T16:00:00+07:00"
+      }
+    },
+    {
+      "fullUrl": "https://hospital.example/fhir/Slot/s3001-4",
+      "resource": {
+        "resourceType": "Slot",
+        "id": "s3001-4",
+        "schedule": {
+          "reference": "Schedule/sch-3001"
+        },
+        "status": "free",
+        "start": "2026-12-05T07:30:00+07:00",
+        "end": "2026-12-05T15:30:00+07:00"
+      }
+    },
+    {
+      "fullUrl": "https://hospital.example/fhir/Slot/s2001-oc",
+      "resource": {
+        "resourceType": "Slot",
+        "id": "s2001-oc",
+        "schedule": {
+          "reference": "Schedule/sch-2001"
+        },
+        "status": "busy",
+        "start": "2026-12-06T16:00:00+07:00",
+        "end": "2026-12-07T08:00:00+07:00",
+        "serviceType": [
+          {
+            "coding": [
+              {
+                "system": "https://hospital.example/fhir/CodeSystem/shift-type",
+                "code": "ON_CALL"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "fullUrl": "https://hospital.example/fhir/Slot/s3001-leave",
+      "resource": {
+        "resourceType": "Slot",
+        "id": "s3001-leave",
+        "schedule": {
+          "reference": "Schedule/sch-3001"
+        },
+        "status": "busy-unavailable",
+        "start": "2026-12-07T08:00:00+07:00",
+        "end": "2026-12-07T16:00:00+07:00",
+        "comment": "ลาพักร้อน"
+      }
+    }
+  ]
+}

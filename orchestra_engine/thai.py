@@ -18,6 +18,7 @@ STATUS = {  # rooms, equipment units and recovery beds
     "IN_USE": "กำลังใช้งาน",
     "STERILIZING": "อยู่ระหว่างทำให้ปราศจากเชื้อที่ CSSD",
     "MAINTENANCE": "ซ่อมบำรุง",
+    "RETIRED": "ปลดระวาง",
     "CLOSED": "ปิดใช้งาน",
     "OUT_OF_SERVICE": "งดใช้งาน",
     "OCCUPIED": "มีผู้ป่วยอยู่",

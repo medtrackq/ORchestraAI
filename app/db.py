@@ -381,7 +381,7 @@ class Database:
         units, unit_ids, unit_serials, unit_rows = [], {}, {}, {}
         for r in conn.execute("SELECT * FROM equipment_units ORDER BY serial_number"):
             t = type_info.get(r["eq_type_id"])
-            if t is None:
+            if t is None or r["current_status"] == "RETIRED":  # retired in the HIS: in no plan any more
                 continue
             units.append(EquipmentUnit(
                 r["serial_number"], type_keys[t["eq_type_id"]], t["sterilization_duration_mins"] or 0,

@@ -46,8 +46,8 @@ from pydantic import BaseModel, Field
 
 from .auth import (COOKIE, ENV_ADMIN_ID, PENDING_S, ROLES, SESSION_HOURS, Accounts, AuthError, CodeNeeded, DbUserStore,
                    MemoryUserStore, ServiceUnavailable, TooManyAttempts, User, can, env_totp_secret, required_roles)
-from . import (autobackup, backup, environment, feedback as fb, his as his_mod, history_io, hosting, hospital_io, privacy,
-               roster_io, system_status)
+from . import (autobackup, backup, environment, feedback as fb, his as his_mod, his_fhir, history_io, hosting, hospital_io,
+               privacy, roster_io, system_status)
 from .admin_store import require_supabase
 from .intake_service import IntakeService
 from .notify import DbNotifyStore, MemoryNotifyStore, Notifier, NotifyUnavailable
@@ -80,6 +80,7 @@ intake = IntakeService()  # Claude pass when ANTHROPIC_API_KEY is set, keyword r
 access = privacy.AccessLog(store)  # PDPA: who was shown patients' HN / names
 feedback = fb.Feedback(store, notifier.handle)  # problem reports from users and errors, for the admin
 his = his_mod.His(store, notifier.handle, access)  # the hospital information system calls in with an API key
+master = his_fhir.MasterData(store)  # staff, rosters, rooms and equipment from the HIS (FHIR R4)
 logging.getLogger("orchestra").addHandler(fb.ErrorLogHandler(feedback))  # errors the app logs are listed too
 logging.getLogger("orchestra").addHandler(fb.server_log_handler())  # and shown in the host's log (database down too)
 
@@ -96,6 +97,7 @@ async def _lifespan(_app):
     if store.mode == "supabase":
         timers.append(privacy.RetentionTimer(store))
         timers.append(autobackup.BackupTimer(store, access))
+        timers.append(his_fhir.PullTimer(master))  # only pulls when the admin set an interval
         await run_in_threadpool(system_status.record_boot, store)  # frequent starts = the server sleeps when idle
     for timer in timers:
         timer.start()
@@ -136,7 +138,8 @@ def _address(request: Request) -> str:
 
 MAX_BODY = 12 * 1024 * 1024  # an Excel upload (5 MB) as base64 JSON fits; anything bigger is refused unread
 # Smaller limits where no file is sent (the HIS: 200 requests fit in well under 1 MB).
-BODY_LIMITS = ((HIS_PREFIX, 1024 * 1024), ("/api/feedback", 64 * 1024), ("/api/client-errors", 64 * 1024),
+FHIR_MAX = 20 * 1024 * 1024  # a month of rosters for a few hundred people
+BODY_LIMITS = (("/api/his/v1/fhir", FHIR_MAX), ("/api/admin/his/fhir/import", FHIR_MAX), (HIS_PREFIX, 1024 * 1024), ("/api/feedback", 64 * 1024), ("/api/client-errors", 64 * 1024),
                ("/api/login", 16 * 1024), ("/api/line/webhook", 256 * 1024))
 TOO_LARGE = "ข้อมูลที่ส่งมาใหญ่เกินไป"
 
@@ -229,7 +232,8 @@ async def sessions(request: Request, call_next):
 
     # CSRF: state changes must be JSON from this site (cross-site forms cannot send JSON).
     if request.method in ("POST", "PUT", "PATCH", "DELETE") and path.startswith("/api/"):
-        if not request.headers.get("content-type", "").startswith("application/json"):
+        kind = request.headers.get("content-type", "")
+        if not (kind.startswith("application/json") or (machine and kind.startswith("application/fhir+json"))):
             return JSONResponse({"detail": "ต้องส่งข้อมูลแบบ JSON"}, status_code=415)
         origin = request.headers.get("origin")
         try:
@@ -1826,9 +1830,98 @@ def his_schedule(request: Request, date: str | None = Query(default=None, patter
     return _his_run(his.schedule, date, client, _address(request))
 
 
+@app.post("/api/his/v1/fhir", tags=["HIS"])
+async def his_fhir_push(request: Request, dry_run: bool = Query(default=False)) -> JSONResponse:
+    """Master data as FHIR R4 (a Bundle, a resource or a list): Location (operating rooms), Practitioner and
+    PractitionerRole (OR staff), Device (OR equipment), Schedule and Slot (rosters). ``dry_run=true``: check
+    only. Answers an OperationOutcome with what was done (docs/HIS_INTERFACE.md)."""
+    client = _his_client(request, his_fhir.SCOPE)
+    try:  # up to 20 MB: parsed off the event loop
+        payload = await run_in_threadpool(json.loads, await request.body())
+    except (ValueError, RecursionError):
+        return JSONResponse(_fhir_error("ข้อมูลไม่ใช่ JSON ที่ถูกต้อง"), status_code=400)
+    try:
+        report = await run_in_threadpool(master.run, payload, mode="push", dry_run=dry_run, by=f"HIS: {client.name}")
+    except StoreError as exc:
+        return JSONResponse(_fhir_error(str(exc)), status_code=503 if "SQL" in str(exc) else 400)
+    return JSONResponse(his_fhir.outcome(report), status_code=200 if report["status"] != "failed" else 422)
+
+
+def _fhir_error(message: str) -> dict:
+    return {"resourceType": "OperationOutcome", "issue": [{"severity": "error", "code": "processing", "diagnostics": message}]}
+
+
 class HisKeyIn(BaseModel):
     name: str = Field(min_length=1, max_length=100)
-    scopes: list[Literal["requests:write", "schedule:read"]] = Field(min_length=1)
+    scopes: list[Literal["requests:write", "schedule:read", "masterdata:write"]] = Field(min_length=1)
+
+
+class FhirSettingsIn(BaseModel):
+    base_url: str = Field(default="", max_length=300)
+    token_env: str = Field(default="", max_length=70)
+    pull_hours: int = Field(default=0, ge=0, le=168)
+    roster_days: int = Field(default=31, ge=1, le=62)
+    room_types: dict[str, str] = Field(default_factory=dict, max_length=300)
+    roles: dict[str, str] = Field(default_factory=dict, max_length=300)
+    equipment_types: dict[str, str] = Field(default_factory=dict, max_length=300)
+    shift_types: dict[str, str] = Field(default_factory=dict, max_length=300)
+    systems: dict[str, str] = Field(default_factory=dict, max_length=10)
+
+
+class FhirImportIn(BaseModel):
+    content: str = Field(min_length=2, max_length=FHIR_MAX)
+    filename: str = Field(default="", max_length=200)
+    dry_run: bool = True
+
+
+class FhirPullIn(BaseModel):
+    dry_run: bool = True
+
+
+def _fhir_overview(request: Request) -> dict:
+    out = _run(master.overview)
+    out["push_url"] = (hosting.public_url() or str(request.base_url).rstrip("/")) + "/api/his/v1/fhir"
+    return out
+
+
+@app.get("/api/admin/his/fhir")
+def his_fhir_overview(request: Request) -> dict:
+    _admin(request, "hospital_data")
+    return _fhir_overview(request)
+
+
+@app.put("/api/admin/his/fhir/settings")
+def his_fhir_settings(body: FhirSettingsIn, request: Request) -> dict:
+    user, _ = _admin(request, "hospital_data")
+    _run(master.save_settings, body.model_dump(), _actor(user))
+    return _fhir_overview(request)
+
+
+@app.post("/api/admin/his/fhir/import")
+def his_fhir_import(body: FhirImportIn, request: Request) -> dict:
+    """An admin's FHIR Bundle file (JSON): tried first (dry run), then saved."""
+    user, _ = _admin(request, "hospital_data")
+    resources = _run(his_fhir.parse_text, body.content)
+    return {"report": _run(master.run, resources, mode="file", dry_run=body.dry_run, actor=_actor(user)),
+            "overview": _fhir_overview(request)}
+
+
+@app.post("/api/admin/his/fhir/pull")
+def his_fhir_pull(body: FhirPullIn, request: Request) -> dict:
+    user, _ = _admin(request, "hospital_data")
+    return {"report": _run(master.pull, dry_run=body.dry_run, actor=_actor(user)), "overview": _fhir_overview(request)}
+
+
+@app.post("/api/admin/his/fhir/test")
+def his_fhir_test(request: Request) -> dict:
+    _admin(request, "hospital_data")
+    return _run(master.test)
+
+
+@app.get("/api/admin/his/fhir/runs/{run_id}")
+def his_fhir_run(run_id: int, request: Request) -> dict:
+    _admin(request, "hospital_data")
+    return _run(master.run_detail, run_id)
 
 
 class HisMappingIn(BaseModel):
