@@ -1,4 +1,4 @@
-"""ORchestraAI web app: API + web UI in one service (deployed on Railway or Render; see app/hosting.py).
+"""ORchestraAI web app: API + web UI in one service (deployed on Railway; see app/hosting.py and Dockerfile).
 
 Run locally:
     APP_PASSWORD=changeme uvicorn app.main:app --reload
@@ -20,6 +20,7 @@ Environment:
     SOLVER_TIME_LIMIT  seconds per solve (default 10)
     APP_MOVED_TO       only on an old server after a move: every page sends people to this address
     CLIENT_IP_HEADER   only when hosted elsewhere behind a proxy: the header holding the caller's IP
+                       (not set: the connection's address; Railway: X-Real-IP)
 """
 from __future__ import annotations
 

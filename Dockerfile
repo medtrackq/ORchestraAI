@@ -1,6 +1,5 @@
 # ORchestraAI web service (pages + API in one process), for Railway or any server with Docker.
-# Railway builds with this file whenever it is in the repo; Render's Blueprint keeps its own Python runtime
-# (render.yaml) and does not use it.
+# Railway builds with this file whenever it is in the repo (no build or start command to set).
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \

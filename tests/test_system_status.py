@@ -52,7 +52,7 @@ def test_settings_never_show_secret_values(monkeypatch):
     monkeypatch.setenv("HOSPITAL_NAME", "โรงพยาบาลทดสอบ")
     monkeypatch.setenv("READINESS_DIGEST_HOUR", "off")
     monkeypatch.delenv("APP_URL", raising=False)
-    monkeypatch.delenv("RENDER_EXTERNAL_URL", raising=False)
+    monkeypatch.delenv("RAILWAY_PUBLIC_DOMAIN", raising=False)
     rows = {r["key"]: r for r in ss.settings("supabase", True, "ready")}
     text = json.dumps(rows, ensure_ascii=False)
     assert not any(value in text for value in secrets.values())

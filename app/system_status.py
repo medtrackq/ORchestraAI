@@ -240,7 +240,7 @@ def _backup_row(mode: str) -> tuple:
 
 
 def _host() -> str:
-    where = hosting.name() if hosting.provider() else "ไม่ใช่ Railway หรือ Render"
+    where = hosting.name() if hosting.provider() else "ไม่ใช่ Railway"
     if hosting.region():
         where += f" · region {hosting.region()}"
     if hosting.provider() == hosting.RAILWAY and hosting.region() and not hosting.region().startswith("asia-southeast"):
@@ -375,7 +375,6 @@ def note_backup(store, manifest: dict, size: int, actor: dict | None) -> None:
 
 # Why a server starts again and again, by host.
 RESTARTS = {
-    hosting.RENDER: "Render แผนฟรีหลับเมื่อไม่มีคนใช้ 15 นาที คนแรกต้องรอ และงานตั้งเวลาอาจไม่ทำงาน",
     hosting.RAILWAY: ("ดูสาเหตุที่ Railway → Deployments → View logs (เช่น หน่วยความจำไม่พอ) · ปิด Serverless ไว้ "
                       "(Settings → Deploy) งานตั้งเวลาจึงทำงานตรงเวลา"),
 }

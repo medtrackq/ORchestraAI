@@ -1,4 +1,4 @@
-# Runtime dependencies for the web service (Render installs these).
+# Runtime dependencies for the web service (the Dockerfile installs these).
 ortools>=9.10
 fastapi>=0.110
 uvicorn>=0.29

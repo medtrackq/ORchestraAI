@@ -1,5 +1,5 @@
 # Runs every test on each pull request (and on main after a merge), with a real PostgreSQL
-# for the Supabase-mode tests. Python 3.12 is what the server runs (Dockerfile, render.yaml PYTHON_VERSION).
+# for the Supabase-mode tests. Python 3.12 is what the server runs (Dockerfile).
 name: tests
 
 on:

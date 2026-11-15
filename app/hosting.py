@@ -1,4 +1,4 @@
-"""Where the server runs: Railway, Render, or elsewhere (a hospital server, a laptop).
+"""Where the server runs: Railway, or elsewhere (a hospital server, a laptop).
 
 The app is the same everywhere; what differs by host is read here:
 
@@ -14,20 +14,18 @@ import html
 import os
 from urllib.parse import quote, urlsplit
 
-RAILWAY, RENDER = "railway", "render"
+RAILWAY = "railway"
 
-# Railway's edge sets X-Real-IP and replaces a caller's copy; it does not set CF-Connecting-IP, so a caller's
-# copy of that one would pass straight through. Render runs behind Cloudflare, which always overwrites
-# CF-Connecting-IP; the first X-Forwarded-For entry is whatever the client sent (Render only appends).
-IP_HEADERS = {RAILWAY: ("x-real-ip",), RENDER: ("cf-connecting-ip", "x-forwarded-for")}
-DEFAULT_IP_HEADERS = ("cf-connecting-ip", "x-forwarded-for")  # elsewhere: set CLIENT_IP_HEADER (or "none")
+# Railway's edge sets X-Real-IP and replaces a caller's copy. Any other header (CF-Connecting-IP,
+# X-Forwarded-For) is whatever the caller sent. Elsewhere no header is trusted unless CLIENT_IP_HEADER names
+# the one a proxy in front of the app sets (e.g. nginx's X-Real-IP): the connection's peer is used.
+IP_HEADERS = {RAILWAY: ("x-real-ip",)}
 
-NAMES = {RAILWAY: "Railway", RENDER: "Render"}
-SETTINGS = {RAILWAY: "Railway → บริการ ORchestraAI → Variables", RENDER: "Render → Environment"}
-LOGS = {RAILWAY: "Railway → Deployments → View logs", RENDER: "Render → Logs"}
+NAMES = {RAILWAY: "Railway"}
+SETTINGS = {RAILWAY: "Railway → บริการ ORchestraAI → Variables"}
+LOGS = {RAILWAY: "Railway → Deployments → View logs"}
 # How a setting is added there (Railway stages variable changes until they are deployed).
-HOW = {RAILWAY: "กด New Variable ใส่ชื่อและค่า แล้วกด Deploy ที่แถบการเปลี่ยนแปลงด้านบน (ใช้ค่าใหม่หลัง deploy เสร็จ ประมาณ 2–3 นาที)",
-       RENDER: "กด Add Environment Variable ใส่ Key และ Value แล้วกด Save (Render deploy ใหม่เอง ประมาณ 2–3 นาที)"}
+HOW = {RAILWAY: "กด New Variable ใส่ชื่อและค่า แล้วกด Deploy ที่แถบการเปลี่ยนแปลงด้านบน (ใช้ค่าใหม่หลัง deploy เสร็จ ประมาณ 2–3 นาที)"}
 
 
 def _env(name: str) -> str:
@@ -35,11 +33,9 @@ def _env(name: str) -> str:
 
 
 def provider() -> str:
-    """"railway", "render" or "" (each sets its own variables in every deployment)."""
+    """"railway" or "" (Railway sets its own variables in every deployment)."""
     if _env("RAILWAY_PROJECT_ID") or _env("RAILWAY_ENVIRONMENT_ID") or _env("RAILWAY_SERVICE_ID"):
         return RAILWAY
-    if _env("RENDER") or _env("RENDER_SERVICE_ID"):
-        return RENDER
     return ""
 
 
@@ -60,7 +56,7 @@ def ip_headers() -> tuple[str, ...]:
     custom = _env("CLIENT_IP_HEADER").lower()
     if custom:  # a hospital's own reverse proxy (e.g. nginx sets X-Real-IP); "none" = the TCP peer only
         return () if custom == "none" else (custom,)
-    return IP_HEADERS.get(provider(), DEFAULT_IP_HEADERS)
+    return IP_HEADERS.get(provider(), ())
 
 
 def client_ip(headers, peer: str | None) -> str:
@@ -74,14 +70,14 @@ def client_ip(headers, peer: str | None) -> str:
 
 def public_url() -> str:
     """The site's address for links sent outside the web page (LINE messages)."""
-    url = _env("APP_URL") or _env("RENDER_EXTERNAL_URL")
+    url = _env("APP_URL")
     if not url and _env("RAILWAY_PUBLIC_DOMAIN"):
         url = "https://" + _env("RAILWAY_PUBLIC_DOMAIN")
     return url.rstrip("/")
 
 
 def commit() -> str:
-    return _env("RAILWAY_GIT_COMMIT_SHA") or _env("RENDER_GIT_COMMIT")
+    return _env("RAILWAY_GIT_COMMIT_SHA")
 
 
 def region() -> str:

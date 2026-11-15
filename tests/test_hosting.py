@@ -1,4 +1,4 @@
-"""Where the server runs (Railway, Render, elsewhere) and an old server after a move (APP_MOVED_TO)."""
+"""Where the server runs (Railway or elsewhere) and an old server after a move (APP_MOVED_TO)."""
 from __future__ import annotations
 
 import pytest
@@ -11,8 +11,7 @@ from app.main import accounts, app
 from test_app import OWNER, fresh, owner, session  # noqa: F401  (fixtures)
 
 HOST_VARS = ("RAILWAY_PROJECT_ID", "RAILWAY_ENVIRONMENT_ID", "RAILWAY_SERVICE_ID", "RAILWAY_PUBLIC_DOMAIN",
-             "RAILWAY_GIT_COMMIT_SHA", "RAILWAY_REPLICA_REGION", "RENDER", "RENDER_SERVICE_ID", "RENDER_EXTERNAL_URL",
-             "RENDER_GIT_COMMIT", "APP_URL", "APP_MOVED_TO", "CLIENT_IP_HEADER")
+             "RAILWAY_GIT_COMMIT_SHA", "RAILWAY_REPLICA_REGION", "APP_URL", "APP_MOVED_TO", "CLIENT_IP_HEADER")
 NEW = "https://orchestra.up.railway.app"
 
 
@@ -38,13 +37,8 @@ def test_which_host(monkeypatch, railway):
     assert hosting.public_url() == "https://or.hospital.example"
     for name in ("RAILWAY_PROJECT_ID", "RAILWAY_PUBLIC_DOMAIN", "RAILWAY_GIT_COMMIT_SHA", "APP_URL"):
         monkeypatch.delenv(name)
-    monkeypatch.setenv("RENDER", "true")
-    monkeypatch.setenv("RENDER_EXTERNAL_URL", "https://orchestra-ai.onrender.com")
-    monkeypatch.setenv("RENDER_GIT_COMMIT", "fff0001")
-    assert hosting.provider() == "render" and hosting.settings_place() == "Render → Environment"
-    assert hosting.public_url() == "https://orchestra-ai.onrender.com" and hosting.commit() == "fff0001"
-    monkeypatch.delenv("RENDER")
-    assert hosting.provider() == "" and "เซิร์ฟเวอร์" in hosting.settings_place()
+    assert hosting.provider() == "" and "เซิร์ฟเวอร์" in hosting.settings_place()  # a laptop or the hospital's server
+    assert hosting.public_url() == "" and hosting.commit() == ""
 
 
 def test_client_ip_comes_only_from_the_hosts_own_header(monkeypatch, railway):
@@ -52,11 +46,12 @@ def test_client_ip_comes_only_from_the_hosts_own_header(monkeypatch, railway):
     assert hosting.client_ip(sent, "10.0.0.2") == "203.0.113.7"  # Railway: a caller's CF-Connecting-IP is ignored
     assert hosting.client_ip({"cf-connecting-ip": "1.2.3.4"}, "10.0.0.2") == "10.0.0.2"
     monkeypatch.delenv("RAILWAY_PROJECT_ID")
-    monkeypatch.setenv("RENDER", "true")
-    assert hosting.client_ip(sent, "10.0.0.2") == "1.2.3.4"  # Render: Cloudflare's header
-    assert hosting.client_ip({"x-forwarded-for": "5.6.7.8, 10.1.1.1"}, None) == "5.6.7.8"
+    assert hosting.client_ip(sent, "10.0.0.2") == "10.0.0.2"  # elsewhere: no header is trusted by default
+    assert hosting.client_ip(sent, None) == "unknown"
     monkeypatch.setenv("CLIENT_IP_HEADER", "X-Real-IP")  # a hospital's own nginx
     assert hosting.client_ip(sent, "10.0.0.2") == "203.0.113.7"
+    monkeypatch.setenv("CLIENT_IP_HEADER", "x-forwarded-for")
+    assert hosting.client_ip({"x-forwarded-for": "5.6.7.8, 10.1.1.1"}, None) == "5.6.7.8"
     monkeypatch.setenv("CLIENT_IP_HEADER", "none")
     assert hosting.client_ip(sent, "10.0.0.2") == "10.0.0.2"
 
@@ -97,7 +92,7 @@ def test_moved_to_reads_only_an_https_address(monkeypatch):
 
 def test_an_old_server_sends_everyone_to_the_new_address(monkeypatch):
     monkeypatch.setenv("APP_MOVED_TO", NEW)
-    c = TestClient(app, base_url="https://old.onrender.com")
+    c = TestClient(app, base_url="https://old.example.org")
     page = c.get("/board", follow_redirects=False)
     assert page.status_code == 200 and "ย้ายไปที่อยู่ใหม่แล้ว" in page.text
     assert f'href="{NEW}/board"' in page.text and "unregister" in page.text  # the old notification worker goes

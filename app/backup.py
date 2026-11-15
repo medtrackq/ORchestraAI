@@ -219,8 +219,7 @@ README = """ไฟล์สำรองข้อมูล ORchestraAI
      DATABASE_URL="<connection string ของฐานข้อมูลใหม่>" python -m app.backup restore ไฟล์นี้.zip
    วิธีที่ 2 (มี psql): แตกไฟล์ zip แล้วในโฟลเดอร์นั้นรัน
      psql "<connection string ของฐานข้อมูลใหม่>" -f restore.sql
-3. ตั้ง DATABASE_URL ของแอปในค่าตั้งของเซิร์ฟเวอร์ (Railway → Variables หรือ Render → Environment)
-   ให้ชี้ไปฐานข้อมูลใหม่
+3. ตั้ง DATABASE_URL ของแอปที่ Railway → Variables ให้ชี้ไปฐานข้อมูลใหม่
 
 การกู้คืนทำในทรานแซกชันเดียว ถ้าผิดพลาดจะยกเลิกทั้งหมด
 """
