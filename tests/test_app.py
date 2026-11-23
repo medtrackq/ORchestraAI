@@ -439,6 +439,38 @@ def test_status_board_and_steps_over_the_api(owner):
     assert family["family"] and all("procedure" not in c and "surgeon" not in c for r in family["rooms"] for c in r["cases"])
 
 
+def test_the_time_recording_page_and_its_data(owner):
+    page = owner.get("/steps")
+    assert page.status_code == 200 and "บันทึกเวลา" in page.text
+    case = owner.get("/api/state").json()["schedule"]["bookings"][0]
+    team = [t["staff_id"] for t in case["team"]]
+
+    def mine(client):
+        board = client.get("/api/board?steps=1").json()
+        room = next(r for r in board["rooms"] if r["room"] == case["or_id"])
+        return board, next(c for c in room["cases"] if c["case_id"] == case["case_id"])
+
+    board, item = mine(owner)
+    assert board["can_record"] is True and set(item["times"]) == {"arrived", "in_room", "incision", "closure", "out_room",
+                                                                    "recovery_out"}
+    assert "HN-" not in str(board) and "patient" not in str(board)  # still no patient identity
+    assert owner.post(f"/api/cases/{case['case_id']}/milestone", json={"step": "arrived", "time": "07:40"}).status_code == 200
+    assert mine(owner)[1]["times"]["arrived"] == "07:40"
+    on_team = make_user(owner, "circ7", "staff", team[1])
+    assert mine(on_team)[1]["on_team"] is True and mine(on_team)[1]["own"] is False
+    holding = make_user(owner, "hold7", "staff", "SCR-9")  # a holding / recovery nurse: not on the team
+    assert mine(holding)[1]["on_team"] is False
+    surgeon = make_user(owner, "sur7", "surgeon", team[0])
+    assert mine(surgeon)[1]["own"] is True
+    cssd = make_user(owner, "cssd7", "cssd")
+    assert mine(cssd)[0]["can_record"] is False  # sees the page, cannot record
+    plain = owner.get("/api/board").json()
+    assert "can_record" not in plain and all("times" not in c for r in plain["rooms"] for c in r["cases"])
+    family = owner.get("/api/board?family=1&steps=1").json()  # the waiting room never gets the details
+    assert "can_record" not in family and all("times" not in c for r in family["rooms"] for c in r["cases"])
+    assert 'id="steps-link"' in owner.get("/").text
+
+
 def test_or_block_endpoints_need_supabase_and_the_roster_permission(owner):
     body = {"room": "OR-1", "weekdays": [0], "start": "08:00", "end": "12:00", "owner_kind": "SPECIALTY",
             "specialty": "Orthopedics"}

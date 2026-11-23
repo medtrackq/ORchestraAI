@@ -431,6 +431,12 @@ def board_page() -> FileResponse:
     return FileResponse(ROOT / "static" / "board.html")
 
 
+@app.get("/steps", include_in_schema=False)
+def steps_page() -> FileResponse:
+    """Recording a case's step times on a tablet in the OR or a phone: a room's case, one big button."""
+    return FileResponse(ROOT / "static" / "steps.html")
+
+
 @app.get("/print", include_in_schema=False)
 def print_page() -> FileResponse:
     """Printable daily OR list (per room) and WHO Surgical Safety Checklist (per case)."""
@@ -1599,12 +1605,14 @@ def _forecast(b: dict, m: dict, forecaster) -> dict | None:
 
 
 @app.get("/api/board")
-def board(request: Request, date: str | None = None, family: bool = False) -> dict:
+def board(request: Request, date: str | None = None, family: bool = False, steps: bool = False) -> dict:
     """The status board: each room's cases and where each one is now. Never patient names or HNs;
-    ``family`` leaves out procedures and surgeons too (a waiting-room screen)."""
+    ``family`` leaves out procedures and surgeons too (a waiting-room screen). ``steps`` (the time-
+    recording page) adds each case's step times and whether this user may record them."""
     from datetime import datetime
 
     user = _user(request, "view")
+    recording = steps and not family
     state = _run(store.state, date)
     steps, ready = state.get("milestones") or {}, state.get("readiness") or {}
     forecaster = None
@@ -1621,11 +1629,16 @@ def board(request: Request, date: str | None = None, family: bool = False) -> di
         if not family:  # (a waiting room is not told the odds of a case running long)
             item |= {"procedure": b["procedure"], "surgeon": (b["team"][0] if b["team"] else {}).get("name"),
                      "readiness": (ready.get(b["case_id"]) or {}).get("status"), "forecast": _forecast(b, m, forecaster)}
+        if recording:  # the same rules as recording on the schedule page (the server checks them again)
+            team = [t.get("staff_id") for t in b["team"]]
+            item |= {"times": m.get("times") or {}, "own": bool(user.staff_id) and team[:1] == [user.staff_id],
+                     "on_team": bool(user.staff_id) and user.staff_id in team}
         rooms.setdefault(b["or_id"], []).append(item)
     return {"date": state.get("date"), "now": datetime.now(_TZ).strftime("%H:%M"), "family": family,
             "hospital_name": (os.environ.get("HOSPITAL_NAME") or "").strip()[:120] or None,
             "rooms": [{"room": r, "cases": cases} for r, cases in rooms.items()],
-            "steps_ready": state.get("milestones_ready", False), "viewer": user.role}
+            "steps_ready": state.get("milestones_ready", False), "viewer": user.role,
+            **({"can_record": can(user.role, "record_times")} if recording else {})}
 
 
 # ------------------------------------------------------------- weekly OR blocks
