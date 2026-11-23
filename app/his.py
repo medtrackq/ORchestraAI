@@ -39,9 +39,11 @@ log = logging.getLogger("orchestra.his")
 
 SCOPES = {"requests:write": "ส่งใบขอผ่าตัด (สร้าง แก้ไข ยกเลิก)", "schedule:read": "อ่านตารางผ่าตัดและสถานะคำขอ",
           "masterdata:write": "ส่งข้อมูลหลัก (FHIR): บุคลากร ตารางเวร ห้องผ่าตัด เครื่องมือ",
-          "milestones:write": "ส่งเวลาแต่ละขั้นของเคส (กล้อง AI, RFID, อุปกรณ์ในห้องผ่าตัด)"}
+          "milestones:write": "ส่งเวลาแต่ละขั้นของเคส (สายรัดข้อมือ RFID, กล้อง AI, อุปกรณ์ในห้องผ่าตัด)"}
 # A device that only knows the room (a camera, a door reader): which of the room's cases a step is for.
 ROOM_STEPS = {"in_room": "next", "incision": "inside", "closure": "inside", "out_room": "inside"}
+DOOR_GAP = 10             # minutes: wristband reads this soon after the patient last went into / out of an OR are that pass
+WRONG_ROOM_QUIET_S = 600  # a wrong-room alert for a case and door is not sent again within this
 STEP_TH = {"arrived": "มาถึงห้องเตรียม", "in_room": "เข้าห้องผ่าตัด", "incision": "ลงมีด", "closure": "เย็บแผลเสร็จ",
            "out_room": "ออกจากห้องผ่าตัด", "recovery_out": "ออกจากห้องพักฟื้น"}
 KINDS = {"surgeon": "ศัลยแพทย์", "procedure": "หัตถการ"}
@@ -110,6 +112,16 @@ def _day(value, field: str) -> date | None:
         return value if isinstance(value, date) else date.fromisoformat(str(value)[:10])
     except ValueError as exc:
         raise StoreError(f"{field} ต้องเป็นวันที่แบบ YYYY-MM-DD") from exc
+
+
+def _band(value) -> str:
+    """A wristband's HN as compared: without spaces, dashes or slashes, in capitals ("hn 65/0123" = "HN650123")."""
+    return re.sub(r"[\s\-/]", "", str(value or "")).upper()
+
+
+def _device(client: Client) -> dict:
+    """Who recorded a step a device sent (activity log, case_milestones.recorded_by)."""
+    return {"name": f"อุปกรณ์: {client.name}"[:100], "role": "device"}
 
 
 def normalize(payload: dict) -> dict:
@@ -195,6 +207,7 @@ class His:
         self._fails: dict[str, deque] = defaultdict(deque)
         self._items: dict[str, deque] = defaultdict(deque)
         self._alerts: dict[str, deque] = defaultdict(deque)
+        self._wrong: dict[tuple, float] = {}  # wrong-room alerts sent: (day, case, door) -> when
         self._ready_until = 0.0
 
     # ------------------------------------------------------------- plumbing
@@ -656,32 +669,12 @@ class His:
         the room's earliest case not in yet; incision, closure, out = the case in the room now. ``time``
         is ISO 8601 (with its zone) or HH:MM, default now. A step already recorded is left as it is unless
         ``replace``: a device may send the same event twice. Nothing about the patient is sent back."""
-        from .store import parse_time
-
         store = self._db()
-        tz = store.db.tz
         step = payload["step"]
         room = (payload.get("room") or "").strip() or None
         code = (payload.get("case_code") or "").strip() or None
         ref = (payload.get("his_ref") or "").strip() or None
-        day = _day(payload.get("date"), "date") if payload.get("date") else None
-        clock_text = None
-        raw = (payload.get("time") or "").strip()
-        if raw:
-            if re.fullmatch(r"\d{1,2}[:.]\d{2}", raw):
-                parse_time(raw.replace(".", ":"))
-                clock_text = raw.replace(".", ":")
-            else:
-                try:
-                    ts = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-                except ValueError:
-                    raise StoreError("time ต้องเป็น ISO 8601 (เช่น 2026-11-23T09:05:00+07:00) หรือ HH:MM") from None
-                if ts.tzinfo is None:
-                    raise StoreError("time แบบ ISO 8601 ต้องมีเขตเวลา (เช่น +07:00 หรือ Z)")
-                local = ts.astimezone(tz)
-                clock_text = local.strftime("%H:%M")
-                day = day or local.date()  # (a step after midnight: send the case's day as date)
-        day = day or store.db.today()
+        day, clock_text = self._when(store, payload)
         if not (ref or code or room):
             raise StoreError("ต้องระบุ room, case_code หรือ his_ref")
         with store._transaction(write=False) as conn:
@@ -721,10 +714,135 @@ class His:
         out = {"case_code": code, "room": room, "step": step, "step_label": STEP_TH[step], "date": day.isoformat()}
         if held is not None and not payload.get("replace"):
             return {**out, "status": "UNCHANGED", "time": fmt_clock(held), "detail": "บันทึกขั้นนี้ไว้แล้ว (ส่ง replace: true เพื่อแก้เวลา)"}
-        actor = {"name": f"อุปกรณ์: {client.name}"[:100], "role": "device"}
-        result = store.milestone_update(code, {"step": step, "time": clock_text}, day=day.isoformat(), actor=actor)
+        result = store.milestone_update(code, {"step": step, "time": clock_text}, day=day.isoformat(), actor=_device(client))
         summary = result["milestones"]
         return {**out, "status": "APPLIED", "time": summary["times"][step], "stage": summary["label"]}
+
+    @staticmethod
+    def _when(store, payload: dict) -> tuple[date, str | None]:
+        """The schedule day and the clock time (HH:MM, None: now) of a step a device sent."""
+        from .store import parse_time
+
+        day = _day(payload.get("date"), "date") if payload.get("date") else None
+        clock_text = None
+        raw = (payload.get("time") or "").strip()
+        if raw:
+            if re.fullmatch(r"\d{1,2}[:.]\d{2}", raw):
+                parse_time(raw.replace(".", ":"))
+                clock_text = raw.replace(".", ":")
+            else:
+                try:
+                    ts = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+                except ValueError:
+                    raise StoreError("time ต้องเป็น ISO 8601 (เช่น 2026-11-23T09:05:00+07:00) หรือ HH:MM") from None
+                if ts.tzinfo is None:
+                    raise StoreError("time แบบ ISO 8601 ต้องมีเขตเวลา (เช่น +07:00 หรือ Z)")
+                local = ts.astimezone(store.db.tz)
+                clock_text = local.strftime("%H:%M")
+                day = day or local.date()  # (a step after midnight: send the case's day as date)
+        return day or store.db.today(), clock_text
+
+    def record_wristband(self, payload: dict, client: Client) -> dict:
+        """A patient's wristband read by an RFID reader: nobody presses anything.
+
+        ``tag`` is what the band carries: the patient's HN as the hospital writes it (spaces, dashes and
+        slashes are ignored). With ``room`` alone (a reader at that OR's door) the step is worked out:
+        into the OR when the patient's case there is not in yet, out of it when the case is inside. A
+        reader that knows the step sends ``step`` too (two antennas that tell in from out; one at the
+        holding area: ``arrived``; at recovery's exit: ``recovery_out``).
+
+        A reader reads a band many times as it passes, so a read within ``DOOR_GAP`` minutes of a time
+        the patient went into or out of an OR (before or after it: reads may arrive late) is that pass
+        (DUPLICATE). The patient's case in
+        another room: WRONG_ROOM, nothing recorded, and the schedulers are told (case code and rooms
+        only). ``dry_run`` says what would be recorded, for setting up a reader. The HN is never
+        sent back, logged or kept."""
+        from .store import parse_time
+
+        store = self._db()
+        tag = _band(payload.get("tag"))
+        if not tag:
+            raise StoreError("ต้องระบุ tag (ค่าที่อ่านได้จากสายรัดข้อมือ)")
+        room = (payload.get("room") or "").strip() or None
+        step = payload.get("step") or None
+        if step is None and room is None:
+            raise StoreError("ต้องระบุ room (ห้องที่ติดเครื่องอ่าน) หรือ step")
+        day, clock_text = self._when(store, payload)
+        with store._transaction(write=False) as conn:
+            if not ready(conn):
+                raise HisUnavailable(NEED_SQL)
+            world = store.db.load(conn, day)
+            rows = store.db.milestone_rows(conn, [r["request_id"] for r in world.bookings.values()])
+            cases = {cid: a for cid, a in world.result.assignments.items() if cid in world.bookings}
+            mine = sorted((cid for cid in cases if _band(world.bookings[cid]["patient_hn"]) == tag),
+                          key=lambda c: cases[c].start_min)
+            if not mine:
+                raise StoreError(f"ไม่พบเคสของผู้ป่วยสายรัดข้อมือนี้ในตารางวันที่ {day.isoformat()}")
+            steps = {cid: store._case_minutes(world, cid, rows) for cid in mine}
+            now = store._now(world)
+        at = parse_time(clock_text) if clock_text else now
+        if at is None:
+            raise StoreError("วันอื่นที่ไม่ใช่วันนี้ ต้องใส่เวลา")
+        inside = [cid for cid in mine if steps[cid].get("in_room") is not None and steps[cid].get("out_room") is None]
+        waiting = [cid for cid in mine if steps[cid].get("in_room") is None]
+        base = {"date": day.isoformat(), "reader_room": room}
+
+        def answer(status: str, code: str | None, chosen: str | None, detail: str, **more) -> dict:
+            out = {**base, "status": status, "detail": detail, "case_code": code,
+                   "room": cases[code].or_id if code else None,
+                   "step": chosen, "step_label": STEP_TH.get(chosen) if chosen else None}
+            return {**out, **more}
+
+        door = [m for cid in mine for k in ("in_room", "out_room") if (m := steps[cid].get(k)) is not None]
+        if step in (None, "in_room", "out_room") and door and min(abs(at - m) for m in door) < DOOR_GAP:
+            return answer("DUPLICATE", None, None, f"อ่านซ้ำในรอบเดียวกัน (ผ่านประตูล่าสุด {fmt_clock(max(door))})")  # (also a late, out-of-order read)
+        if step is None:
+            if inside:
+                code, step = inside[-1], "out_room"
+            elif waiting:
+                code, step = waiting[0], "in_room"
+            else:
+                return answer("IGNORED", None, None, "ผู้ป่วยไม่มีเคสที่รอเข้าหรืออยู่ในห้องผ่าตัดแล้ว")
+        elif step == "in_room":
+            code = waiting[0] if waiting else None
+        elif step in ("incision", "closure", "out_room"):
+            code = inside[-1] if inside else None
+        elif step == "arrived":
+            code = next((cid for cid in waiting if steps[cid].get("arrived") is None), None)
+        else:  # recovery_out: the latest case out of the OR and not yet out of recovery
+            code = next((cid for cid in reversed(mine) if steps[cid].get("out_room") is not None
+                         and steps[cid].get("recovery_out") is None), None)
+        if code is None:  # a band read again at holding or recovery's exit: already recorded
+            code = next((cid for cid in reversed(mine) if steps[cid].get(step) is not None), None)
+            if code is None:
+                raise StoreError(f"ผู้ป่วยไม่มีเคสที่บันทึกขั้น{STEP_TH[step]}ได้ในตอนนี้")
+        if steps[code].get(step) is not None:
+            return answer("UNCHANGED", code, step, "บันทึกขั้นนี้ไว้แล้ว", time=fmt_clock(steps[code][step]))
+        planned = cases[code].or_id
+        if room and room != planned and step in ROOM_STEPS:
+            if not payload.get("dry_run"):
+                self._wrong_room(code, planned, room, fmt_clock(at), day)
+            return answer("WRONG_ROOM", code, step, f"ผู้ป่วยเคส {code} นัดไว้ห้อง {planned} แต่สายรัดข้อมือถูกอ่านที่ประตู {room} "
+                                                    "ไม่ได้บันทึกเวลา และแจ้งหัวหน้าพยาบาลแล้ว")
+        if payload.get("dry_run"):
+            return answer("DRY_RUN", code, step, "ทดสอบ: ยังไม่ได้บันทึก (ส่งโดยไม่มี dry_run เพื่อบันทึกจริง)",
+                          time=clock_text or fmt_clock(at))
+        result = store.milestone_update(code, {"step": step, "time": clock_text or fmt_clock(at)}, day=day.isoformat(),
+                                        actor=_device(client))
+        summary = result["milestones"]
+        return answer("APPLIED", code, step, "บันทึกแล้ว", time=summary["times"][step], stage=summary["label"])
+
+    def _wrong_room(self, code: str, planned: str, room: str, clock: str, day: date) -> None:
+        """Tell the schedulers once per case and door (a reader reads a band many times as it passes)."""
+        now = time.monotonic()
+        with self._lock:
+            key = (day.isoformat(), code, room)
+            if now - self._wrong.get(key, -WRONG_ROOM_QUIET_S) < WRONG_ROOM_QUIET_S:
+                return
+            self._wrong = {k: t for k, t in self._wrong.items() if now - t < WRONG_ROOM_QUIET_S}
+            self._wrong[key] = now
+        self._tell({"type": "his_alert", "what": "wrong_room", "code": code, "day": day.isoformat(),
+                    "detail": f"{code} นัดห้อง {planned} แต่สายรัดข้อมือถูกอ่านที่ประตู {room} เวลา {clock}"})
 
     def _state(self, row) -> dict:
         tz = self.store.db.tz

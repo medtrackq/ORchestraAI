@@ -1647,6 +1647,7 @@
         <li><code>GET ${esc(base)}/schedule?date=YYYY-MM-DD</code> ตารางผ่าตัดของวัน</li>
         <li><code>POST ${esc(base)}/fhir</code> ข้อมูลหลัก (FHIR R4): บุคลากร ตารางเวร ห้องผ่าตัด เครื่องมือ (ดูหัวข้อด้านล่าง)</li>
         <li><code>POST ${esc(base)}/milestones</code> เวลาแต่ละขั้นจากกล้อง AI / RFID: <code>{"room": "OR-1", "step": "in_room"}</code> (ส่งแค่ห้องได้)</li>
+        <li><code>POST ${esc(base)}/wristband</code> เครื่องอ่าน RFID สายรัดข้อมือที่ประตูห้อง: <code>{"tag": "&lt;HN&gt;", "room": "OR-1"}</code> ระบบแยกเข้า/ออกเอง และเตือนเมื่อเข้าผิดห้อง (ทดสอบด้วย <code>"dry_run": true</code>)</li>
         <li>รายละเอียดทุกช่อง: <a href="/api/docs#/HIS" target="_blank" rel="noopener">/api/docs</a> (ต้องเข้าระบบ)</li></ul></details>` : ''}
 
       <h3>2. รหัสที่ยังจับคู่ไม่ได้</h3>
