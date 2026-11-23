@@ -442,6 +442,7 @@ def test_status_board_and_steps_over_the_api(owner):
 def test_the_time_recording_page_and_its_data(owner):
     page = owner.get("/steps")
     assert page.status_code == 200 and "บันทึกเวลา" in page.text
+    assert all(f'data-hand="{k}"' in page.text for k in ("pedal", "sound", "voice", "learn"))  # hands-free in the OR
     case = owner.get("/api/state").json()["schedule"]["bookings"][0]
     team = [t["staff_id"] for t in case["team"]]
 

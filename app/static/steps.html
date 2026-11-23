@@ -100,8 +100,31 @@
   #toast.ok { background: #047857; }
   #toast.bad { background: #b91c1c; }
   #toast button { border: 1px solid rgba(255,255,255,.7); background: transparent; color: #fff; border-radius: 8px; padding: 6px 12px; cursor: pointer; }
+  /* hands-free: foot pedal, spoken confirmation, voice commands */
+  .hands { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 10px 12px; display: grid; gap: 8px; }
+  .hands-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .tog { border: 1px solid var(--border); background: var(--surface-2); border-radius: 10px; padding: 8px 12px; cursor: pointer; min-height: 44px;
+    font-size: .85rem; font-weight: 600; }
+  .tog[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+  .tog:disabled { opacity: .5; cursor: not-allowed; }
+  .hstate { margin-left: auto; font-size: .85rem; color: var(--muted); }
+  .hstate b { color: var(--text); }
+  .hands-help { display: grid; gap: 4px; font-size: .8rem; color: var(--muted); }
+  .hands-help .warn { color: var(--warn); }
+  .live { display: inline-block; width: .6em; height: .6em; border-radius: 50%; background: var(--bad); margin-right: 4px; animation: pulse 1.2s infinite; }
+  @keyframes pulse { 50% { opacity: .25; } }
+  #flash { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; pointer-events: none; background: rgba(15,23,42,.35); }
+  #flash div { min-width: min(560px, calc(100vw - 32px)); max-width: calc(100vw - 32px); padding: 28px 32px; border-radius: 22px; text-align: center;
+    color: #fff; font-size: 2rem; font-weight: 700; line-height: 1.3; box-shadow: 0 20px 60px rgba(0,0,0,.35); }
+  #flash .ok { background: #047857; }
+  #flash .bad { background: #b91c1c; }
+  #flash small { display: block; font-size: 1rem; font-weight: 500; opacity: .9; margin-top: 6px; }
+  @media (prefers-reduced-motion: reduce) { .live { animation: none; } }
   @media (max-width: 640px) {
     header, main { padding-left: 16px; padding-right: 16px; }
+    .hstate { margin-left: 0; width: 100%; }
+    #hands { order: 5; }  /* a phone rarely has a pedal: the case and its big button come first */
+    #flash div { font-size: 1.5rem; padding: 22px; }
     .clock { font-size: 1.5rem; }
     .track { grid-template-columns: repeat(3, minmax(0, 1fr)); }
     .fix { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
@@ -130,9 +153,11 @@
 <main>
   <nav class="chips" id="rooms" aria-label="เลือกห้องผ่าตัด"></nav>
   <p class="hint" id="note"></p>
+  <section class="hands" id="hands" aria-label="บันทึกแบบไม่ต้องแตะจอ" hidden></section>
   <div id="cards" aria-live="polite"></div>
 </main>
 <div id="toast" role="status" aria-live="polite" hidden></div>
+<div id="flash" role="status" aria-live="assertive" hidden></div>
 
 <script>
   const $ = s => document.querySelector(s);
@@ -224,9 +249,11 @@
       `<button class="chip" type="button" data-room="${esc(k)}" aria-pressed="${k === room}">${esc(t)}</button>`).join('');
     const shown = room === 'ALL' ? rooms : data.rooms.filter(r => r.room === room);
     $('#note').textContent = (data.steps_ready ? '' : 'ตอนนี้บันทึกได้เฉพาะเข้าห้อง/ออกห้อง (ผู้ดูแลต้องรัน SQL ไฟล์ 011) · ')
-      + (data.can_record ? 'กดผิดกด ↶ ยกเลิก ได้ทันที · ห้องที่มีเครื่องอ่าน RFID เวลาเข้า–ออกห้องขึ้นเอง' : 'บทบาทของคุณดูได้อย่างเดียว');
+      + (data.can_record ? 'กดผิดกด ↶ ยกเลิก ได้ทันที · ห้องที่มีเครื่องอ่าน RFID เวลาเข้า–ออกห้องขึ้นเอง'
+        + (room === 'ALL' ? ' · เลือกห้องเพื่อใช้แป้นเหยียบหรือสั่งด้วยเสียง' : '') : 'บทบาทของคุณดูได้อย่างเดียว');
     $('#cards').innerHTML = shown.length ? `<div class="rooms${shown.length === 1 ? ' one' : ''}">${shown.map(r => roomCard(r.room, r.cases)).join('')}</div>`
       : '<p class="idle">วันนี้ไม่มีเคสผ่าตัด</p>';
+    renderHands();
   }
 
   const typing = () => sending || !!document.querySelector('form.fix:not([hidden])');
@@ -263,27 +290,222 @@
     toast.t = setTimeout(() => { el.hidden = true; }, undo ? 10000 : 6000);
   }
 
-  async function send(caseId, body, button) {
-    if (sending) return;
+  async function send(caseId, body, button) {  // -> {ok, at, error}
+    if (sending) return { ok: false, error: 'กำลังบันทึกรายการก่อนหน้า' };
     sending = true;
     if (button) button.disabled = true;
     try {
       const res = await fetch('/api/cases/' + encodeURIComponent(caseId) + '/milestone' + (day ? '?date=' + encodeURIComponent(day) : ''), {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-      if (res.status === 401) { location.href = '/login'; return; }
+      if (res.status === 401) { location.href = '/login'; return { ok: false, error: 'กรุณาเข้าสู่ระบบ' }; }
       const d = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(Array.isArray(d.detail) ? 'ข้อมูลไม่ถูกต้อง' : d.detail || 'HTTP ' + res.status);
       const at = ((d.result || {}).milestones || {}).times?.[body.step];
       if (body.clear) toast(`ยกเลิกเวลา${LABEL[body.step]}ของ ${caseId} แล้ว`, true);
       else toast(`บันทึกแล้ว: ${caseId} ${LABEL[body.step]} ${at || ''}`, true,
         body.time ? null : () => send(caseId, { step: body.step, clear: true }));
+      return { ok: true, at };
     } catch (e) {
       toast(e.message, false);
+      return { ok: false, error: e.message };
     } finally {
       sending = false;
       await load();
     }
   }
+
+  // ------------------------------------------------- hands-free: foot pedal, spoken confirmation, voice
+  // In the OR the next step is pressed with a foot pedal (it types a key, like a keyboard) or said aloud;
+  // the tablet says what it recorded. Only the steps inside the OR, only the room on screen, only the
+  // step that comes next: nothing can be skipped or recorded for another case by a stray word.
+  const OR_STEPS = ['in_room', 'incision', 'closure', 'out_room'];
+  const SAY = { in_room: 'เข้าห้องผ่าตัด', incision: 'ลงมีด', closure: 'เย็บแผลเสร็จ', out_room: 'ออกจากห้องผ่าตัด' };
+  const PHRASES = { closure: ['เย็บแผลเสร็จ', 'เย็บเสร็จ', 'ปิดแผลเสร็จ', 'ปิดแผล'], incision: ['ลงมีด', 'เริ่มผ่าตัด'],
+    out_room: ['ออกห้อง', 'ออกจากห้อง'], in_room: ['เข้าห้อง'] };
+  const MATCH_ORDER = ['closure', 'incision', 'out_room', 'in_room'];  // the longer phrases first
+  const WAKE = ['บันทึก', 'ออเคสตร้า', 'ออร์เคสตรา', 'ออเคสตรา', 'ออร์เคสตร้า', 'orchestra'];
+  const PEDAL_KEYS = ['PageDown', 'PageUp', 'ArrowRight', 'ArrowDown', 'F9'];  // what most pedals send (or teach it one)
+  const HOLD_MS = 2000, SAME_PRESS_MS = 3000, UNDO_WINDOW_MS = 120000, VOICE_UNDO_MS = 15000;
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const prefs = Object.assign({ pedal: false, sound: true, voice: false, key: null }, (() => {
+    try { return JSON.parse(localStorage.getItem('steps-hands') || '{}'); } catch { return {}; }
+  })());
+  const savePrefs = () => { try { localStorage.setItem('steps-hands', JSON.stringify(prefs)); } catch { /* private mode */ } };
+  let lastHands = null, busyUntil = 0, learning = false, holdTimer = null, heard = '', voiceNote = '';
+  let rec = null, listening = false, speaking = false, muteUntil = 0, audio = null;
+
+  function handsTarget() {
+    if (!data || room === 'ALL') return { error: 'เลือกห้องก่อน' };
+    const r = data.rooms.find(x => x.room === room);
+    const c = r && (r.cases.find(x => x.phase === 'in_or') || r.cases.find(x => ['waiting', 'late', 'scheduled'].includes(x.phase)));
+    if (!c) return { error: `ห้อง ${room} ไม่มีเคสที่รออยู่` };
+    const done = OR_STEPS.filter(k => c.times[k]);
+    const last = done[done.length - 1];
+    const step = OR_STEPS.slice(last ? OR_STEPS.indexOf(last) + 1 : 0).find(k => avail().includes(k));
+    if (!step) return { error: 'เคสนี้บันทึกครบแล้ว' };
+    if (!allowed(c, step)) return { error: whyNot(c) };
+    return { c, step };
+  }
+  const clock = t => { const [h, m] = String(t || '').split(':').map(Number); return isNaN(h) ? '' : `${h} นาฬิกา ${m ? m + ' นาที' : 'ตรง'}`; };
+
+  function beep(ok) {
+    try {
+      audio = audio || new (window.AudioContext || window.webkitAudioContext)();
+      const o = audio.createOscillator(), g = audio.createGain();
+      o.frequency.value = ok ? 880 : 220; g.gain.value = .15;
+      o.connect(g); g.connect(audio.destination); o.start(); o.stop(audio.currentTime + (ok ? .12 : .35));
+    } catch { /* no audio on this device */ }
+  }
+  function speak(text) {
+    if (!prefs.sound || !window.speechSynthesis || !text) return;
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = 'th-TH'; u.rate = 1.05;
+    const voice = speechSynthesis.getVoices().find(v => /^th/i.test(v.lang));
+    if (voice) u.voice = voice;
+    speaking = true; muteUntil = Infinity;  // the microphone must not hear the tablet
+    if (rec && listening) try { rec.abort(); } catch { /* already stopped */ }
+    let over = false;
+    const done = () => {
+      if (over) return;
+      over = true; clearTimeout(guard);
+      speaking = false; muteUntil = Date.now() + 1200;
+      if (prefs.voice) setTimeout(startVoice, 400);
+    };
+    const guard = setTimeout(done, 9000);  // a browser that never says it finished
+    u.onend = done; u.onerror = done;
+    speechSynthesis.cancel(); speechSynthesis.speak(u);
+  }
+  function feedback(ok, title, detail, said) {
+    beep(ok);
+    const el = $('#flash');
+    el.innerHTML = `<div class="${ok ? 'ok' : 'bad'}">${ok ? '✓ ' : ''}${esc(title)}${detail ? `<small>${esc(detail)}</small>` : ''}</div>`;
+    el.hidden = false;
+    clearTimeout(feedback.t);
+    feedback.t = setTimeout(() => { el.hidden = true; }, ok ? 2500 : 3500);
+    speak(said ?? title);
+  }
+
+  async function handsRecord(wanted) {
+    if (Date.now() < busyUntil || sending) return;  // the same press, or one already on its way
+    const t = handsTarget();
+    if (t.error) return feedback(false, t.error);
+    if (wanted && wanted !== t.step) return feedback(false, `ขั้นถัดไปคือ ${SAY[t.step]}`, `ได้ยิน “${SAY[wanted]}” · ${t.c.case_id}`);
+    busyUntil = Date.now() + SAME_PRESS_MS;
+    const r = await send(t.c.case_id, { step: t.step });
+    if (r.ok) {
+      lastHands = { caseId: t.c.case_id, step: t.step, at: Date.now() };
+      feedback(true, `${SAY[t.step]} ${r.at || ''}`, `${t.c.case_id} · ห้อง ${room}`, `บันทึก ${SAY[t.step]} ${clock(r.at)}`);
+    } else feedback(false, 'บันทึกไม่ได้', r.error, `บันทึกไม่ได้ ${r.error}`);
+  }
+  async function handsUndo() {
+    if (!lastHands || Date.now() - lastHands.at > UNDO_WINDOW_MS) return feedback(false, 'ไม่มีรายการให้ยกเลิก', 'ยกเลิกได้ภายใน 2 นาทีหลังบันทึก');
+    const { caseId, step } = lastHands;
+    lastHands = null;
+    busyUntil = Date.now() + SAME_PRESS_MS;
+    const r = await send(caseId, { step, clear: true });
+    if (r.ok) feedback(true, `ยกเลิก${SAY[step]}แล้ว`, caseId, `ยกเลิก ${SAY[step]} แล้ว`);
+    else feedback(false, 'ยกเลิกไม่ได้', r.error);
+  }
+
+  // the pedal: a short press records the next step, holding it 2 seconds takes back the last one
+  const isPedal = e => prefs.key ? (e.code === prefs.key || e.key === prefs.key) : PEDAL_KEYS.includes(e.key);
+  const typingHere = e => e.target.closest && e.target.closest('input, select, textarea, form.fix');
+  document.addEventListener('keydown', e => {
+    if (learning) {
+      e.preventDefault();
+      learning = false;
+      if (e.key !== 'Escape') { prefs.key = e.code || e.key; savePrefs(); feedback(true, 'จำปุ่มแป้นเหยียบแล้ว', prefs.key, 'จำปุ่มแป้นเหยียบแล้ว'); }
+      renderHands();
+      return;
+    }
+    if (!prefs.pedal || !isPedal(e) || typingHere(e)) return;
+    e.preventDefault();
+    if (e.repeat || holdTimer) return;
+    holdTimer = setTimeout(() => { holdTimer = 'held'; handsUndo(); }, HOLD_MS);
+  });
+  document.addEventListener('keyup', e => {
+    if (!prefs.pedal || !isPedal(e) || typingHere(e)) return;
+    e.preventDefault();
+    if (holdTimer && holdTimer !== 'held') { clearTimeout(holdTimer); holdTimer = null; handsRecord(); }
+    else holdTimer = null;
+  });
+
+  // voice: "บันทึก ลงมีด" (or the app's name and the step); "ยกเลิก" alone within 15 seconds of a recording
+  function onHeard(alternatives) {
+    if (speaking || Date.now() < muteUntil) return;  // its own confirmation, or the end of it
+    const texts = alternatives.map(t => String(t).replace(/\s+/g, '').toLowerCase());
+    heard = alternatives[0] || '';
+    const woke = texts.find(t => WAKE.some(w => t.includes(w)));
+    const undo = texts.some(t => t.includes('ยกเลิก'));
+    if (undo && (woke || (lastHands && Date.now() - lastHands.at < VOICE_UNDO_MS))) { renderHands(); return handsUndo(); }
+    if (!woke) { renderHands(); return; }  // talk in the room: not for us
+    const step = MATCH_ORDER.find(k => PHRASES[k].some(p => woke.includes(p)));
+    renderHands();
+    if (!step) return feedback(false, 'ไม่เข้าใจคำสั่ง', `ได้ยิน “${heard}” · พูด “บันทึก” ตามด้วยชื่อขั้น`, 'ไม่เข้าใจคำสั่ง');
+    handsRecord(step);
+  }
+  function startVoice() {
+    if (!SR || !prefs.voice || listening || speaking || document.hidden) return;
+    if (!rec) {
+      rec = new SR();
+      rec.lang = 'th-TH'; rec.continuous = true; rec.interimResults = false; rec.maxAlternatives = 3;
+      rec.onresult = e => {
+        for (let i = e.resultIndex; i < e.results.length; i++) {
+          if (e.results[i].isFinal) onHeard(Array.from(e.results[i], a => a.transcript));
+        }
+      };
+      rec.onerror = e => {
+        if (['not-allowed', 'service-not-allowed'].includes(e.error)) {
+          prefs.voice = false; savePrefs();
+          voiceNote = 'ไม่ได้รับอนุญาตให้ใช้ไมโครโฟน (อนุญาตในการตั้งค่าเบราว์เซอร์ แล้วเปิดใหม่)';
+        } else if (e.error !== 'no-speech' && e.error !== 'aborted') voiceNote = 'ไมโครโฟนมีปัญหา: ' + e.error;
+        renderHands();
+      };
+      rec.onend = () => { listening = false; renderHands(); if (prefs.voice && !speaking) setTimeout(startVoice, 300); };
+    }
+    try { rec.start(); listening = true; voiceNote = ''; } catch { /* already starting */ }
+    renderHands();
+  }
+  function stopVoice() {
+    if (rec && listening) try { rec.stop(); } catch { /* stopped */ }
+    listening = false;
+  }
+  document.addEventListener('visibilitychange', () => { document.hidden ? stopVoice() : startVoice(); });
+
+  function renderHands() {
+    const box = $('#hands');
+    if (!data || !data.can_record || room === 'ALL') { box.hidden = true; return; }
+    box.hidden = false;
+    const t = handsTarget();
+    const keyName = prefs.key || 'PageDown / PageUp / ลูกศร';
+    const state = t.error ? esc(t.error) : `แป้น/เสียงจะบันทึก: <b>${esc(SAY[t.step])}</b> · ${esc(t.c.case_id)}`;
+    box.innerHTML = `<div class="hands-row">
+        <button class="tog" type="button" data-hand="pedal" aria-pressed="${prefs.pedal}">🦶 แป้นเหยียบ</button>
+        <button class="tog" type="button" data-hand="sound" aria-pressed="${prefs.sound}">🔊 เสียงยืนยัน</button>
+        <button class="tog" type="button" data-hand="voice" aria-pressed="${prefs.voice && !!SR}" ${SR ? '' : 'disabled'}>🎙️ สั่งด้วยเสียง (ทดลอง)</button>
+        <span class="hstate">${state}</span></div>
+      <div class="hands-help">
+        ${prefs.pedal ? `<span>🦶 เหยียบ 1 ครั้ง = บันทึกขั้นถัดไป · เหยียบค้าง 2 วินาที = ยกเลิกที่เพิ่งบันทึก · ปุ่มแป้น: <b>${esc(keyName)}</b>
+          <button class="tog" type="button" data-hand="learn" style="min-height:32px;padding:2px 10px">${learning ? 'เหยียบแป้นตอนนี้… (Esc ยกเลิก)' : 'ตั้งปุ่มแป้น'}</button></span>` : ''}
+        ${prefs.voice && SR ? `<span>${listening ? '<i class="live" aria-hidden="true"></i>กำลังฟัง · ' : 'ไมโครโฟนหยุดชั่วคราว · '}พูด “<b>บันทึก ลงมีด</b>” “<b>บันทึก เย็บแผลเสร็จ</b>” (หรือเข้าห้อง / ออกห้อง) · พูด “ยกเลิก” ภายใน 15 วินาทีหลังบันทึก
+          ${heard ? ` · ได้ยินล่าสุด: “${esc(heard)}”` : ''}</span>
+          <span class="warn">⚠ เสียงถูกส่งไปแปลงเป็นข้อความที่ Google/Apple (ระบบไม่เก็บเสียง) อย่าพูดชื่อหรือ HN ผู้ป่วยขณะเปิดโหมดนี้</span>` : ''}
+        ${!SR ? '<span>เครื่องนี้ไม่รองรับการสั่งด้วยเสียง (ใช้ Chrome บน Android หรือ Safari บน iPad/iPhone)</span>' : ''}
+        ${voiceNote ? `<span class="warn">${esc(voiceNote)}</span>` : ''}
+        ${!prefs.pedal && !prefs.voice ? '<span>เปิดแป้นเหยียบหรือสั่งด้วยเสียง เพื่อบันทึกโดยไม่ต้องแตะจอ (ตั้งครั้งเดียวต่อเครื่อง)</span>' : ''}
+      </div>`;
+  }
+  $('#hands').addEventListener('click', e => {
+    const b = e.target.closest('[data-hand]');
+    if (!b) return;
+    const what = b.dataset.hand;
+    if (what === 'learn') { learning = !learning; renderHands(); return; }
+    prefs[what] = !prefs[what]; savePrefs();
+    if (what === 'voice') prefs.voice ? startVoice() : stopVoice();
+    if (what === 'sound' && prefs.sound) speak('เปิดเสียงยืนยันแล้ว');
+    beep(true);  // (a tap also lets the tablet play sound later)
+    renderHands();
+  });
 
   $('#rooms').addEventListener('click', e => {
     const b = e.target.closest('[data-room]');
@@ -319,6 +541,7 @@
   function tick() { $('#clock').firstChild.textContent = nowText(); }
   tick(); setInterval(tick, 10000);
   load(); setInterval(load, 20000);
+  if (prefs.voice) startVoice();
 </script>
 </body>
 </html>
