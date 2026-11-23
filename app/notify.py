@@ -49,7 +49,7 @@ KINDS = {
     "readiness": "เคสยังไม่พร้อมผ่าตัด (มีปัญหา และสรุปเคสวันถัดไปวันละครั้ง)",
     "feedback": "ผู้ใช้แจ้งปัญหาหรือข้อเสนอแนะ และข้อผิดพลาดใหม่ของระบบ (ผู้ดูแลระบบ)",
     "waitlist": "เคสในรายการรอเลยหรือใกล้วันที่ควรผ่าตัด (สรุปวันละครั้ง)",
-    "his": "ข้อความจากระบบ HIS ที่ต้องดำเนินการ (คำขอฉุกเฉิน เคสที่จองแล้วถูกแก้หรือยกเลิก รหัสใหม่)",
+    "his": "ข้อความจากระบบ HIS ที่ต้องดำเนินการ (คำขอฉุกเฉิน เคสที่จองแล้วถูกแก้หรือยกเลิก รหัสใหม่ ผู้ป่วยเข้าผิดห้อง)",
 }
 KIND_ROLES = {"case": None, "emergency": {"admin", "scheduler"}, "cssd": {"admin", "scheduler", "cssd"},
               "readiness": {"admin", "scheduler", "surgeon"}, "feedback": {"admin"},
@@ -473,7 +473,12 @@ def build_messages(event: dict, users: list) -> list[Message]:
             out.append(Message(u.user_id, "waitlist", f"รายการรอผ่าตัด{whose}: " + " · ".join(parts), lines, "/#pending"))
     elif event["type"] == "his_alert":  # case codes and staff / procedure names only
         what = event.get("what")
-        if what == "mapping":
+        if what == "wrong_room":  # a patient's wristband read at another room's door (case code and rooms only)
+            url = f"/board?date={event['day']}" if event.get("day") else "/board"
+            out += [Message(u.user_id, "his", "⚠️ ผู้ป่วยอาจเข้าผิดห้องผ่าตัด",
+                            [event.get("detail", ""), "ตรวจตัวผู้ป่วยและห้องก่อนเริ่ม ถ้าย้ายห้องจริง ให้ย้ายเคสในตารางก่อน"], url)
+                    for u in users if u.role in KIND_ROLES["his"]]
+        elif what == "mapping":
             out += [Message(u.user_id, "his", "HIS: มีรหัสที่ยังจับคู่ไม่ได้", [event.get("detail", ""), "จับคู่ได้ที่หน้าข้อมูลโรงพยาบาล แท็บเชื่อมต่อ HIS"],
                             "/admin#his") for u in users if u.role == "admin"]
         else:

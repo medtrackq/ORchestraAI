@@ -1893,6 +1893,26 @@ def his_device_step(body: DeviceStepIn, request: Request) -> dict:
     return _his_run(his.record_step, body.model_dump(), client)
 
 
+class WristbandIn(BaseModel):
+    tag: str = Field(min_length=1, max_length=64, pattern=r"^[^\x00-\x1f\x7f]+$",
+                     description="ค่าที่อ่านได้จากสายรัดข้อมือ: HN ของผู้ป่วย (ไม่สนช่องว่าง - และ /)")
+    room: str | None = Field(default=None, max_length=20, description="ห้องผ่าตัดที่ติดเครื่องอ่านที่ประตู (ระบบแยกเองว่าเข้าหรือออก)")
+    step: Literal["arrived", "in_room", "incision", "closure", "out_room", "recovery_out"] | None = Field(
+        default=None, description="ระบุขั้นเอง: เครื่องอ่านที่รู้ทิศทาง หรือจุดห้องเตรียม (arrived) / ทางออกห้องพักฟื้น (recovery_out)")
+    time: str | None = Field(default=None, max_length=40, description="ISO 8601 พร้อมเขตเวลา หรือ HH:MM · ไม่ส่ง = ตอนนี้")
+    date: str | None = Field(default=None, pattern=DATE, description="วันของตารางที่เคสอยู่ (ค่าตั้งต้น: วันของ time หรือวันนี้)")
+    dry_run: bool = Field(default=False, description="ทดสอบเครื่องอ่าน: บอกว่าจะบันทึกอะไร แต่ยังไม่บันทึก")
+
+
+@app.post("/api/his/v1/wristband", tags=["HIS"])
+def his_wristband(body: WristbandIn, request: Request) -> dict:
+    """A patient's RFID wristband read at an OR door (or at holding / recovery's exit): the step is worked
+    out (into the OR, or out of it), repeated reads of one pass count once, and a band read at the wrong
+    room's door records nothing and alerts the schedulers. The HN is never sent back or kept."""
+    client = _his_client(request, "milestones:write")
+    return _his_run(his.record_wristband, body.model_dump(), client)
+
+
 @app.post("/api/his/v1/fhir", tags=["HIS"])
 async def his_fhir_push(request: Request, dry_run: bool = Query(default=False)) -> JSONResponse:
     """Master data as FHIR R4 (a Bundle, a resource or a list): Location (operating rooms), Practitioner and
