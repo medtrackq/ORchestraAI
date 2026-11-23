@@ -29,6 +29,7 @@ from types import SimpleNamespace
 
 from psycopg.types.json import Jsonb
 
+from orchestra_engine import fmt as fmt_clock
 from orchestra_engine.intake import mask_identifiers
 
 from .db import case_code
@@ -37,7 +38,12 @@ from .store import StoreError
 log = logging.getLogger("orchestra.his")
 
 SCOPES = {"requests:write": "ส่งใบขอผ่าตัด (สร้าง แก้ไข ยกเลิก)", "schedule:read": "อ่านตารางผ่าตัดและสถานะคำขอ",
-          "masterdata:write": "ส่งข้อมูลหลัก (FHIR): บุคลากร ตารางเวร ห้องผ่าตัด เครื่องมือ"}
+          "masterdata:write": "ส่งข้อมูลหลัก (FHIR): บุคลากร ตารางเวร ห้องผ่าตัด เครื่องมือ",
+          "milestones:write": "ส่งเวลาแต่ละขั้นของเคส (กล้อง AI, RFID, อุปกรณ์ในห้องผ่าตัด)"}
+# A device that only knows the room (a camera, a door reader): which of the room's cases a step is for.
+ROOM_STEPS = {"in_room": "next", "incision": "inside", "closure": "inside", "out_room": "inside"}
+STEP_TH = {"arrived": "มาถึงห้องเตรียม", "in_room": "เข้าห้องผ่าตัด", "incision": "ลงมีด", "closure": "เย็บแผลเสร็จ",
+           "out_room": "ออกจากห้องผ่าตัด", "recovery_out": "ออกจากห้องพักฟื้น"}
 KINDS = {"surgeon": "ศัลยแพทย์", "procedure": "หัตถการ"}
 STATUS_TH = {"APPLIED": "บันทึกแล้ว", "UNCHANGED": "ไม่มีอะไรเปลี่ยน", "NEEDS_MAPPING": "รอจับคู่รหัส",
              "NEEDS_ACTION": "ต้องดำเนินการในระบบ", "REJECTED": "ข้อมูลไม่ถูกต้อง"}
@@ -642,6 +648,83 @@ class His:
         if self.access is not None and out.get("date"):
             self.access.record(client.user(), "his", out["date"], [out["code"]], address)
         return out
+
+    def record_step(self, payload: dict, client: Client) -> dict:
+        """A step of a case from a device in the OR (an AI camera, an RFID reader, an OR integration).
+
+        The case is named by ``his_ref`` or ``case_code``, or found from the ``room`` alone: into the OR =
+        the room's earliest case not in yet; incision, closure, out = the case in the room now. ``time``
+        is ISO 8601 (with its zone) or HH:MM, default now. A step already recorded is left as it is unless
+        ``replace``: a device may send the same event twice. Nothing about the patient is sent back."""
+        from .store import parse_time
+
+        store = self._db()
+        tz = store.db.tz
+        step = payload["step"]
+        room = (payload.get("room") or "").strip() or None
+        code = (payload.get("case_code") or "").strip() or None
+        ref = (payload.get("his_ref") or "").strip() or None
+        day = _day(payload.get("date"), "date") if payload.get("date") else None
+        clock_text = None
+        raw = (payload.get("time") or "").strip()
+        if raw:
+            if re.fullmatch(r"\d{1,2}[:.]\d{2}", raw):
+                parse_time(raw.replace(".", ":"))
+                clock_text = raw.replace(".", ":")
+            else:
+                try:
+                    ts = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+                except ValueError:
+                    raise StoreError("time ต้องเป็น ISO 8601 (เช่น 2026-11-23T09:05:00+07:00) หรือ HH:MM") from None
+                if ts.tzinfo is None:
+                    raise StoreError("time แบบ ISO 8601 ต้องมีเขตเวลา (เช่น +07:00 หรือ Z)")
+                local = ts.astimezone(tz)
+                clock_text = local.strftime("%H:%M")
+                day = day or local.date()  # (a step after midnight: send the case's day as date)
+        day = day or store.db.today()
+        if not (ref or code or room):
+            raise StoreError("ต้องระบุ room, case_code หรือ his_ref")
+        with store._transaction(write=False) as conn:
+            if not ready(conn):
+                raise HisUnavailable(NEED_SQL)
+            world = store.db.load(conn, day)
+            rows = store.db.milestone_rows(conn, [r["request_id"] for r in world.bookings.values()])
+            cases = {cid: a for cid, a in world.result.assignments.items() if cid in world.bookings}
+            if ref:
+                found = self._find(conn, ref, "r.request_id") if not ref.startswith(ANON_PREFIX) else None
+                code = next((cid for cid in cases if found and world.bookings[cid]["request_id"] == found["request_id"]), None)
+                if code is None:
+                    raise StoreError(f"ไม่พบเคสของคำขอเลขที่นี้ในตารางวันที่ {day.isoformat()}")
+            if code:
+                if code not in cases:
+                    raise StoreError(f"ไม่พบเคส {code} ในตารางวันที่ {day.isoformat()}")
+                if room and cases[code].or_id != room:
+                    raise StoreError(f"เคส {code} อยู่ห้อง {cases[code].or_id} ไม่ใช่ {room}")
+            else:
+                if step not in ROOM_STEPS:
+                    raise StoreError(f"ขั้น {step} ต้องระบุ case_code หรือ his_ref (ระบุแค่ห้องไม่ได้)")
+                mine = sorted((cid for cid, a in cases.items() if a.or_id == room), key=lambda c: cases[c].start_min)
+                if not mine:
+                    raise StoreError(f"ไม่พบเคสของห้อง {room} ในวันที่ {day.isoformat()}")
+                steps = {cid: store._case_minutes(world, cid, rows) for cid in mine}
+                if ROOM_STEPS[step] == "next":
+                    code = next((cid for cid in mine if steps[cid].get("in_room") is None), None)
+                    if code is None:
+                        raise StoreError(f"ห้อง {room} ไม่มีเคสที่ยังไม่เข้าห้องแล้ว")
+                else:
+                    inside = [cid for cid in mine if steps[cid].get("in_room") is not None and steps[cid].get("out_room") is None]
+                    if not inside:
+                        raise StoreError(f"ตอนนี้ไม่มีเคสอยู่ในห้อง {room} (ส่งขั้นเข้าห้องผ่าตัดก่อน)")
+                    code = inside[-1]
+            held = store._case_minutes(world, code, rows).get(step)
+            room = cases[code].or_id
+        out = {"case_code": code, "room": room, "step": step, "step_label": STEP_TH[step], "date": day.isoformat()}
+        if held is not None and not payload.get("replace"):
+            return {**out, "status": "UNCHANGED", "time": fmt_clock(held), "detail": "บันทึกขั้นนี้ไว้แล้ว (ส่ง replace: true เพื่อแก้เวลา)"}
+        actor = {"name": f"อุปกรณ์: {client.name}"[:100], "role": "device"}
+        result = store.milestone_update(code, {"step": step, "time": clock_text}, day=day.isoformat(), actor=actor)
+        summary = result["milestones"]
+        return {**out, "status": "APPLIED", "time": summary["times"][step], "stage": summary["label"]}
 
     def _state(self, row) -> dict:
         tz = self.store.db.tz

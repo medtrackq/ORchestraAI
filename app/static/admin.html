@@ -1646,6 +1646,7 @@
         <li><code>GET ${esc(base)}/surgery-requests/{his_ref}</code> สถานะคำขอ: รอ จองแล้ว (วัน เวลา ห้อง) ผ่าตัดแล้ว ยกเลิก</li>
         <li><code>GET ${esc(base)}/schedule?date=YYYY-MM-DD</code> ตารางผ่าตัดของวัน</li>
         <li><code>POST ${esc(base)}/fhir</code> ข้อมูลหลัก (FHIR R4): บุคลากร ตารางเวร ห้องผ่าตัด เครื่องมือ (ดูหัวข้อด้านล่าง)</li>
+        <li><code>POST ${esc(base)}/milestones</code> เวลาแต่ละขั้นจากกล้อง AI / RFID: <code>{"room": "OR-1", "step": "in_room"}</code> (ส่งแค่ห้องได้)</li>
         <li>รายละเอียดทุกช่อง: <a href="/api/docs#/HIS" target="_blank" rel="noopener">/api/docs</a> (ต้องเข้าระบบ)</li></ul></details>` : ''}
 
       <h3>2. รหัสที่ยังจับคู่ไม่ได้</h3>

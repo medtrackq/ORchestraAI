@@ -31,6 +31,7 @@ import logging
 import re
 import os
 import threading
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
@@ -44,8 +45,11 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
+from orchestra_engine import fmt
+
 from .auth import (COOKIE, ENV_ADMIN_ID, PENDING_S, ROLES, SESSION_HOURS, Accounts, AuthError, CodeNeeded, DbUserStore,
                    MemoryUserStore, ServiceUnavailable, TooManyAttempts, User, can, env_totp_secret, required_roles)
+from . import milestones as ms
 from . import (autobackup, backup, environment, feedback as fb, his as his_mod, his_fhir, history_io, hosting, hospital_io,
                privacy, roster_io, system_status)
 from .admin_store import require_supabase
@@ -83,6 +87,7 @@ his = his_mod.His(store, notifier.handle, access)  # the hospital information sy
 master = his_fhir.MasterData(store)  # staff, rosters, rooms and equipment from the HIS (FHIR R4)
 logging.getLogger("orchestra").addHandler(fb.ErrorLogHandler(feedback))  # errors the app logs are listed too
 logging.getLogger("orchestra").addHandler(fb.server_log_handler())  # and shown in the host's log (database down too)
+log = logging.getLogger("orchestra.main")
 
 
 @asynccontextmanager
@@ -1560,6 +1565,39 @@ def record_milestone(case_id: str, body: MilestoneIn, request: Request, date: st
     return {"result": result, "state": _state(user, date, request)}
 
 
+FORECAST_TTL = 300  # seconds: the duration forecast (all past cases) is read again after this
+_forecasts: dict = {}
+
+
+def _forecaster(day: str | None):
+    """(predictor, procedure id by lower-case name) for the board, read once every few minutes."""
+    hit = _forecasts.get(day or "")
+    if hit and hit[0] > time.monotonic():
+        return hit[1]
+    ctx = store.intake_context(day)
+    value = (ctx.predictor(), {p["name"].strip().lower(): p["id"] for p in ctx.procedures})
+    _forecasts[day or ""] = (time.monotonic() + FORECAST_TTL, value)
+    return value
+
+
+def _forecast(b: dict, m: dict, forecaster) -> dict | None:
+    """A case in the OR: chance of running past its planned end, expected time out, minutes behind the plan."""
+    if m.get("stage") not in ms.LIVE or m.get("in_room_min") is None or m.get("now_min") is None:
+        return None
+    booked = b["end_min"] - b["start_min"]
+    mu, sd, basis = booked, max(10.0, 0.2 * booked), "booked"
+    if forecaster is not None:
+        predictor, procs = forecaster
+        surgeon = (b["team"][0] if b["team"] else {}).get("staff_id")
+        name = (b.get("procedure") or "").strip().lower()
+        pid = procs.get(name) or procs.get(re.sub(r"\s*\([^()]*\)$", "", name))  # "... (L)": the side
+        pred = predictor.predict(surgeon, pid) if surgeon and pid else None
+        if pred is not None:
+            mu, sd, basis = pred.expected_mins, (pred.high_mins - pred.low_mins) / 2, "history"
+    out = ms.overtime(m["in_room_min"], b["end_min"], m["now_min"], mu, sd)
+    return {"chance": out["chance"], "expected_end": fmt(out["expected_end"]), "behind": out["behind"], "basis": basis}
+
+
 @app.get("/api/board")
 def board(request: Request, date: str | None = None, family: bool = False) -> dict:
     """The status board: each room's cases and where each one is now. Never patient names or HNs;
@@ -1569,14 +1607,20 @@ def board(request: Request, date: str | None = None, family: bool = False) -> di
     user = _user(request, "view")
     state = _run(store.state, date)
     steps, ready = state.get("milestones") or {}, state.get("readiness") or {}
+    forecaster = None
+    if not family and any((m or {}).get("stage") in ms.LIVE for m in steps.values()):
+        try:
+            forecaster = _forecaster(date)
+        except Exception as exc:  # the board must show even when the forecast cannot be read
+            log.warning("board forecast unavailable: %s", exc)
     rooms: dict[str, list] = {r["id"]: [] for r in state["options"]["rooms"]}
     for b in sorted(state["schedule"]["bookings"], key=lambda x: (x["or_id"], x["start_min"])):
         m = steps.get(b["case_id"]) or {}
         item = {"case_id": b["case_id"], "start": b["start"], "end": b["end"], "start_min": b["start_min"],
                 "urgency": b["urgency"], **{k: m.get(k) for k in ("stage", "label", "phase", "since", "elapsed", "late_min")}}
-        if not family:
+        if not family:  # (a waiting room is not told the odds of a case running long)
             item |= {"procedure": b["procedure"], "surgeon": (b["team"][0] if b["team"] else {}).get("name"),
-                     "readiness": (ready.get(b["case_id"]) or {}).get("status")}
+                     "readiness": (ready.get(b["case_id"]) or {}).get("status"), "forecast": _forecast(b, m, forecaster)}
         rooms.setdefault(b["or_id"], []).append(item)
     return {"date": state.get("date"), "now": datetime.now(_TZ).strftime("%H:%M"), "family": family,
             "hospital_name": (os.environ.get("HOSPITAL_NAME") or "").strip()[:120] or None,
@@ -1830,6 +1874,25 @@ def his_schedule(request: Request, date: str | None = Query(default=None, patter
     return _his_run(his.schedule, date, client, _address(request))
 
 
+class DeviceStepIn(BaseModel):
+    step: Literal["arrived", "in_room", "incision", "closure", "out_room", "recovery_out"]
+    room: str | None = Field(default=None, max_length=20, description="ห้องผ่าตัด: ระบุแค่ห้องได้สำหรับ in_room, incision, closure, out_room")
+    case_code: str | None = Field(default=None, max_length=40, description="รหัสเคสในตาราง เช่น R-3F2A9C")
+    his_ref: str | None = Field(default=None, max_length=100, description="เลขที่ใบขอผ่าตัดของ HIS")
+    time: str | None = Field(default=None, max_length=40, description="ISO 8601 พร้อมเขตเวลา หรือ HH:MM · ไม่ส่ง = ตอนนี้")
+    date: str | None = Field(default=None, pattern=DATE, description="วันของตารางที่เคสอยู่ (ค่าตั้งต้น: วันของ time หรือวันนี้)")
+    replace: bool = Field(default=False, description="แก้เวลาของขั้นที่บันทึกไว้แล้ว")
+
+
+@app.post("/api/his/v1/milestones", tags=["HIS"])
+def his_device_step(body: DeviceStepIn, request: Request) -> dict:
+    """A step of a case from a device in the OR (AI camera, RFID, OR integration): into / out of the OR,
+    incision, closure, holding, recovery. A camera that only knows the room sends ``room``: the case is
+    the room's next one (into the OR) or the one inside (later steps). Sending a step again changes nothing."""
+    client = _his_client(request, "milestones:write")
+    return _his_run(his.record_step, body.model_dump(), client)
+
+
 @app.post("/api/his/v1/fhir", tags=["HIS"])
 async def his_fhir_push(request: Request, dry_run: bool = Query(default=False)) -> JSONResponse:
     """Master data as FHIR R4 (a Bundle, a resource or a list): Location (operating rooms), Practitioner and
@@ -1853,7 +1916,7 @@ def _fhir_error(message: str) -> dict:
 
 class HisKeyIn(BaseModel):
     name: str = Field(min_length=1, max_length=100)
-    scopes: list[Literal["requests:write", "schedule:read", "masterdata:write"]] = Field(min_length=1)
+    scopes: list[Literal["requests:write", "schedule:read", "masterdata:write", "milestones:write"]] = Field(min_length=1)
 
 
 class FhirSettingsIn(BaseModel):
