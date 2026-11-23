@@ -11,6 +11,7 @@ A case's stage is its latest recorded step; before any, it is "scheduled", or
 """
 from __future__ import annotations
 
+import math
 from statistics import mean, median
 
 from orchestra_engine import fmt
@@ -31,6 +32,8 @@ STAGES = {"scheduled": ("นัดไว้", "scheduled"), "late": ("ยัง�
 IN_TABLE = ("arrived", "incision", "closure", "recovery_out")  # the others are the case's actual times
 ACTUAL_STEPS = ("in_room", "out_room")  # kept as scheduled_surgeries.actual_start_time / actual_end_time
 LATE_AFTER = 15  # minutes after the planned start without being in the room
+LIVE = ("in_room", "incision")  # stages whose end the board forecasts (after closure the case is nearly out)
+MIN_SD = 5.0  # minutes: no forecast is more certain than this
 SEGMENTS = (  # report: average time between steps
     ("arrived", "in_room", "ห้องเตรียม → เข้าห้องผ่าตัด"),
     ("in_room", "incision", "เข้าห้อง → ลงมีด (เตรียมและระงับความรู้สึก)"),
@@ -60,7 +63,36 @@ def summarize(minutes: dict, planned_start: int, now_min: int | None, *, late: b
         "since": fmt(since) if since is not None else None,
         "elapsed": max(0, now_min - since) if since is not None and now_min is not None and stage != "recovery_out" else None,
         "late_min": now_min - planned_start if stage == "late" else None,
+        "in_room_min": minutes.get("in_room"), "now_min": now_min,  # for the board's forecast (not shown)
     }
+
+
+def _tail(x: float, mu: float, sd: float) -> float:
+    """P(D > x) for D ~ Normal(mu, sd)."""
+    return 0.5 * math.erfc((x - mu) / (sd * math.sqrt(2)))
+
+
+def overtime(in_room: int, planned_end: int, now: int, mu: float, sd: float) -> dict:
+    """A case in the OR: the chance it leaves after its planned end, when it is expected to, and by how much
+    that is past the plan, given how long it has been in the room.
+
+    Its length D (into the OR -> out) is the duration forecast's Normal(mu, sd) (surgeon x procedure, from
+    the preference card and the cases done before); knowing it is still in the room after ``now - in_room``
+    minutes: P(D > planned_end - in_room | D > elapsed) and E[D | D > elapsed]."""
+    sd = max(float(sd), MIN_SD)
+    elapsed, allowed = max(0, now - in_room), planned_end - in_room
+    alive = _tail(elapsed, mu, sd)
+    if alive < 1e-9:  # already longer than nearly every case like it
+        expected = elapsed + MIN_SD
+    else:
+        a = (elapsed - mu) / sd
+        expected = mu + sd * math.exp(-a * a / 2) / math.sqrt(2 * math.pi) / alive
+    if now >= planned_end or alive < 1e-9:
+        chance = 1.0
+    else:
+        chance = min(1.0, _tail(allowed, mu, sd) / alive)
+    end = in_room + max(expected, elapsed)
+    return {"chance": round(chance, 2), "expected_end": round(end), "behind": max(0, round(end - planned_end))}
 
 
 def parse_update(data: dict) -> tuple[str, str | None, bool]:

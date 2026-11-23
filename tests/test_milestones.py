@@ -150,3 +150,41 @@ def test_works_before_migration_011(db_url):
     with pytest.raises(StoreError, match="migration"):
         s.milestone_update(case, {"step": "incision", "time": "09:10"}, day=day, actor=NURSE)
     assert s.report(day, day)["stages_ready"] is False
+
+
+# ------------------------------------------------------------------ the board's forecast of a case in the OR
+
+def test_overtime_chance_rises_as_the_case_runs_long():
+    # in at 08:00, planned out 10:00 (120 min); cases like it take 100 ± 20 minutes
+    start = ms.overtime(480, 600, 480, 100, 20)
+    assert start["chance"] < 0.2 and start["behind"] == 0 and start["expected_end"] == 580
+    later = [ms.overtime(480, 600, now, 100, 20)["chance"] for now in (540, 580, 590)]
+    assert start["chance"] <= later[0] < later[1] < later[2] < 1
+    over = ms.overtime(480, 600, 620, 100, 20)
+    assert over["chance"] == 1.0 and over["behind"] > 20  # past its planned end: certain, and how far
+    assert ms.overtime(500, 600, 500, 100, 20)["chance"] == 0.5  # in 20 minutes late: an even chance
+    assert ms.overtime(480, 600, 480, 100, 0)["chance"] < 0.01  # sd floored at MIN_SD: no division by zero
+
+
+def test_the_board_shows_the_odds_for_cases_in_the_or(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    import app.main as main
+    from test_app import fresh  # noqa: F401
+
+    monkeypatch.delenv("APP_PASSWORD", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    s = ScheduleStore(workers=1, time_limit_s=5)
+    s._clock = lambda: 9 * 60 + 30
+    monkeypatch.setattr(main, "store", s)
+    main._forecasts.clear()
+    c = TestClient(main.app, base_url="https://testserver")
+    first = sorted(c.get("/api/state").json()["schedule"]["bookings"], key=lambda b: b["start_min"])[0]
+    assert c.post(f"/api/cases/{first['case_id']}/milestone", json={"step": "in_room", "time": "08:10"}).status_code == 200
+    room = next(r for r in c.get("/api/board").json()["rooms"] if r["room"] == first["or_id"])
+    live = next(x for x in room["cases"] if x["case_id"] == first["case_id"])
+    f = live["forecast"]
+    assert 0 < f["chance"] < 1 and f["basis"] == "history" and f["expected_end"].count(":") == 1
+    assert all(x.get("forecast") is None for x in room["cases"] if x["case_id"] != first["case_id"])  # not in the OR
+    family = c.get("/api/board?family=1").json()
+    assert all("forecast" not in x for r in family["rooms"] for x in r["cases"])  # not on the waiting-room screen

@@ -56,6 +56,9 @@
   .p-recovery .dot { background: linear-gradient(90deg, transparent 50%, currentColor 50%); }
   .mark { font-weight: 700; line-height: 1; }
   .since { color: var(--muted); font-size: .9rem; }
+  .fc { justify-self: start; font-size: .9rem; font-weight: 600; padding: 3px 10px; border-radius: 10px; background: var(--ok-soft); color: var(--ok); }
+  .fc.warn { background: var(--warn-soft); color: var(--warn); }
+  .fc.bad { background: var(--bad-soft); color: var(--bad); }
   .p-scheduled { --c: var(--muted); --s: var(--surface-2); }
   .p-late { --c: var(--bad); --s: var(--bad-soft); }
   .p-waiting { --c: var(--warn); --s: var(--warn-soft); }
@@ -129,6 +132,16 @@
     return `นัด ${esc(c.start)}`;
   }
 
+  // A case in the OR: chance of running past its planned end (from the duration forecast and the time so far)
+  function forecast(c) {
+    const f = c.forecast;
+    if (!f) return '';
+    const pct = Math.round(f.chance * 100);
+    const tone = pct >= 60 ? 'bad' : pct >= 30 ? 'warn' : '';
+    const why = f.basis === 'history' ? 'จากเวลาจริงของแพทย์และหัตถการนี้' : 'จากเวลาที่จอง (ยังไม่มีประวัติ)';
+    return `<span class="fc ${tone}" title="ประมาณ${why}">โอกาสเกินเวลา ${pct}% · คาดว่าออกห้อง ~${esc(f.expected_end)}${f.behind ? ` · ช้ากว่าแผน ~${f.behind} นาที` : ''}</span>`;
+  }
+
   function roomCard(room, cases) {
     const live = cases.find(c => c.phase === 'in_or');
     const nextUp = cases.find(c => ['waiting', 'late', 'scheduled'].includes(c.phase));
@@ -143,7 +156,7 @@
           <span class="proc">${esc(current.procedure)} · ${esc(current.start)}–${esc(current.end)}</span>
           <span class="who">${esc(current.surgeon || '')}${current.readiness && current.readiness !== 'ready' && current.phase !== 'in_or'
             ? ` · <span class="em">${current.readiness === 'problem' ? 'ความพร้อมมีปัญหา' : 'ยังเช็กความพร้อมไม่ครบ'}</span>` : ''}</span>
-          ${stage(current)} <span class="since">${since(current)}</span></div>` : `<p class="idle">ไม่มีเคสที่รออยู่</p>`}
+          ${stage(current)} <span class="since">${since(current)}</span>${forecast(current)}</div>` : `<p class="idle">ไม่มีเคสที่รออยู่</p>`}
       ${rest.length ? `<ul class="list">${rest.map(c => `<li><span class="t">${esc(c.start)}</span>
           <span class="c">${esc(c.case_id)} · ${esc(c.procedure)}</span>${stage(c)}</li>`).join('')}</ul>` : ''}
       <div class="foot">ทั้งหมด ${cases.length} เคส · ผ่าตัดเสร็จแล้ว ${done}</div>
