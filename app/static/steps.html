@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>บันทึกเวลา · ORchestraAI</title>
+<link href="https://fonts.googleapis.com/css2?family=Prompt:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #f1f5f9; --surface: #ffffff; --surface-2: #f8fafc; --text: #0f172a; --muted: #64748b; --border: #e2e8f0;
+    --accent: #0e7490; --on-accent: #ffffff; --accent-soft: #e0f2fe; --ok: #047857; --ok-soft: #d1fae5; --warn: #b45309;
+    --warn-soft: #fef3c7; --bad: #b91c1c; --bad-soft: #fee2e2; --rec: #6d28d9; --rec-soft: #ede9fe;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #070d1a; --surface: #0f172a; --surface-2: #111a2e; --text: #e2e8f0; --muted: #94a3b8; --border: #1f2a44;
+      --accent: #22d3ee; --on-accent: #04212b; --accent-soft: rgba(34,211,238,.14); --ok: #34d399; --ok-soft: rgba(16,185,129,.16);
+      --warn: #fbbf24; --warn-soft: rgba(245,158,11,.16); --bad: #f87171; --bad-soft: rgba(239,68,68,.18);
+      --rec: #a78bfa; --rec-soft: rgba(139,92,246,.2);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #070d1a; --surface: #0f172a; --surface-2: #111a2e; --text: #e2e8f0; --muted: #94a3b8; --border: #1f2a44;
+    --accent: #22d3ee; --on-accent: #04212b; --accent-soft: rgba(34,211,238,.14); --ok: #34d399; --ok-soft: rgba(16,185,129,.16);
+    --warn: #fbbf24; --warn-soft: rgba(245,158,11,.16); --bad: #f87171; --bad-soft: rgba(239,68,68,.18);
+    --rec: #a78bfa; --rec-soft: rgba(139,92,246,.2);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 17px/1.45 'Prompt', 'Noto Sans Thai', system-ui, sans-serif; }
+  a, button, input, select { font: inherit; color: inherit; }
+  header { display: flex; justify-content: space-between; align-items: center; gap: 12px 16px; flex-wrap: wrap; padding: 12px 24px;
+    background: var(--surface); border-bottom: 1px solid var(--border); }
+  header h1 { margin: 0; font-size: 1.4rem; line-height: 1.2; }
+  header p { margin: 0; color: var(--muted); font-size: .85rem; }
+  .clock { font-size: 2rem; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1; text-align: right; }
+  .clock small { display: block; font-size: .72rem; font-weight: 400; color: var(--muted); margin-top: 4px; }
+  .tools { display: flex; gap: 8px; flex-wrap: wrap; }
+  .btn { border: 1px solid var(--border); background: var(--surface); padding: 8px 14px; border-radius: 10px; cursor: pointer;
+    text-decoration: none; font-size: .85rem; min-height: 40px; display: inline-flex; align-items: center; gap: 6px; }
+  .btn:disabled { opacity: .55; cursor: not-allowed; }
+  :focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+  #offline { margin: 12px 24px 0; padding: 10px 14px; border-radius: 10px; background: var(--bad-soft); color: var(--bad); font-weight: 600; }
+  main { padding: 16px 24px 96px; display: grid; gap: 14px; }
+  .chips { display: flex; gap: 8px; flex-wrap: wrap; }
+  .chip { border: 1px solid var(--border); background: var(--surface); border-radius: 99px; padding: 8px 18px; cursor: pointer;
+    font-weight: 600; min-height: 44px; }
+  .chip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  .hint { color: var(--muted); font-size: .85rem; margin: 0; }
+  .rooms { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr)); gap: 16px; }
+  .rooms.one { grid-template-columns: minmax(0, 860px); }
+  .room { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 16px; display: grid; gap: 12px; align-content: start; }
+  .room-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  .room-head h2 { margin: 0; font-size: 1.7rem; letter-spacing: .02em; }
+  .room-head span { color: var(--muted); font-size: .85rem; }
+  .case { border-radius: 12px; padding: 14px; background: var(--surface-2); border-left: 8px solid var(--c, var(--muted)); display: grid; gap: 8px; }
+  .case .code { font-size: 1.4rem; font-weight: 700; }
+  .case .proc { font-size: 1rem; }
+  .case .who { color: var(--muted); font-size: .9rem; }
+  .stage { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; border-radius: 99px; padding: 2px 12px; font-size: .9rem;
+    width: fit-content; color: var(--c, var(--muted)); background: var(--s, var(--surface-2)); }
+  .p-scheduled { --c: var(--muted); --s: var(--surface-2); }
+  .p-late { --c: var(--bad); --s: var(--bad-soft); }
+  .p-waiting { --c: var(--warn); --s: var(--warn-soft); }
+  .p-in_or { --c: var(--accent); --s: var(--accent-soft); }
+  .p-recovery { --c: var(--rec); --s: var(--rec-soft); }
+  .p-done { --c: var(--ok); --s: var(--ok-soft); }
+  .em { color: var(--bad); font-weight: 700; }
+  .track { list-style: none; margin: 2px 0 0; padding: 0; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; }
+  .track li { border: 1px solid var(--border); border-radius: 10px; padding: 6px 4px; text-align: center; font-size: .75rem; color: var(--muted);
+    background: var(--surface); display: grid; gap: 2px; }
+  .track li b { font-size: .95rem; font-variant-numeric: tabular-nums; color: var(--text); }
+  .track li.done { border-color: var(--ok); color: var(--ok); background: var(--ok-soft); }
+  .track li.done b { color: var(--ok); }
+  .track li.next { border: 2px solid var(--accent); color: var(--accent); font-weight: 600; }
+  .track li.off { opacity: .45; }
+  .big { width: 100%; min-height: 76px; border: 0; border-radius: 14px; background: var(--accent); color: var(--on-accent); cursor: pointer;
+    font-size: 1.35rem; font-weight: 700; display: grid; place-items: center; gap: 2px; padding: 10px 14px; line-height: 1.25; }
+  .big small { font-size: .85rem; font-weight: 500; opacity: .9; }
+  .big:disabled { opacity: .55; cursor: progress; }
+  .allset { margin: 0; padding: 12px; border-radius: 12px; text-align: center; font-weight: 600; background: var(--ok-soft); color: var(--ok); }
+  .locked { margin: 0; padding: 12px; border-radius: 12px; text-align: center; background: var(--surface); border: 1px dashed var(--border); color: var(--muted); }
+  .row2 { display: flex; gap: 8px; flex-wrap: wrap; }
+  .fix { display: grid; grid-template-columns: minmax(0, 1fr) 8.5em auto; gap: 8px; align-items: end; padding: 10px; border-radius: 12px;
+    background: var(--surface); border: 1px solid var(--border); }
+  .fix label { display: grid; gap: 4px; font-size: .8rem; color: var(--muted); }
+  .fix select, .fix input { border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; background: var(--surface-2); min-height: 44px; min-width: 0; }
+  .fix .btns { display: flex; gap: 6px; }
+  .list { display: grid; margin: 0; padding: 0; list-style: none; }
+  .list li { display: grid; grid-template-columns: 3.6em minmax(0, 1fr) auto; gap: 8px; align-items: center; font-size: .9rem;
+    padding: 8px 0; border-top: 1px solid var(--border); }
+  .list li .t { font-variant-numeric: tabular-nums; color: var(--muted); }
+  .list li .c { display: grid; gap: 2px; min-width: 0; }
+  .list li .c span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .list .stage { font-size: .75rem; padding: 0 8px; }
+  .list .btn { font-size: .8rem; padding: 6px 10px; }
+  .idle { color: var(--muted); font-size: 1.05rem; margin: 0; }
+  #toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); max-width: calc(100vw - 32px); z-index: 10;
+    display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-radius: 12px; color: #fff; font-weight: 600;
+    box-shadow: 0 8px 24px rgba(0,0,0,.25); }
+  #toast.ok { background: #047857; }
+  #toast.bad { background: #b91c1c; }
+  #toast button { border: 1px solid rgba(255,255,255,.7); background: transparent; color: #fff; border-radius: 8px; padding: 6px 12px; cursor: pointer; }
+  @media (max-width: 640px) {
+    header, main { padding-left: 16px; padding-right: 16px; }
+    .clock { font-size: 1.5rem; }
+    .track { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .fix { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+    .fix .btns { grid-column: 1 / -1; }
+    .big { font-size: 1.2rem; }
+    .chip { padding: 6px 14px; min-height: 40px; }
+    .track li { padding: 4px 2px; }
+    main { gap: 10px; }
+  }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>⏱ บันทึกเวลา</h1>
+    <p id="sub">กดปุ่มเมื่อผู้ป่วยถึงแต่ละขั้น ระบบใช้เวลาตอนกด</p>
+  </div>
+  <div class="tools">
+    <a class="btn" id="board" href="/board">📺 กระดานสถานะ</a>
+    <a class="btn" id="back" href="/">← ตารางผ่าตัด</a>
+  </div>
+  <div class="clock" id="clock">--:--<small id="updated">กำลังโหลด…</small></div>
+</header>
+<div id="offline" role="alert" hidden></div>
+<main>
+  <nav class="chips" id="rooms" aria-label="เลือกห้องผ่าตัด"></nav>
+  <p class="hint" id="note"></p>
+  <div id="cards" aria-live="polite"></div>
+</main>
+<div id="toast" role="status" aria-live="polite" hidden></div>
+
+<script>
+  const $ = s => document.querySelector(s);
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const params = new URLSearchParams(location.search);
+  const day = params.get('date');
+  // key, button label, short label
+  const STEPS = [['arrived', 'มาถึงห้องเตรียมผ่าตัด', 'ห้องเตรียม'], ['in_room', 'เข้าห้องผ่าตัด', 'เข้าห้อง'],
+    ['incision', 'ลงมีด', 'ลงมีด'], ['closure', 'เย็บแผลเสร็จ', 'เย็บเสร็จ'],
+    ['out_room', 'ออกจากห้องผ่าตัด (ไปห้องพักฟื้น)', 'ออกห้อง'], ['recovery_out', 'ออกจากห้องพักฟื้น (กลับหอ/ICU)', 'กลับหอ']];
+  const LABEL = Object.fromEntries(STEPS.map(s => [s[0], s[1]]));
+  const SHORT = Object.fromEntries(STEPS.map(s => [s[0], s[2]]));
+  const URGENCY = { URGENT: 'ด่วน', EMERGENCY: 'ฉุกเฉิน' };
+  const DOOR = ['in_room', 'out_room'];
+  let data = null, lastOk = null, room = null, sending = false;
+
+  const store = {  // the room a wall tablet stays on (a phone forgets nothing important if storage is off)
+    get() { try { return localStorage.getItem('steps-room'); } catch { return null; } },
+    set(v) { try { localStorage.setItem('steps-room', v); } catch { /* private mode */ } },
+  };
+  const avail = () => data && data.steps_ready ? STEPS.map(s => s[0]) : DOOR;
+  const recorded = c => STEPS.map(s => s[0]).filter(k => c.times && c.times[k]);
+  function nextStep(c) {
+    const done = recorded(c), last = done[done.length - 1];
+    const keys = STEPS.map(s => s[0]);
+    return keys.slice(last ? keys.indexOf(last) + 1 : 0).find(k => avail().includes(k)) || null;
+  }
+  function allowed(c, step) {  // the same rules the server applies
+    const role = data.viewer;
+    if (!data.can_record) return false;
+    if (role === 'surgeon' && !c.own) return false;
+    return !(DOOR.includes(step) && ['surgeon', 'staff'].includes(role) && !c.on_team);
+  }
+  const whyNot = c => data.viewer === 'surgeon' && !c.own ? 'บันทึกได้เฉพาะเคสที่ท่านเป็นแพทย์ผ่าตัด'
+    : !data.can_record ? 'บทบาทของคุณดูได้อย่างเดียว' : 'เวลาเข้า–ออกห้อง บันทึกได้เฉพาะทีมของเคสนี้';
+  const stage = c => `<span class="stage p-${esc(c.phase)}">${esc(c.label)}</span>`;
+  const nowText = () => new Date().toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
+
+  function caseBox(c) {
+    const next = nextStep(c), done = recorded(c), last = done[done.length - 1];
+    const track = STEPS.map(([k]) => {
+      const cls = c.times[k] ? 'done' : k === next ? 'next' : avail().includes(k) ? '' : 'off';
+      return `<li class="${cls}">${esc(SHORT[k])}<b>${c.times[k] ? esc(c.times[k]) : '–'}</b></li>`;
+    }).join('');
+    const action = !next ? `<p class="allset">✓ บันทึกครบทุกขั้นแล้ว</p>`
+      : allowed(c, next) ? `<button class="big" type="button" data-case="${esc(c.case_id)}" data-step="${next}">บันทึก: ${esc(LABEL[next])}<small>ใช้เวลาตอนกด</small></button>`
+      : `<p class="locked">${esc(whyNot(c))}</p>`;
+    const steps = avail().filter(k => allowed(c, k));
+    return `<div class="case p-${esc(c.phase)}">
+      <span class="code">${esc(c.case_id)}${URGENCY[c.urgency] ? ` <span class="em">· ${URGENCY[c.urgency]}</span>` : ''}</span>
+      <span class="proc">${esc(c.procedure)} · นัด ${esc(c.start)}–${esc(c.end)}</span>
+      ${c.surgeon ? `<span class="who">${esc(c.surgeon)}</span>` : ''}
+      <span>${stage(c)}</span>
+      ${action}
+      <ol class="track" aria-label="เวลาแต่ละขั้น">${track}</ol>
+      ${steps.length ? `<div class="row2">
+        ${last && allowed(c, last) ? `<button class="btn" type="button" data-undo="${last}" data-case="${esc(c.case_id)}">↶ ยกเลิก${esc(SHORT[last])} (${esc(c.times[last])})</button>` : ''}
+        <button class="btn" type="button" data-open-fix="${esc(c.case_id)}">🕘 ใส่เวลาย้อนหลัง / แก้เวลา</button></div>
+      <form class="fix" data-fix="${esc(c.case_id)}" hidden>
+        <label>ขั้น<select name="step">${steps.map(k => `<option value="${k}" ${k === next ? 'selected' : ''}>${esc(LABEL[k])}</option>`).join('')}</select></label>
+        <label>เวลา<input type="time" name="time" required></label>
+        <span class="btns"><button class="btn" type="submit">บันทึก</button><button class="btn" type="button" data-close-fix>ปิด</button></span>
+      </form>` : ''}
+    </div>`;
+  }
+
+  function roomCard(name, cases) {
+    const live = cases.find(c => c.phase === 'in_or');
+    const up = cases.find(c => ['waiting', 'late', 'scheduled'].includes(c.phase));
+    const current = live || up;
+    const rest = cases.filter(c => c !== current);
+    const head = live ? 'กำลังใช้ห้อง' : up ? 'รอเคสถัดไป' : cases.length ? 'เสร็จทุกเคสแล้ว' : 'ไม่มีเคส';
+    return `<section class="room" aria-label="ห้อง ${esc(name)}">
+      <div class="room-head"><h2>${esc(name)}</h2><span>${head}</span></div>
+      ${current ? caseBox(current) : `<p class="idle">ไม่มีเคสที่รออยู่</p>`}
+      ${rest.length ? `<ul class="list" aria-label="เคสอื่นของห้อง ${esc(name)}">${rest.map(c => {
+        const n = nextStep(c);
+        return `<li><span class="t">${esc(c.start)}</span><span class="c"><span>${esc(c.case_id)} · ${esc(c.procedure)}</span>${stage(c)}</span>
+          ${n && allowed(c, n) ? `<button class="btn" type="button" data-case="${esc(c.case_id)}" data-step="${n}">บันทึก: ${esc(SHORT[n])}</button>` : '<span></span>'}</li>`;
+      }).join('')}</ul>` : ''}
+    </section>`;
+  }
+
+  function render() {
+    const rooms = data.rooms.filter(r => r.cases.length || data.rooms.length <= 6);
+    const names = data.rooms.map(r => r.room);
+    if (room !== 'ALL' && !names.includes(room)) room = 'ALL';
+    $('#rooms').innerHTML = [['ALL', 'ทุกห้อง'], ...names.map(n => [n, n])].map(([k, t]) =>
+      `<button class="chip" type="button" data-room="${esc(k)}" aria-pressed="${k === room}">${esc(t)}</button>`).join('');
+    const shown = room === 'ALL' ? rooms : data.rooms.filter(r => r.room === room);
+    $('#note').textContent = (data.steps_ready ? '' : 'ตอนนี้บันทึกได้เฉพาะเข้าห้อง/ออกห้อง (ผู้ดูแลต้องรัน SQL ไฟล์ 011) · ')
+      + (data.can_record ? 'กดผิดกด ↶ ยกเลิก ได้ทันที · ห้องที่มีเครื่องอ่าน RFID เวลาเข้า–ออกห้องขึ้นเอง' : 'บทบาทของคุณดูได้อย่างเดียว');
+    $('#cards').innerHTML = shown.length ? `<div class="rooms${shown.length === 1 ? ' one' : ''}">${shown.map(r => roomCard(r.room, r.cases)).join('')}</div>`
+      : '<p class="idle">วันนี้ไม่มีเคสผ่าตัด</p>';
+  }
+
+  const typing = () => sending || !!document.querySelector('form.fix:not([hidden])');
+  async function load() {
+    if (typing()) return;  // do not wipe what is being typed
+    const q = new URLSearchParams({ steps: '1' });
+    if (day) q.set('date', day);
+    try {
+      const res = await fetch('/api/board?' + q);
+      if (res.status === 401) { location.href = '/login'; return; }
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.detail || 'HTTP ' + res.status);
+      data = d; lastOk = new Date();
+      $('#offline').hidden = true;
+      if (typing()) return;  // the form was opened while this was loading: draw after it is sent or closed
+      const when = d.date ? new Date(d.date + 'T00:00:00') : new Date();
+      $('#sub').textContent = (d.hospital_name ? d.hospital_name + ' · ' : '')
+        + when.toLocaleDateString('th-TH', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+      render();
+      $('#updated').textContent = 'อัปเดต ' + lastOk.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    } catch (e) {
+      $('#offline').hidden = false;
+      $('#offline').textContent = `อัปเดตไม่ได้ (${e.message})${lastOk ? ' · ข้อมูลล่าสุดเมื่อ ' + lastOk.toLocaleTimeString('th-TH') : ''} · จะลองใหม่อัตโนมัติ`;
+    }
+  }
+
+  function toast(msg, ok, undo) {
+    const el = $('#toast');
+    el.className = ok ? 'ok' : 'bad';
+    el.innerHTML = `<span>${esc(msg)}</span>${undo ? '<button type="button" id="toast-undo">ยกเลิก</button>' : ''}`;
+    el.hidden = false;
+    if (undo) $('#toast-undo').addEventListener('click', () => { el.hidden = true; undo(); });
+    clearTimeout(toast.t);
+    toast.t = setTimeout(() => { el.hidden = true; }, undo ? 10000 : 6000);
+  }
+
+  async function send(caseId, body, button) {
+    if (sending) return;
+    sending = true;
+    if (button) button.disabled = true;
+    try {
+      const res = await fetch('/api/cases/' + encodeURIComponent(caseId) + '/milestone' + (day ? '?date=' + encodeURIComponent(day) : ''), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      if (res.status === 401) { location.href = '/login'; return; }
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(Array.isArray(d.detail) ? 'ข้อมูลไม่ถูกต้อง' : d.detail || 'HTTP ' + res.status);
+      const at = ((d.result || {}).milestones || {}).times?.[body.step];
+      if (body.clear) toast(`ยกเลิกเวลา${LABEL[body.step]}ของ ${caseId} แล้ว`, true);
+      else toast(`บันทึกแล้ว: ${caseId} ${LABEL[body.step]} ${at || ''}`, true,
+        body.time ? null : () => send(caseId, { step: body.step, clear: true }));
+    } catch (e) {
+      toast(e.message, false);
+    } finally {
+      sending = false;
+      await load();
+    }
+  }
+
+  $('#rooms').addEventListener('click', e => {
+    const b = e.target.closest('[data-room]');
+    if (!b) return;
+    room = b.dataset.room; store.set(room);
+    const q = new URLSearchParams(location.search);
+    room === 'ALL' ? q.delete('room') : q.set('room', room);
+    history.replaceState(null, '', location.pathname + (q.toString() ? '?' + q : ''));
+    render();
+  });
+  $('#cards').addEventListener('click', e => {
+    const t = e.target.closest('button');
+    if (!t) return;
+    if (t.dataset.step) send(t.dataset.case, { step: t.dataset.step }, t);
+    else if (t.dataset.undo) {
+      if (confirm(`ยกเลิกเวลา${LABEL[t.dataset.undo]}ของ ${t.dataset.case}?`)) send(t.dataset.case, { step: t.dataset.undo, clear: true }, t);
+    } else if (t.dataset.openFix) {
+      const f = document.querySelector(`form[data-fix="${CSS.escape(t.dataset.openFix)}"]`);
+      f.hidden = false; f.elements.time.focus();
+    } else if ('closeFix' in t.dataset) {
+      t.closest('form').hidden = true; load();
+    }
+  });
+  $('#cards').addEventListener('submit', e => {
+    e.preventDefault();
+    const f = e.target;
+    f.hidden = true;
+    send(f.dataset.fix, { step: f.elements.step.value, time: f.elements.time.value }, f.querySelector('[type=submit]'));
+  });
+
+  room = params.get('room') || store.get() || 'ALL';
+  if (day) { $('#back').href = '/?date=' + encodeURIComponent(day); $('#board').href = '/board?date=' + encodeURIComponent(day); }
+  function tick() { $('#clock').firstChild.textContent = nowText(); }
+  tick(); setInterval(tick, 10000);
+  load(); setInterval(load, 20000);
+</script>
+</body>
+</html>

@@ -273,6 +273,7 @@
     <input type="date" id="date" aria-label="วันที่วางแผน" hidden>
     <button class="btn" id="reload" type="button">โหลดใหม่</button>
     <a class="btn" href="/reports" id="reports-link" hidden>รายงาน</a>
+    <a class="btn" href="/steps" id="steps-link" hidden>⏱ บันทึกเวลา</a>
     <a class="btn" href="/board" id="board-link">📺 กระดานสถานะ</a>
     <a class="btn" href="/admin" id="admin-link" hidden>ข้อมูลโรงพยาบาล</a>
     <a class="btn" href="/status" id="status-link" hidden>⚙ สถานะระบบ</a>
@@ -499,6 +500,13 @@
     ? path + (path.includes('?') ? '&' : '?') + 'date=' + STATE.date : path);
 
   const can = perm => !!(STATE && STATE.me && STATE.me.permissions.includes(perm));
+  const stepsUrl = room => {  // the time-recording page, on the day chosen here (when it is not today) and a room
+    const q = new URLSearchParams();
+    const day = new URLSearchParams(location.search).get('date');
+    if (day) q.set('date', day);
+    if (room) q.set('room', room);
+    return '/steps' + (q.toString() ? '?' + q : '');
+  };
   const hours = m => (m / 60).toFixed(1).replace(/\.0$/, '');
   const supplyName = code => ((STATE.options.supplies || []).find(x => x.id === code) || { name: code }).name;
   const timeText = m => hhmm(m) + (m >= 24 * 60 ? ' (พรุ่งนี้)' : m < 0 ? ' (เมื่อวาน)' : '');
@@ -767,6 +775,8 @@
     $('#admin-link').textContent = hospital ? 'ข้อมูลโรงพยาบาล' : 'Preference card ของฉัน';
     $('#admin-link').href = hospital ? '/admin' : '/admin#cards';
     $('#reports-link').hidden = !can('reports');
+    $('#steps-link').hidden = !can('record_times');
+    $('#steps-link').href = stepsUrl();
     $('#status-link').hidden = !can('users');
     $('#who').innerHTML = `<span>${esc(STATE.me.display_name)}</span><small>${esc(STATE.me.role_label)}</small>`;
     $('#change-pass').hidden = STATE.me.user_id === 'env-admin' || STATE.me.user_id === 'dev';
@@ -1031,7 +1041,7 @@
       ${edit ? `<form class="actual-form" id="step-fix"><label>แก้/ใส่เวลาย้อนหลัง<select name="step">${STEPS.filter(([k]) => avail.includes(k))
           .map(([k, label]) => `<option value="${k}" ${next && k === next[0] ? 'selected' : ''}>${esc(label)}</option>`).join('')}</select></label>
         <label>เวลา<input type="time" name="time" required></label><button class="btn" type="submit">บันทึกเวลา</button></form>` : ''}
-      <small class="hint">เข้าห้อง–ออกห้องคือเวลาผ่าตัดจริงที่รายงานและการพยากรณ์เวลาใช้ · <a href="/board" target="_blank" rel="noopener">เปิดกระดานสถานะ</a></small>
+      <small class="hint">เข้าห้อง–ออกห้องคือเวลาผ่าตัดจริงที่รายงานและการพยากรณ์เวลาใช้ · <a href="${stepsUrl(b.or_id)}">หน้าบันทึกเวลา (ปุ่มใหญ่)</a> · <a href="/board" target="_blank" rel="noopener">เปิดกระดานสถานะ</a></small>
     </div>`;
   }
   function wireSteps(box, b) {
