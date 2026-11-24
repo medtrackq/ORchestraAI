@@ -420,7 +420,8 @@ def test_calling_off_a_case_over_the_api(owner):
     assert report["total"] == 1 and report["waiting_given_up"] == 1
 
 
-def test_status_board_and_steps_over_the_api(owner):
+def test_status_board_and_steps_over_the_api(owner, monkeypatch):
+    monkeypatch.setattr(store, "_clock", lambda: 12 * 60)  # noon: the times below are in the past whenever the tests run
     assert owner.get("/board").status_code == 200
     case = owner.get("/api/state").json()["schedule"]["bookings"][0]
     nurse = make_user(owner, "nurse4", "staff", "SCR-9")  # not on this case's team: holding / recovery nurses
@@ -439,9 +440,11 @@ def test_status_board_and_steps_over_the_api(owner):
     assert family["family"] and all("procedure" not in c and "surgeon" not in c for r in family["rooms"] for c in r["cases"])
 
 
-def test_the_time_recording_page_and_its_data(owner):
+def test_the_time_recording_page_and_its_data(owner, monkeypatch):
+    monkeypatch.setattr(store, "_clock", lambda: 12 * 60)  # noon: 07:40 below is in the past whenever the tests run
     page = owner.get("/steps")
     assert page.status_code == 200 and "บันทึกเวลา" in page.text
+    assert all(f'data-hand="{k}"' in page.text for k in ("pedal", "sound", "voice", "learn"))  # hands-free in the OR
     case = owner.get("/api/state").json()["schedule"]["bookings"][0]
     team = [t["staff_id"] for t in case["team"]]
 
